@@ -2,19 +2,21 @@
 
 The SurrealDB Python SDK stringifies record IDs that require escaping as
 ``node:⟨some-id⟩``. The state engine sometimes round-trips those display strings
-back into RecordID objects. Normalize that representation before delegating to
-map_state so hyphenated IDs resolve to their original records.
+back into RecordID objects. Normalize that representation before delegating.
 
-This compatibility layer is intentionally small and should disappear when the
-prototype is refactored into a package with record IDs kept typed internally.
+This module also routes the first ordinary-agent read/query commands into the
+non-mutating map_query surface while legacy prototype mutation commands remain in
+map_state.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from surrealdb import RecordID
 
+import map_query
 import map_state
 
 
@@ -35,6 +37,27 @@ def normalized_rid(node_id: Any) -> RecordID:
     return RecordID("node", text)
 
 
+def command_name(argv: list[str]) -> str | None:
+    """Find the top-level command while tolerating --root before it."""
+    skip_next = False
+    for token in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if token == "--root":
+            skip_next = True
+            continue
+        if token.startswith("--root="):
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     map_state.rid = normalized_rid
-    return map_state.main(argv)
+    args = list(sys.argv[1:] if argv is None else argv)
+    if command_name(args) in map_query.QUERY_COMMANDS:
+        return map_query.main(args)
+    return map_state.main(args)
