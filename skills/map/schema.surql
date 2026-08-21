@@ -13,7 +13,10 @@ DEFINE FIELD IF NOT EXISTS authority ON node TYPE
     "user" | "inferred" | "external" | "derived" | "none";
 DEFINE FIELD IF NOT EXISTS subject ON node TYPE string;
 DEFINE FIELD IF NOT EXISTS detail ON node TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS value ON node TYPE option<any>;
+-- `any` already accepts every SurrealDB value, including null/none-style absence.
+-- SurrealQL does not accept `option<any>` because `any` is not valid as the inner
+-- kind of an option type expression.
+DEFINE FIELD IF NOT EXISTS value ON node TYPE any;
 DEFINE FIELD IF NOT EXISTS source_note ON node TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS tags ON node TYPE array<string> DEFAULT [];
 DEFINE FIELD IF NOT EXISTS created_at ON node TYPE datetime DEFAULT time::now();
