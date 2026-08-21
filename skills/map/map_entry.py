@@ -4,8 +4,8 @@ The SurrealDB Python SDK stringifies record IDs that require escaping as
 ``node:⟨some-id⟩``. The state engine sometimes round-trips those display strings
 back into RecordID objects. Normalize that representation before delegating.
 
-This module routes ordinary-agent read/query commands into non-mutating query
-surfaces while prototype mutation commands remain in map_state.
+This module routes ordinary-agent read/query commands and durable workflow-session
+commands while prototype graph mutation commands remain in map_state.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from surrealdb import RecordID
 
 import map_agent_query
 import map_query
+import map_session
 import map_state
 
 
@@ -55,6 +56,16 @@ def command_name(argv: list[str]) -> str | None:
     return None
 
 
+def without_command(argv: list[str], command: str) -> list[str]:
+    """Remove the first top-level command token before delegating to a nested parser."""
+    result = list(argv)
+    try:
+        result.remove(command)
+    except ValueError:
+        pass
+    return result
+
+
 def print_combined_help() -> None:
     map_state.build_parser().print_help()
     print("\nread-only agent queries:")
@@ -64,6 +75,8 @@ def print_combined_help() -> None:
     print("  validate       Check graph structural invariants without mutation")
     print("  search <text>  Search current Map nodes by stored semantic text")
     print("  explain <id>   Show graph-supported context for one node")
+    print("\ndurable workflow continuity:")
+    print("  session ...    Start, confirm, checkpoint, recover, and finish /map sessions")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
         return map_query.main(args)
     if command in map_agent_query.QUERY_COMMANDS:
         return map_agent_query.main(args)
+    if command == map_session.SESSION_COMMAND:
+        return map_session.main(without_command(args, command))
     if command is None and any(token in {"-h", "--help"} for token in args):
         print_combined_help()
         return 0
