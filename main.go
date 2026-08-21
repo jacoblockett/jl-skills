@@ -12,12 +12,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
 
-//go:embed all:skills
+//go:embed skills/**
 var catalog embed.FS
 
 const version = "0.1.0-dev"
@@ -28,9 +27,9 @@ type manifest struct {
 	Description         string   `json:"description"`
 	SkillFiles          []string `json:"skill_files"`
 	RuntimeFiles        []string `json:"runtime_files"`
+	Runtime             string   `json:"runtime"`
 	RuntimeDependencies []string `json:"runtime_dependencies"`
 	InstructionFragment string   `json:"instruction_fragment"`
-	Runtime             string   `json:"runtime"`
 	ProjectInit         []string `json:"project_init"`
 }
 
@@ -53,15 +52,18 @@ type receipt struct {
 type registry struct {
 	Installations []receipt `json:"installations"`
 }
-type options struct {
-	Command string
-	Skills  []string
-	Scope   string
-	Agents  []string
-}
+
 type pyExec struct {
 	Exe    string
 	Prefix []string
+}
+
+type repeatedFlag []string
+
+func (r *repeatedFlag) String() string { return strings.Join(*r, ",") }
+func (r *repeatedFlag) Set(v string) error {
+	*r = append(*r, v)
+	return nil
 }
 
 func main() {
@@ -72,182 +74,174 @@ func main() {
 }
 
 func run(args []string) error {
-	o, err := parseArgs(args)
-	if err != nil {
-		return err
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
+		fmt.Println(version)
+		return nil
 	}
-	if o.Command == "update" {
-		return update(o)
+	if len(args) > 0 && args[0] == "update" {
+		return runUpdate(args[1:])
 	}
-	return install(o)
+	return runInstall(args)
 }
 
-func parseArgs(args []string) (options, error) {
-	o := options{Command: "install"}
-	if len(args) > 0 {
-		switch args[0] {
-		case "install":
-			args = args[1:]
-		case "update":
-			o.Command = "update"
-			args = args[1:]
-		case "help", "-h", "--help":
-			printHelp()
-			os.Exit(0)
-		case "version", "--version":
-			fmt.Println(version)
-			os.Exit(0)
-		}
-	}
+func runInstall(args []string) error {
+	var skills []string
+	var scopeRaw string
+	var agents repeatedFlag
+	interactive := isInteractive()
+
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		switch {
-		case a == "--scope":
+		switch a {
+		case "--scope":
 			if i+1 >= len(args) {
-				return o, errors.New("--scope requires a value")
+				return errors.New("--scope requires user, cwd, or a path")
 			}
 			i++
-			o.Scope = args[i]
-		case strings.HasPrefix(a, "--scope="):
-			o.Scope = strings.TrimPrefix(a, "--scope=")
-		case a == "--agent":
+			scopeRaw = args[i]
+		case "--agent":
 			if i+1 >= len(args) {
-				return o, errors.New("--agent requires a value")
+				return errors.New("--agent requires a harness name")
 			}
 			i++
-			o.Agents = append(o.Agents, args[i])
-		case strings.HasPrefix(a, "--agent="):
-			o.Agents = append(o.Agents, strings.TrimPrefix(a, "--agent="))
-		case strings.HasPrefix(a, "-"):
-			return o, fmt.Errorf("unknown option %s", a)
+			agents = append(agents, args[i])
+		case "--help", "-h":
+			printHelp()
+			return nil
 		default:
-			o.Skills = append(o.Skills, a)
+			if strings.HasPrefix(a, "-") {
+				return fmt.Errorf("unknown option %s", a)
+			}
+			skills = append(skills, a)
 		}
 	}
-	return o, nil
-}
 
-func printHelp() {
-	fmt.Print(`jl-skill
-
-Install:
-  jl-skill map --scope user
-  jl-skill map --scope cwd
-  jl-skill map --scope "C:\\path\\to\\project"
-  jl-skill map --scope cwd --agent codex --agent claude
-
-Update:
-  jl-skill update map [--scope user|cwd|PATH] [--agent AGENT]...
-
-Scope chooses WHERE. Agent detection chooses WHO. WHO never changes WHERE.
-`)
-}
-
-func install(o options) error {
-	interactive := isTerminal()
-	wizard := len(o.Skills) == 0 || o.Scope == ""
-	var err error
-	if len(o.Skills) == 0 {
+	if len(skills) == 0 {
 		if !interactive {
-			return errors.New("no skill supplied")
+			return errors.New("no skills selected")
 		}
-		if o.Skills, err = askSkills(); err != nil {
-			return err
-		}
-	}
-	if o.Scope == "" {
-		if !interactive {
-			return errors.New("--scope is required")
-		}
-		if o.Scope, err = askScope(); err != nil {
-			return err
-		}
-	}
-	s, err := resolveScope(o.Scope)
-	if err != nil {
-		return err
-	}
-
-	agents := o.Agents
-	if len(agents) == 0 {
-		detected := detectedAgents()
-		switch {
-		case len(detected) == 0 && !interactive:
-			return errors.New("no supported harness detected; specify --agent explicitly")
-		case len(detected) == 0:
-			agents, err = askAgents(nil)
-		case wizard:
-			agents, err = askAgents(detected)
-		default:
-			agents = detected
-		}
+		chosen, err := ask("Skills to install (comma separated)")
 		if err != nil {
 			return err
 		}
+		skills = splitCSV(chosen)
+		if len(skills) == 0 {
+			return errors.New("no skills selected")
+		}
 	}
-	agents, err = normalizeAgents(agents)
+
+	if scopeRaw == "" {
+		if !interactive {
+			return errors.New("--scope is required in non-interactive mode")
+		}
+		chosen, err := ask("Scope (user, cwd, or path)")
+		if err != nil {
+			return err
+		}
+		scopeRaw = chosen
+	}
+
+	s, err := resolveScope(scopeRaw)
 	if err != nil {
 		return err
 	}
-	if len(agents) == 0 {
-		return errors.New("no agents selected")
+
+	resolvedAgents, err := chooseAgents(agents, interactive)
+	if err != nil {
+		return err
 	}
 
-	fmt.Printf("Scope: %s\nAgents: %s\nSkills: %s\n", s.Identity, strings.Join(agents, ", "), strings.Join(o.Skills, ", "))
-	for _, name := range o.Skills {
+	fmt.Printf("Scope: %s\n", s.Identity)
+	fmt.Printf("Agents: %s\n", strings.Join(resolvedAgents, ", "))
+	fmt.Printf("Skills: %s\n", strings.Join(skills, ", "))
+
+	for _, name := range skills {
 		m, err := loadManifest(name)
 		if err != nil {
 			return err
 		}
-		if err := installOne(m, s, agents); err != nil {
+		if err := installOne(m, s, resolvedAgents); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func update(o options) error {
+func runUpdate(args []string) error {
+	var names []string
+	var scopeRaw string
+	var agents repeatedFlag
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--scope":
+			if i+1 >= len(args) {
+				return errors.New("--scope requires user, cwd, or a path")
+			}
+			i++
+			scopeRaw = args[i]
+		case "--agent":
+			if i+1 >= len(args) {
+				return errors.New("--agent requires a harness name")
+			}
+			i++
+			agents = append(agents, args[i])
+		case "--help", "-h":
+			printUpdateHelp()
+			return nil
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return fmt.Errorf("unknown update option %s", args[i])
+			}
+			names = append(names, args[i])
+		}
+	}
+
 	r, err := loadRegistry()
 	if err != nil {
 		return err
 	}
-	if len(r.Installations) == 0 {
-		return errors.New("no recorded installations")
+	nameFilter := stringSet(names)
+	agentFilter, err := normalizeAgents(agents)
+	if err != nil {
+		return err
 	}
-
-	var sf scope
-	if o.Scope != "" {
-		sf, err = resolveScope(o.Scope)
+	agentSet := stringSet(agentFilter)
+	var scopeFilter *scope
+	if scopeRaw != "" {
+		s, err := resolveScope(scopeRaw)
 		if err != nil {
 			return err
 		}
+		scopeFilter = &s
 	}
-	wantedSkills, wantedAgents := stringSet(o.Skills), stringSet(o.Agents)
+
 	type group struct {
 		M      manifest
 		S      scope
 		Agents []string
 	}
-	groups := map[string]group{}
-	for _, x := range r.Installations {
-		if len(wantedSkills) > 0 && !wantedSkills[x.Skill] {
+	groups := map[string]*group{}
+	for _, rec := range r.Installations {
+		if len(nameFilter) > 0 && !nameFilter[rec.Skill] {
 			continue
 		}
-		if len(wantedAgents) > 0 && !wantedAgents[x.Agent] {
+		if len(agentSet) > 0 && !agentSet[rec.Agent] {
 			continue
 		}
-		if o.Scope != "" && x.Scope.Identity != sf.Identity {
+		if scopeFilter != nil && rec.Scope.Identity != scopeFilter.Identity {
 			continue
 		}
-		m, err := loadManifest(x.Skill)
+		m, err := loadManifest(rec.Skill)
 		if err != nil {
 			return err
 		}
-		k := x.Skill + "\x00" + x.Scope.Identity
-		g := groups[k]
-		g.M, g.S = m, x.Scope
-		g.Agents = append(g.Agents, x.Agent)
-		groups[k] = g
+		key := rec.Skill + "\x00" + rec.Scope.Kind + "\x00" + rec.Scope.Identity
+		g := groups[key]
+		if g == nil {
+			g = &group{M: m, S: rec.Scope}
+			groups[key] = g
+		}
+		g.Agents = append(g.Agents, rec.Agent)
 	}
 	if len(groups) == 0 {
 		return errors.New("no installations match update filters")
@@ -356,49 +350,70 @@ func provisionRuntime(m manifest, packageRoot, runtimeRoot string) (string, erro
 	if m.Runtime != "python" {
 		return "", fmt.Errorf("unsupported runtime %q", m.Runtime)
 	}
-	py, err := findPython311()
+	host, err := findPython311()
 	if err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(runtimeRoot, 0o755); err != nil {
 		return "", err
 	}
-	deps := filepath.Join(runtimeRoot, "site-packages")
-	if len(m.RuntimeDependencies) > 0 {
-		if err := os.MkdirAll(deps, 0o755); err != nil {
-			return "", err
-		}
-		args := append([]string{}, py.Prefix...)
-		args = append(args, "-m", "pip", "install", "--disable-pip-version-check", "--upgrade", "--target", deps)
-		args = append(args, m.RuntimeDependencies...)
-		cmd := exec.Command(py.Exe, args...)
+
+	// The first prototype used pip --target with the host interpreter. That kept
+	// files project-local, but the resulting process could still see host
+	// site-packages and therefore was not dependency-isolated. A real venv makes
+	// the runtime both filesystem-local and import-isolated.
+	venvRoot := filepath.Join(runtimeRoot, "venv")
+	venvPy := venvPython(venvRoot)
+	if _, err := os.Stat(venvPy); errors.Is(err, os.ErrNotExist) {
+		args := append([]string{}, host.Prefix...)
+		args = append(args, "-m", "venv", venvRoot)
+		cmd := exec.Command(host.Exe, args...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("install runtime dependencies: %w", err)
+			return "", fmt.Errorf("create isolated %s runtime: %w", m.Name, err)
+		}
+	} else if err != nil {
+		return "", err
+	}
+
+	if len(m.RuntimeDependencies) > 0 {
+		args := []string{"-m", "pip", "install", "--disable-pip-version-check", "--upgrade"}
+		args = append(args, m.RuntimeDependencies...)
+		cmd := exec.Command(venvPy, args...)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("install isolated runtime dependencies: %w", err)
 		}
 	}
+
+	// Remove the dependency directory created by the legacy --target prototype.
+	// It is installer-owned and no longer participates in execution.
+	legacyDeps := filepath.Join(runtimeRoot, "site-packages")
+	if err := os.RemoveAll(legacyDeps); err != nil {
+		return "", fmt.Errorf("remove legacy runtime dependencies: %w", err)
+	}
+
 	runner := filepath.Join(runtimeRoot, "runner.py")
-	runnerBody := fmt.Sprintf("import sys\nsys.path.insert(0, %q)\nsys.path.insert(0, %q)\nfrom map_entry import main\nraise SystemExit(main())\n", deps, packageRoot)
+	runnerBody := fmt.Sprintf("import sys\nsys.path.insert(0, %q)\nfrom map_entry import main\nraise SystemExit(main())\n", packageRoot)
 	if err := atomicWrite(runner, []byte(runnerBody), 0o644); err != nil {
 		return "", err
 	}
 
 	if runtime.GOOS == "windows" {
 		cli := filepath.Join(runtimeRoot, "map-state.cmd")
-		parts := []string{cmdArg(py.Exe)}
-		for _, p := range py.Prefix {
-			parts = append(parts, cmdArg(p))
-		}
-		parts = append(parts, cmdArg(runner), "%*")
-		return cli, atomicWrite(cli, []byte("@echo off\r\n"+strings.Join(parts, " ")+"\r\n"), 0o755)
+		body := "@echo off\r\n" + cmdArg(venvPy) + " " + cmdArg(runner) + " %*\r\n"
+		return cli, atomicWrite(cli, []byte(body), 0o755)
 	}
 	cli := filepath.Join(runtimeRoot, "map-state")
-	parts := []string{"exec", shArg(py.Exe)}
-	for _, p := range py.Prefix {
-		parts = append(parts, shArg(p))
+	body := "#!/bin/sh\nexec " + shArg(venvPy) + " " + shArg(runner) + ` "$@"` + "\n"
+	return cli, atomicWrite(cli, []byte(body), 0o755)
+}
+
+func venvPython(venvRoot string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(venvRoot, "Scripts", "python.exe")
 	}
-	parts = append(parts, shArg(runner), `"$@"`)
-	return cli, atomicWrite(cli, []byte("#!/bin/sh\n"+strings.Join(parts, " ")+"\n"), 0o755)
+	return filepath.Join(venvRoot, "bin", "python")
 }
 
 func findPython311() (pyExec, error) {
@@ -621,34 +636,30 @@ func atomicWrite(path string, data []byte, mode fs.FileMode) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
-	if err := f.Chmod(mode); err != nil {
-		f.Close()
-		return err
-	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(tmp)
+		}
+	}()
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if runtime.GOOS == "windows" {
-		backup := path + ".jl-skill-old"
-		_ = os.Remove(backup)
-		if _, err := os.Stat(path); err == nil {
-			if err := os.Rename(path, backup); err != nil {
-				return err
-			}
-			if err := os.Rename(tmp, path); err != nil {
-				_ = os.Rename(backup, path)
-				return err
-			}
-			_ = os.Remove(backup)
-			return nil
-		}
+	if err := os.Chmod(tmp, mode); err != nil {
+		return err
 	}
-	return os.Rename(tmp, path)
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(path)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }
 
 func registryPath() (string, error) {
@@ -658,13 +669,14 @@ func registryPath() (string, error) {
 	}
 	return filepath.Join(home, ".jl-skill", "registry.json"), nil
 }
+
 func loadRegistry() (registry, error) {
 	var r registry
-	p, err := registryPath()
+	path, err := registryPath()
 	if err != nil {
 		return r, err
 	}
-	b, err := os.ReadFile(p)
+	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return r, nil
 	}
@@ -672,28 +684,25 @@ func loadRegistry() (registry, error) {
 		return r, err
 	}
 	if err := json.Unmarshal(b, &r); err != nil {
-		return r, fmt.Errorf("parse registry: %w", err)
+		return r, fmt.Errorf("read registry: %w", err)
 	}
 	return r, nil
 }
-func saveReceipt(x receipt) error {
+
+func saveReceipt(rec receipt) error {
 	r, err := loadRegistry()
 	if err != nil {
 		return err
 	}
-	found := false
-	for i := range r.Installations {
-		old := &r.Installations[i]
-		if old.Skill == x.Skill && old.Agent == x.Agent && old.Scope.Identity == x.Scope.Identity {
-			*old = x
-			found = true
-			break
+	kept := r.Installations[:0]
+	for _, old := range r.Installations {
+		if old.Skill == rec.Skill && old.Scope.Identity == rec.Scope.Identity && old.Agent == rec.Agent {
+			continue
 		}
+		kept = append(kept, old)
 	}
-	if !found {
-		r.Installations = append(r.Installations, x)
-	}
-	p, err := registryPath()
+	r.Installations = append(kept, rec)
+	path, err := registryPath()
 	if err != nil {
 		return err
 	}
@@ -701,7 +710,66 @@ func saveReceipt(x receipt) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(p, append(b, '\n'), 0o644)
+	b = append(b, '\n')
+	return atomicWrite(path, b, 0o644)
+}
+
+func chooseAgents(explicit []string, interactive bool) ([]string, error) {
+	if len(explicit) > 0 {
+		return normalizeAgents(explicit)
+	}
+	detected := detectedAgents()
+	if len(detected) == 0 {
+		if !interactive {
+			return nil, errors.New("no supported AI harness detected; use --agent explicitly")
+		}
+		chosen, err := ask("No supported harness detected. Agents to target (codex, claude)")
+		if err != nil {
+			return nil, err
+		}
+		return normalizeAgents(splitCSV(chosen))
+	}
+	if !interactive {
+		return detected, nil
+	}
+	chosen, err := askDefault("Detected agents", strings.Join(detected, ","))
+	if err != nil {
+		return nil, err
+	}
+	return normalizeAgents(splitCSV(chosen))
+}
+
+func printHelp() {
+	fmt.Println(`jl-skill - install agent skills
+
+Usage:
+  jl-skill [skills...] --scope user|cwd|PATH [--agent AGENT]...
+  jl-skill update [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
+
+If --agent is omitted, all detected supported harnesses are selected.
+If arguments are omitted on an interactive terminal, jl-skill prompts for them.`)
+}
+func printUpdateHelp() {
+	fmt.Println(`jl-skill update - update installer-managed skill installations
+
+Usage:
+  jl-skill update [skills...] [--scope user|cwd|PATH] [--agent AGENT]...`)
+}
+
+func isInteractive() bool {
+	st, err := os.Stdin.Stat()
+	return err == nil && (st.Mode()&os.ModeCharDevice) != 0
+}
+
+func splitCSV(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 func stringSet(items []string) map[string]bool {
 	m := map[string]bool{}
@@ -718,87 +786,21 @@ var stdin = bufio.NewReader(os.Stdin)
 
 func ask(label string) (string, error) {
 	fmt.Print("? " + label + ": ")
-	s, err := stdin.ReadString('\n')
-	if err != nil && len(s) == 0 {
+	line, err := stdin.ReadString('\n')
+	if err != nil && !errors.Is(err, os.ErrClosed) {
 		return "", err
 	}
-	return strings.TrimSpace(s), nil
+	return strings.TrimSpace(line), nil
 }
-func askSkills() ([]string, error) {
-	entries, err := fs.ReadDir(catalog, "skills")
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	fmt.Println("Available skills:")
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		m, err := loadManifest(e.Name())
-		if err != nil {
-			continue
-		}
-		names = append(names, m.Name)
-		fmt.Printf("  %d) %s - %s\n", len(names), m.Name, m.Description)
-	}
-	line, err := ask("Skills (comma-separated names or numbers)")
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, t := range strings.Split(line, ",") {
-		t = strings.TrimSpace(t)
-		if n, err := strconv.Atoi(t); err == nil && n >= 1 && n <= len(names) {
-			out = append(out, names[n-1])
-		} else if t != "" {
-			out = append(out, t)
-		}
-	}
-	if len(out) == 0 {
-		return nil, errors.New("no skills selected")
-	}
-	return out, nil
-}
-func askScope() (string, error) {
-	fmt.Println("Installation scope:\n  1) cwd\n  2) user\n  3) custom path")
-	x, err := ask("Scope")
-	if err != nil {
+func askDefault(label, def string) (string, error) {
+	fmt.Printf("? %s [%s]: ", label, def)
+	line, err := stdin.ReadString('\n')
+	if err != nil && !errors.Is(err, os.ErrClosed) {
 		return "", err
 	}
-	switch x {
-	case "", "1", "cwd":
-		return "cwd", nil
-	case "2", "user":
-		return "user", nil
-	case "3":
-		return ask("Path")
-	default:
-		return x, nil
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return def, nil
 	}
-}
-func askAgents(defaults []string) ([]string, error) {
-	if len(defaults) > 0 {
-		fmt.Println("Detected agents: " + strings.Join(defaults, ", "))
-	} else {
-		fmt.Println("No supported agents detected. Supported: codex, claude")
-	}
-	x, err := ask("Agents (comma-separated; blank keeps detected defaults)")
-	if err != nil {
-		return nil, err
-	}
-	if x == "" && len(defaults) > 0 {
-		return defaults, nil
-	}
-	var out []string
-	for _, a := range strings.Split(x, ",") {
-		if a = strings.TrimSpace(a); a != "" {
-			out = append(out, a)
-		}
-	}
-	return normalizeAgents(out)
-}
-func isTerminal() bool {
-	st, err := os.Stdin.Stat()
-	return err == nil && st.Mode()&os.ModeCharDevice != 0
+	return line, nil
 }
