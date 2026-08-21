@@ -22,9 +22,12 @@ Proven locally so far:
 - durable session setup/confirmation/frontier checkpoints across fresh CLI processes;
 - raw-answer recovery before authoritative mutation;
 - applied-answer recovery before session finalization;
-- atomic decision settlement plus session application marker in one SurrealQL transaction.
+- atomic single-decision settlement plus session marker;
+- atomic multi-decision settlement batches plus one session marker, preserving JSON value types.
 
-Still intentionally unimplemented: the conversational `/map` SKILL.md/agents, transitive affected-descendant analysis, atomic pending-answer forms for revision/promotion and other authoritative mutations, general promotion/revision semantics beyond proven fixtures, and public packaging.
+A first functional `SKILL.md` now exists. It deliberately uses the proven parent-agent + CLI workflow without adding a child-agent fleet. The next milestone is end-to-end conversational evaluation of that skill.
+
+Still intentionally incomplete: atomic pending-answer forms for revision/promotion and other structural mutations, transitive affected-descendant mutation, atomic initial baseline creation, general promotion/revision semantics beyond proven fixtures, and public packaging.
 
 ## Install
 
@@ -45,6 +48,23 @@ map-state seed-chores
 
 `seed-chores` is a development fixture only and is not intended as a production command.
 
+## Skill
+
+`SKILL.md` is the first executable conversational workflow for Map. It defines:
+
+- startup and unfinished-session recovery;
+- new-vs-existing scope resolution;
+- mandatory scope/setup confirmation;
+- `mvp|thorough` depth and `normal|adversarial` stance;
+- material-question discovery policy;
+- exact frontier checkpointing before questions;
+- raw-answer persistence before interpretation/mutation;
+- atomic settlement batches;
+- read-only query behavior;
+- conservative failure handling when a needed mutation does not yet have a safe atomic primitive.
+
+The skill does not spawn subagents by default. Additional agents should be introduced only when a concrete evaluation proves that an independent semantic transaction improves correctness enough to justify the orchestration cost.
+
 ## Read/query surface
 
 Ordinary-agent oriented, non-mutating queries:
@@ -64,38 +84,38 @@ map-state explain <node>
 
 Session state lives in `map_session`, not the authoritative graph.
 
-```bash
-map-state session start --invocation "map chores" --interpreted "Continue chore decisions" --focus chores
-map-state session status
-map-state session confirm
-map-state session checkpoint clear-backlog
-map-state session answer "Keep clearing one occurrence." --operation "settle clear-backlog one"
-map-state session resume
-```
-
 Key ordering invariant:
 
 1. persist the exact presented frontier;
 2. persist the raw user answer;
-3. apply authoritative graph mutation and its session marker atomically when the mutation requires one;
+3. apply authoritative settlement mutations and the session marker atomically;
 4. clear the pending answer and advance.
 
-For the proven settlement path:
+Single settlement:
 
 ```bash
 map-state session apply-settle clear-backlog one
-map-state session resume
-map-state session advance --phase discovery
 ```
 
-`apply-settle` validates that setup is confirmed, a raw answer is pending, the decision was in the exact presented frontier, and the decision is still actionable. It then updates the decision and `pending_operation_applied=true` inside one `BEGIN TRANSACTION ... COMMIT TRANSACTION` query.
+Batch settlement:
 
-A pending raw answer always takes priority over asking a new question. The prototype refuses to discard an unapplied answer unless `session advance --no-mutation` explicitly states no graph mutation was required. The old manual `session applied` path is rejected when a pending graph operation exists, preventing the previously unsafe split between graph mutation and application marker.
+```bash
+map-state session apply-settles '{"late-anchor":"preserve-original","local-persistence":true}'
+```
+
+Both use the same transaction-safe batch engine. Every target must be actionable and must have appeared in the exact presented frontier for the pending answer.
+
+A pending raw answer always takes priority over asking a new question. The old manual `session applied` path is rejected when a pending graph operation exists, preventing the unsafe split between graph mutation and application marker.
 
 Other session controls:
 
 ```bash
+map-state session status
+map-state session confirm
+map-state session checkpoint <ids...>
+map-state session answer "<raw answer>"
 map-state session resume
+map-state session advance --phase discovery
 map-state session pause
 map-state session abandon
 map-state session finish
