@@ -4,9 +4,8 @@ The SurrealDB Python SDK stringifies record IDs that require escaping as
 ``node:⟨some-id⟩``. The state engine sometimes round-trips those display strings
 back into RecordID objects. Normalize that representation before delegating.
 
-This module also routes the first ordinary-agent read/query commands into the
-non-mutating map_query surface while legacy prototype mutation commands remain in
-map_state.
+This module routes ordinary-agent read/query commands into non-mutating query
+surfaces while prototype mutation commands remain in map_state.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ from typing import Any
 
 from surrealdb import RecordID
 
+import map_agent_query
 import map_query
 import map_state
 
@@ -62,6 +62,8 @@ def print_combined_help() -> None:
     print("  context <id>   Show compact current-state context for a branch")
     print("  related <id>   Show directly adjacent semantic relations")
     print("  validate       Check graph structural invariants without mutation")
+    print("  search <text>  Search current Map nodes by stored semantic text")
+    print("  explain <id>   Show graph-supported context for one node")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     command = command_name(args)
     if command in map_query.QUERY_COMMANDS:
         return map_query.main(args)
+    if command in map_agent_query.QUERY_COMMANDS:
+        return map_agent_query.main(args)
     if command is None and any(token in {"-h", "--help"} for token in args):
         print_combined_help()
         return 0
