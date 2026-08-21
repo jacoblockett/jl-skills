@@ -202,10 +202,75 @@ def persist_answer(db: Any, *, raw_answer: str, operation: str | None) -> dict[s
     return session_summary(db, require_session(db))
 
 
+def atomic_settle_pending(db: Any, *, node_id: str, value: Any) -> dict[str, Any]:
+    """Settle one presented decision and mark its pending answer applied atomically.
+
+    This closes the crash window that existed when graph mutation and the session's
+    applied marker were separate commands. SurrealQL BEGIN/COMMIT runs both updates
+    as one transaction, so after a crash either both are durable or neither is.
+    """
+    session = require_session(db)
+    if session.get("pending_user_answer") is None:
+        raise ValueError("No pending user answer exists")
+    if session.get("pending_operation_applied", False):
+        raise ValueError("Pending user answer is already marked applied")
+    if not session.get("setup_confirmed", False):
+        raise ValueError("Cannot mutate authoritative Map state before setup confirmation")
+
+    node = map_state.get_node(db, node_id)
+    if not node:
+        raise ValueError(f"No node {node_id!r}")
+    if node.get("kind") != "decision":
+        raise ValueError(f"{node_id!r} is {node.get('kind')!r}, not a decision")
+    if node.get("state") not in map_state.DECISION_ACTIONABLE_STATES:
+        raise ValueError(
+            f"{node_id!r} is in state {node.get('state')!r}; expected one of "
+            f"{sorted(map_state.DECISION_ACTIONABLE_STATES)}"
+        )
+
+    presented = {map_state.node_key(item) for item in session.get("presented_frontier", []) or []}
+    key = map_state.node_key(node["id"])
+    if key not in presented:
+        raise ValueError(f"{node_id!r} was not in the exact presented frontier for this pending answer")
+
+    raw = db.query_raw(
+        """
+        BEGIN TRANSACTION;
+        UPDATE $node_id MERGE { state: 'settled', value: $value, updated_at: time::now() };
+        UPDATE $session_id MERGE {
+            phase: 'answer_applied',
+            pending_operation_applied: true,
+            updated_at: time::now()
+        };
+        COMMIT TRANSACTION;
+        """,
+        {"node_id": map_state.rid(node_id), "value": value, "session_id": SESSION_ID},
+    )
+    map_state.check_raw_response(raw)
+
+    node_after = map_state.get_node(db, node_id)
+    session_after = require_session(db)
+    if not node_after or node_after.get("state") != "settled" or node_after.get("value") != value:
+        raise RuntimeError("Atomic settlement did not persist the expected decision state")
+    if not session_after.get("pending_operation_applied", False):
+        raise RuntimeError("Atomic settlement did not persist the session application marker")
+
+    return {
+        "ok": True,
+        "atomic": True,
+        "node": node_after,
+        "session": session_summary(db, session_after),
+    }
+
+
 def mark_applied(db: Any) -> dict[str, Any]:
     session = require_session(db)
     if session.get("pending_user_answer") is None:
         raise ValueError("No pending user answer exists")
+    if session.get("pending_operation") is not None:
+        raise ValueError(
+            "Pending graph operation cannot be marked applied manually; use an atomic 'session apply-*' command"
+        )
     db.query(
         "UPDATE $session_id MERGE { phase: 'answer_applied', pending_operation_applied: true, updated_at: time::now() };",
         {"session_id": SESSION_ID},
@@ -218,7 +283,7 @@ def advance_session(db: Any, *, phase: str, no_mutation: bool) -> dict[str, Any]
     if session.get("pending_user_answer") is None:
         raise ValueError("No pending user answer exists to finalize")
     if not session.get("pending_operation_applied", False) and not no_mutation:
-        raise ValueError("Pending answer has not been marked applied; use 'session applied' after graph mutation or --no-mutation")
+        raise ValueError("Pending answer has not been applied; use an atomic 'session apply-*' command or --no-mutation")
 
     db.query(
         "UPDATE $session_id MERGE { phase: $phase, presented_frontier: [], pending_user_answer: NONE, pending_operation: NONE, pending_operation_applied: false, updated_at: time::now() };",
@@ -241,7 +306,7 @@ def resume_session(db: Any) -> dict[str, Any]:
 
 
 def set_status(db: Any, status: str) -> dict[str, Any]:
-    require_session(db)
+    session = require_session(db)
     db.query(
         "UPDATE $session_id MERGE { status: $status, updated_at: time::now() };",
         {"session_id": SESSION_ID, "status": status},
@@ -281,7 +346,17 @@ def build_parser() -> argparse.ArgumentParser:
     answer.add_argument("answer")
     answer.add_argument("--operation", help="Optional intended graph operation description")
 
-    sub.add_parser("applied", help="Mark the pending answer's graph operation as successfully applied")
+    apply_settle = sub.add_parser(
+        "apply-settle",
+        help="Atomically settle one presented decision and mark its pending answer applied",
+    )
+    apply_settle.add_argument("id")
+    apply_settle.add_argument("value", help="JSON scalar/object/array, or plain text")
+
+    sub.add_parser(
+        "applied",
+        help="Manual compatibility marker; rejected when a pending graph operation exists",
+    )
 
     advance = sub.add_parser("advance", help="Clear a recovered/applied answer and continue")
     advance.add_argument("--phase", default="discovery")
@@ -319,6 +394,8 @@ def main(argv: list[str] | None = None) -> int:
                 map_state.emit(checkpoint_session(db, phase=args.phase, frontier=args.frontier))
             elif command == "answer":
                 map_state.emit(persist_answer(db, raw_answer=args.answer, operation=args.operation))
+            elif command == "apply-settle":
+                map_state.emit(atomic_settle_pending(db, node_id=args.id, value=map_state.parse_scalar(args.value)))
             elif command == "applied":
                 map_state.emit(mark_applied(db))
             elif command == "advance":
