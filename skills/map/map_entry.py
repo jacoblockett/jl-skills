@@ -55,9 +55,22 @@ def command_name(argv: list[str]) -> str | None:
     return None
 
 
+def print_combined_help() -> None:
+    map_state.build_parser().print_help()
+    print("\nread-only agent queries:")
+    print("  history <id>   Show full supersession lineage and current revision")
+    print("  context <id>   Show compact current-state context for a branch")
+    print("  related <id>   Show directly adjacent semantic relations")
+    print("  validate       Check graph structural invariants without mutation")
+
+
 def main(argv: list[str] | None = None) -> int:
     map_state.rid = normalized_rid
     args = list(sys.argv[1:] if argv is None else argv)
-    if command_name(args) in map_query.QUERY_COMMANDS:
+    command = command_name(args)
+    if command in map_query.QUERY_COMMANDS:
         return map_query.main(args)
+    if command is None and any(token in {"-h", "--help"} for token in args):
+        print_combined_help()
+        return 0
     return map_state.main(args)
