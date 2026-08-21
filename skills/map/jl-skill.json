@@ -1,0 +1,25 @@
+{
+  "name": "map",
+  "version": "0.1.0",
+  "description": "Durable, queryable graph of user intent, decisions, constraints, ideas, facts, and rationale.",
+  "skill_files": [
+    "SKILL.md"
+  ],
+  "runtime_files": [
+    "map_agent_query.py",
+    "map_entry.py",
+    "map_query.py",
+    "map_session.py",
+    "map_state.py",
+    "schema.surql"
+  ],
+  "runtime_dependencies": [
+    "surrealdb"
+  ],
+  "instruction_fragment": "AGENTS.fragment.md",
+  "runtime": "python",
+  "project_init": [
+    "map-state",
+    "init"
+  ]
+}
