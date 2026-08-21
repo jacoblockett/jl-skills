@@ -53,15 +53,13 @@ type receipt struct {
 type registry struct {
 	Installations []receipt `json:"installations"`
 }
-
 type options struct {
 	Command string
 	Skills  []string
 	Scope   string
 	Agents  []string
 }
-
-type pythonInvocation struct {
+type pyExec struct {
 	Exe    string
 	Prefix []string
 }
@@ -101,7 +99,6 @@ func parseArgs(args []string) (options, error) {
 			os.Exit(0)
 		}
 	}
-
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -133,20 +130,16 @@ func parseArgs(args []string) (options, error) {
 func printHelp() {
 	fmt.Print(`jl-skill
 
-Install skills:
+Install:
   jl-skill map --scope user
   jl-skill map --scope cwd
   jl-skill map --scope "C:\\path\\to\\project"
   jl-skill map --scope cwd --agent codex --agent claude
 
-Update installed skills:
+Update:
   jl-skill update map [--scope user|cwd|PATH] [--agent AGENT]...
 
-Scope chooses WHERE. Agent detection chooses WHO. Detecting a harness never changes
-or broadens the requested scope.
-
-With no --agent, all detected supported harnesses are selected. Missing install
-choices are prompted when stdin is interactive.
+Scope chooses WHERE. Agent detection chooses WHO. WHO never changes WHERE.
 `)
 }
 
@@ -154,13 +147,11 @@ func install(o options) error {
 	interactive := isTerminal()
 	wizard := len(o.Skills) == 0 || o.Scope == ""
 	var err error
-
 	if len(o.Skills) == 0 {
 		if !interactive {
 			return errors.New("no skill supplied")
 		}
-		o.Skills, err = askSkills()
-		if err != nil {
+		if o.Skills, err = askSkills(); err != nil {
 			return err
 		}
 	}
@@ -168,12 +159,10 @@ func install(o options) error {
 		if !interactive {
 			return errors.New("--scope is required")
 		}
-		o.Scope, err = askScope()
-		if err != nil {
+		if o.Scope, err = askScope(); err != nil {
 			return err
 		}
 	}
-
 	s, err := resolveScope(o.Scope)
 	if err != nil {
 		return err
@@ -182,14 +171,14 @@ func install(o options) error {
 	agents := o.Agents
 	if len(agents) == 0 {
 		detected := detectedAgents()
-		if len(detected) == 0 {
-			if !interactive {
-				return errors.New("no supported harness detected; specify --agent explicitly")
-			}
+		switch {
+		case len(detected) == 0 && !interactive:
+			return errors.New("no supported harness detected; specify --agent explicitly")
+		case len(detected) == 0:
 			agents, err = askAgents(nil)
-		} else if wizard {
+		case wizard:
 			agents, err = askAgents(detected)
-		} else {
+		default:
 			agents = detected
 		}
 		if err != nil {
@@ -226,23 +215,20 @@ func update(o options) error {
 		return errors.New("no recorded installations")
 	}
 
-	var scopeFilter scope
+	var sf scope
 	if o.Scope != "" {
-		scopeFilter, err = resolveScope(o.Scope)
+		sf, err = resolveScope(o.Scope)
 		if err != nil {
 			return err
 		}
 	}
-
-	wantedSkills := stringSet(o.Skills)
-	wantedAgents := stringSet(o.Agents)
+	wantedSkills, wantedAgents := stringSet(o.Skills), stringSet(o.Agents)
 	type group struct {
-		Manifest manifest
-		Scope    scope
-		Agents   []string
+		M      manifest
+		S      scope
+		Agents []string
 	}
 	groups := map[string]group{}
-
 	for _, x := range r.Installations {
 		if len(wantedSkills) > 0 && !wantedSkills[x.Skill] {
 			continue
@@ -250,24 +236,22 @@ func update(o options) error {
 		if len(wantedAgents) > 0 && !wantedAgents[x.Agent] {
 			continue
 		}
-		if o.Scope != "" && x.Scope.Identity != scopeFilter.Identity {
+		if o.Scope != "" && x.Scope.Identity != sf.Identity {
 			continue
 		}
 		m, err := loadManifest(x.Skill)
 		if err != nil {
 			return err
 		}
-		key := x.Skill + "\x00" + x.Scope.Identity
-		g := groups[key]
-		g.Manifest = m
-		g.Scope = x.Scope
+		k := x.Skill + "\x00" + x.Scope.Identity
+		g := groups[k]
+		g.M, g.S = m, x.Scope
 		g.Agents = append(g.Agents, x.Agent)
-		groups[key] = g
+		groups[k] = g
 	}
 	if len(groups) == 0 {
 		return errors.New("no installations match update filters")
 	}
-
 	keys := make([]string, 0, len(groups))
 	for k := range groups {
 		keys = append(keys, k)
@@ -279,8 +263,8 @@ func update(o options) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Updating %s at %s for %s\n", g.Manifest.Name, g.Scope.Identity, strings.Join(agents, ", "))
-		if err := installOne(g.Manifest, g.Scope, agents); err != nil {
+		fmt.Printf("Updating %s at %s for %s\n", g.M.Name, g.S.Identity, strings.Join(agents, ", "))
+		if err := installOne(g.M, g.S, agents); err != nil {
 			return err
 		}
 	}
@@ -308,7 +292,6 @@ func installOne(m manifest, s scope, agents []string) error {
 			return err
 		}
 	}
-
 	dataRoot := filepath.Join(s.Root, ".jl-skill")
 	packageRoot := filepath.Join(dataRoot, "packages", m.Name)
 	runtimeRoot := filepath.Join(dataRoot, "runtime", m.Name)
@@ -334,33 +317,25 @@ func installOne(m manifest, s scope, agents []string) error {
 	}
 
 	for _, agent := range agents {
-		skillRoot, instructionFile, err := agentPaths(agent, s)
+		skillRoot, instruction, err := agentPaths(agent, s)
 		if err != nil {
 			return err
 		}
-		destination := filepath.Join(skillRoot, m.Name)
+		dest := filepath.Join(skillRoot, m.Name)
 		for _, rel := range m.SkillFiles {
-			if err := extractAsset(m.Name, rel, filepath.Join(destination, rel), tokens); err != nil {
+			if err := extractAsset(m.Name, rel, filepath.Join(dest, rel), tokens); err != nil {
 				return err
 			}
 		}
 		if fragment != "" {
-			if err := managedBlock(instructionFile, m.Name, fragment); err != nil {
+			if err := managedBlock(instruction, m.Name, fragment); err != nil {
 				return err
 			}
 		}
-		if err := saveReceipt(receipt{
-			Skill:       m.Name,
-			Version:     m.Version,
-			Scope:       s,
-			Agent:       agent,
-			SkillPath:   destination,
-			RuntimeRoot: runtimeRoot,
-			UpdatedAt:   time.Now().UTC(),
-		}); err != nil {
+		if err := saveReceipt(receipt{Skill: m.Name, Version: m.Version, Scope: s, Agent: agent, SkillPath: dest, RuntimeRoot: runtimeRoot, UpdatedAt: time.Now().UTC()}); err != nil {
 			return err
 		}
-		fmt.Printf("Installed %s %s for %s at %s\n", m.Name, m.Version, agent, destination)
+		fmt.Printf("Installed %s %s for %s at %s\n", m.Name, m.Version, agent, dest)
 	}
 
 	if s.Kind == "project" && len(m.ProjectInit) > 0 {
@@ -369,8 +344,7 @@ func installOne(m manifest, s scope, agents []string) error {
 		}
 		args := append([]string{"--root", s.Root}, m.ProjectInit[1:]...)
 		cmd := exec.Command(cli, args...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("%s project init: %w", m.Name, err)
 		}
@@ -389,58 +363,48 @@ func provisionRuntime(m manifest, packageRoot, runtimeRoot string) (string, erro
 	if err := os.MkdirAll(runtimeRoot, 0o755); err != nil {
 		return "", err
 	}
-
-	depsRoot := filepath.Join(runtimeRoot, "site-packages")
+	deps := filepath.Join(runtimeRoot, "site-packages")
 	if len(m.RuntimeDependencies) > 0 {
-		if err := os.MkdirAll(depsRoot, 0o755); err != nil {
+		if err := os.MkdirAll(deps, 0o755); err != nil {
 			return "", err
 		}
 		args := append([]string{}, py.Prefix...)
-		args = append(args, "-m", "pip", "install", "--disable-pip-version-check", "--upgrade", "--target", depsRoot)
+		args = append(args, "-m", "pip", "install", "--disable-pip-version-check", "--upgrade", "--target", deps)
 		args = append(args, m.RuntimeDependencies...)
 		cmd := exec.Command(py.Exe, args...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
 			return "", fmt.Errorf("install runtime dependencies: %w", err)
 		}
 	}
-
 	runner := filepath.Join(runtimeRoot, "runner.py")
-	runnerBody := fmt.Sprintf(
-		"import sys\nsys.path.insert(0, %q)\nsys.path.insert(0, %q)\nfrom map_entry import main\nraise SystemExit(main())\n",
-		depsRoot,
-		packageRoot,
-	)
+	runnerBody := fmt.Sprintf("import sys\nsys.path.insert(0, %q)\nsys.path.insert(0, %q)\nfrom map_entry import main\nraise SystemExit(main())\n", deps, packageRoot)
 	if err := atomicWrite(runner, []byte(runnerBody), 0o644); err != nil {
 		return "", err
 	}
 
 	if runtime.GOOS == "windows" {
 		cli := filepath.Join(runtimeRoot, "map-state.cmd")
-		parts := []string{cmdQuote(py.Exe)}
+		parts := []string{cmdArg(py.Exe)}
 		for _, p := range py.Prefix {
-			parts = append(parts, cmdQuote(p))
+			parts = append(parts, cmdArg(p))
 		}
-		parts = append(parts, cmdQuote(runner), "%*")
-		body := "@echo off\r\n" + strings.Join(parts, " ") + "\r\n"
-		return cli, atomicWrite(cli, []byte(body), 0o755)
+		parts = append(parts, cmdArg(runner), "%*")
+		return cli, atomicWrite(cli, []byte("@echo off\r\n"+strings.Join(parts, " ")+"\r\n"), 0o755)
 	}
-
 	cli := filepath.Join(runtimeRoot, "map-state")
-	parts := []string{"exec", shQuote(py.Exe)}
+	parts := []string{"exec", shArg(py.Exe)}
 	for _, p := range py.Prefix {
-		parts = append(parts, shQuote(p))
+		parts = append(parts, shArg(p))
 	}
-	parts = append(parts, shQuote(runner), `"$@"`)
-	body := "#!/bin/sh\n" + strings.Join(parts, " ") + "\n"
-	return cli, atomicWrite(cli, []byte(body), 0o755)
+	parts = append(parts, shArg(runner), `"$@"`)
+	return cli, atomicWrite(cli, []byte("#!/bin/sh\n"+strings.Join(parts, " ")+"\n"), 0o755)
 }
 
-func findPython311() (pythonInvocation, error) {
-	candidates := []pythonInvocation{{Exe: "python3"}, {Exe: "python"}}
+func findPython311() (pyExec, error) {
+	candidates := []pyExec{{Exe: "python3"}, {Exe: "python"}}
 	if runtime.GOOS == "windows" {
-		candidates = []pythonInvocation{{Exe: "python"}, {Exe: "py", Prefix: []string{"-3"}}, {Exe: "python3"}}
+		candidates = []pyExec{{Exe: "python"}, {Exe: "py", Prefix: []string{"-3"}}, {Exe: "python3"}}
 	}
 	for _, c := range candidates {
 		path, err := exec.LookPath(c.Exe)
@@ -454,10 +418,10 @@ func findPython311() (pythonInvocation, error) {
 			return c, nil
 		}
 	}
-	return pythonInvocation{}, errors.New("Map currently requires Python 3.11+; no compatible interpreter was found")
+	return pyExec{}, errors.New("Map currently requires Python 3.11+; no compatible interpreter was found")
 }
 
-func extractAsset(skill, rel, destination string, tokens map[string]string) error {
+func extractAsset(skill, rel, dest string, tokens map[string]string) error {
 	b, err := catalog.ReadFile("skills/" + skill + "/" + filepath.ToSlash(rel))
 	if err != nil {
 		return err
@@ -465,7 +429,7 @@ func extractAsset(skill, rel, destination string, tokens map[string]string) erro
 	if tokens != nil {
 		b = []byte(render(string(b), tokens))
 	}
-	return atomicWrite(destination, b, 0o644)
+	return atomicWrite(dest, b, 0o644)
 }
 
 func render(s string, tokens map[string]string) string {
@@ -475,27 +439,22 @@ func render(s string, tokens map[string]string) string {
 	return s
 }
 
-func agentPaths(agent string, s scope) (skillRoot, instructionFile string, err error) {
+func agentPaths(agent string, s scope) (string, string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", "", err
 	}
-	base := s.Root
-	if s.Kind == "user" {
-		base = home
-	}
-
 	switch agent {
 	case "codex":
 		if s.Kind == "user" {
 			return filepath.Join(home, ".agents", "skills"), filepath.Join(home, ".codex", "AGENTS.md"), nil
 		}
-		return filepath.Join(base, ".agents", "skills"), filepath.Join(base, "AGENTS.md"), nil
+		return filepath.Join(s.Root, ".agents", "skills"), filepath.Join(s.Root, "AGENTS.md"), nil
 	case "claude":
 		if s.Kind == "user" {
 			return filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".claude", "CLAUDE.md"), nil
 		}
-		return filepath.Join(base, ".claude", "skills"), filepath.Join(base, "CLAUDE.md"), nil
+		return filepath.Join(s.Root, ".claude", "skills"), filepath.Join(s.Root, "CLAUDE.md"), nil
 	default:
 		return "", "", fmt.Errorf("unsupported agent %q", agent)
 	}
@@ -511,8 +470,7 @@ func detectedAgents() []string {
 	}
 	return out
 }
-
-func harnessDetected(command, homeMarker string) bool {
+func harnessDetected(command, marker string) bool {
 	if _, err := exec.LookPath(command); err == nil {
 		return true
 	}
@@ -520,10 +478,9 @@ func harnessDetected(command, homeMarker string) bool {
 	if err != nil {
 		return false
 	}
-	st, err := os.Stat(filepath.Join(home, homeMarker))
+	st, err := os.Stat(filepath.Join(home, marker))
 	return err == nil && st.IsDir()
 }
-
 func normalizeAgents(raw []string) ([]string, error) {
 	seen := map[string]bool{}
 	var out []string
@@ -546,27 +503,26 @@ func normalizeAgents(raw []string) ([]string, error) {
 
 func resolveScope(raw string) (scope, error) {
 	raw = strings.TrimSpace(raw)
-	switch raw {
-	case "user":
+	if raw == "user" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return scope{}, err
 		}
 		home, err = canonicalPath(home)
 		return scope{Kind: "user", Identity: "user", Root: home}, err
-	case "cwd":
+	}
+	if raw == "cwd" {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return scope{}, err
 		}
 		p, err := canonicalPath(cwd)
 		return scope{Kind: "project", Identity: p, Root: p}, err
-	case "":
+	}
+	if raw == "" {
 		return scope{}, errors.New("empty scope")
 	}
-
-	p := expandPath(raw)
-	p, err := canonicalPath(p)
+	p, err := canonicalPath(expandPath(raw))
 	if err != nil {
 		return scope{}, err
 	}
@@ -577,11 +533,10 @@ func resolveScope(raw string) (scope, error) {
 	}
 	return scope{Kind: "project", Identity: p, Root: p}, nil
 }
-
 func expandPath(p string) string {
 	p = os.ExpandEnv(p)
 	if runtime.GOOS == "windows" {
-		p = expandWindowsPercentVars(p)
+		p = expandPercentVars(p)
 	}
 	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -594,27 +549,25 @@ func expandPath(p string) string {
 	}
 	return p
 }
-
-func expandWindowsPercentVars(s string) string {
+func expandPercentVars(s string) string {
 	for {
-		start := strings.IndexByte(s, '%')
-		if start < 0 {
+		a := strings.IndexByte(s, '%')
+		if a < 0 {
 			return s
 		}
-		endRel := strings.IndexByte(s[start+1:], '%')
-		if endRel < 0 {
+		r := strings.IndexByte(s[a+1:], '%')
+		if r < 0 {
 			return s
 		}
-		end := start + 1 + endRel
-		name := s[start+1 : end]
-		value, ok := os.LookupEnv(name)
+		b := a + 1 + r
+		name := s[a+1 : b]
+		val, ok := os.LookupEnv(name)
 		if !ok {
 			return s
 		}
-		s = s[:start] + value + s[end+1:]
+		s = s[:a] + val + s[b+1:]
 	}
 }
-
 func canonicalPath(p string) (string, error) {
 	if !filepath.IsAbs(p) {
 		cwd, err := os.Getwd()
@@ -627,35 +580,30 @@ func canonicalPath(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		p = resolved
+	if x, err := filepath.EvalSymlinks(p); err == nil {
+		p = x
 	}
 	return filepath.Clean(p), nil
 }
 
 func managedBlock(path, skill, fragment string) error {
-	begin := "<!-- jl-skill:begin " + skill + " -->"
-	end := "<!-- jl-skill:end " + skill + " -->"
+	begin, end := "<!-- jl-skill:begin "+skill+" -->", "<!-- jl-skill:end "+skill+" -->"
 	block := begin + "\n" + strings.TrimSpace(fragment) + "\n" + end
-
 	var current string
 	if b, err := os.ReadFile(path); err == nil {
 		current = string(b)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-
-	beginIndex := strings.Index(current, begin)
-	endIndex := strings.Index(current, end)
-	if (beginIndex >= 0) != (endIndex >= 0) {
+	bi, ei := strings.Index(current, begin), strings.Index(current, end)
+	if (bi >= 0) != (ei >= 0) {
 		return fmt.Errorf("malformed jl-skill block in %s", path)
 	}
-	if beginIndex >= 0 {
-		if strings.Count(current, begin) != 1 || strings.Count(current, end) != 1 || endIndex < beginIndex {
+	if bi >= 0 {
+		if strings.Count(current, begin) != 1 || strings.Count(current, end) != 1 || ei < bi {
 			return fmt.Errorf("ambiguous jl-skill block in %s", path)
 		}
-		endIndex += len(end)
-		current = current[:beginIndex] + block + current[endIndex:]
+		current = current[:bi] + block + current[ei+len(end):]
 	} else if strings.TrimSpace(current) == "" {
 		current = block + "\n"
 	} else {
@@ -668,25 +616,23 @@ func atomicWrite(path string, data []byte, mode fs.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".jl-skill-*")
+	f, err := os.CreateTemp(filepath.Dir(path), ".jl-skill-*")
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(mode); err != nil {
+		f.Close()
 		return err
 	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := f.Close(); err != nil {
 		return err
 	}
-
 	if runtime.GOOS == "windows" {
 		backup := path + ".jl-skill-old"
 		_ = os.Remove(backup)
@@ -694,7 +640,7 @@ func atomicWrite(path string, data []byte, mode fs.FileMode) error {
 			if err := os.Rename(path, backup); err != nil {
 				return err
 			}
-			if err := os.Rename(tmpName, path); err != nil {
+			if err := os.Rename(tmp, path); err != nil {
 				_ = os.Rename(backup, path)
 				return err
 			}
@@ -702,7 +648,7 @@ func atomicWrite(path string, data []byte, mode fs.FileMode) error {
 			return nil
 		}
 	}
-	return os.Rename(tmpName, path)
+	return os.Rename(tmp, path)
 }
 
 func registryPath() (string, error) {
@@ -712,7 +658,6 @@ func registryPath() (string, error) {
 	}
 	return filepath.Join(home, ".jl-skill", "registry.json"), nil
 }
-
 func loadRegistry() (registry, error) {
 	var r registry
 	p, err := registryPath()
@@ -731,7 +676,6 @@ func loadRegistry() (registry, error) {
 	}
 	return r, nil
 }
-
 func saveReceipt(x receipt) error {
 	r, err := loadRegistry()
 	if err != nil {
@@ -759,22 +703,16 @@ func saveReceipt(x receipt) error {
 	}
 	return atomicWrite(p, append(b, '\n'), 0o644)
 }
-
 func stringSet(items []string) map[string]bool {
 	m := map[string]bool{}
-	for _, item := range items {
-		m[strings.ToLower(strings.TrimSpace(item))] = true
+	for _, x := range items {
+		m[strings.ToLower(strings.TrimSpace(x))] = true
 	}
 	return m
 }
 
-func cmdQuote(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
-
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-}
+func cmdArg(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
+func shArg(s string) string  { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 
 var stdin = bufio.NewReader(os.Stdin)
 
@@ -786,7 +724,6 @@ func ask(label string) (string, error) {
 	}
 	return strings.TrimSpace(s), nil
 }
-
 func askSkills() ([]string, error) {
 	entries, err := fs.ReadDir(catalog, "skills")
 	if err != nil {
@@ -794,11 +731,11 @@ func askSkills() ([]string, error) {
 	}
 	var names []string
 	fmt.Println("Available skills:")
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	for _, e := range entries {
+		if !e.IsDir() {
 			continue
 		}
-		m, err := loadManifest(entry.Name())
+		m, err := loadManifest(e.Name())
 		if err != nil {
 			continue
 		}
@@ -810,12 +747,12 @@ func askSkills() ([]string, error) {
 		return nil, err
 	}
 	var out []string
-	for _, token := range strings.Split(line, ",") {
-		token = strings.TrimSpace(token)
-		if n, err := strconv.Atoi(token); err == nil && n >= 1 && n <= len(names) {
+	for _, t := range strings.Split(line, ",") {
+		t = strings.TrimSpace(t)
+		if n, err := strconv.Atoi(t); err == nil && n >= 1 && n <= len(names) {
 			out = append(out, names[n-1])
-		} else if token != "" {
-			out = append(out, token)
+		} else if t != "" {
+			out = append(out, t)
 		}
 	}
 	if len(out) == 0 {
@@ -823,7 +760,6 @@ func askSkills() ([]string, error) {
 	}
 	return out, nil
 }
-
 func askScope() (string, error) {
 	fmt.Println("Installation scope:\n  1) cwd\n  2) user\n  3) custom path")
 	x, err := ask("Scope")
@@ -841,12 +777,11 @@ func askScope() (string, error) {
 		return x, nil
 	}
 }
-
 func askAgents(defaults []string) ([]string, error) {
 	if len(defaults) > 0 {
 		fmt.Println("Detected agents: " + strings.Join(defaults, ", "))
 	} else {
-		fmt.Println("No supported agents were detected. Supported: codex, claude")
+		fmt.Println("No supported agents detected. Supported: codex, claude")
 	}
 	x, err := ask("Agents (comma-separated; blank keeps detected defaults)")
 	if err != nil {
@@ -863,7 +798,6 @@ func askAgents(defaults []string) ([]string, error) {
 	}
 	return normalizeAgents(out)
 }
-
 func isTerminal() bool {
 	st, err := os.Stdin.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
