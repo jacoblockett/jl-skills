@@ -66,5 +66,6 @@ DEFINE FIELD IF NOT EXISTS setup_confirmed ON map_session TYPE bool DEFAULT fals
 DEFINE FIELD IF NOT EXISTS presented_frontier ON map_session TYPE array<record<node>> DEFAULT [];
 DEFINE FIELD IF NOT EXISTS pending_user_answer ON map_session TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS pending_operation ON map_session TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS pending_operation_applied ON map_session TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS created_at ON map_session TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_at ON map_session TYPE datetime DEFAULT time::now();
