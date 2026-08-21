@@ -16,10 +16,11 @@ Implemented so far:
 - parked ideas distinct from authoritative requirements;
 - a small resumable-session table kept separate from the intent graph;
 - deterministic CLI operations for initializing, inspecting, relating, and settling state;
-- a first dependency-aware frontier calculation;
+- dependency-aware frontier calculation with conditional branches;
+- promotion of a parked future-goal idea into active user intent;
 - a chore-tracker fixture reproducing the initial regression case from `/grill` development.
 
-Not implemented yet: the actual `/map` SKILL.md/agents, promotion/supersession workflows, affected-descendant analysis, rich context queries, or crash-recovery session commands.
+Not implemented yet: the actual `/map` SKILL.md/agents, general promotion targets, supersession/revision workflows, affected-descendant analysis, rich context queries, or crash-recovery session commands.
 
 ## Try it
 
@@ -64,6 +65,28 @@ map-state frontier
 
 `clear-backlog` should now become frontier-eligible.
 
+### Evolution test
+
+The fixture also contains `shared-household` as a parked, non-binding idea. Promotion turns that same record into active user intent and can attach it below an existing intent:
+
+```bash
+map-state promote shared-household --parent chores
+map-state show shared-household
+map-state ideas
+```
+
+After promotion it should be `kind: intent`, `state: active`, `authority: user`, and should no longer appear in `map-state ideas`.
+
+The prototype intentionally does not invent the decisions required by the new intent. A reasoning agent would discover those. To simulate that step manually:
+
+```bash
+map-state add-node shared-membership decision open user "How should household membership work?"
+map-state relate shared-household contains shared-membership
+map-state frontier
+```
+
+That new decision should participate in the frontier while previously settled decisions remain settled.
+
 Inspect state directly through the CLI:
 
 ```bash
@@ -84,6 +107,7 @@ map-state --root C:/tmp/map-test status
 - `.map/db` is authoritative structured state.
 - Session/checkpoint records are workflow state, not user intent.
 - Parked ideas are queryable but do not enter the required decision frontier.
+- Promoting an idea activates intent; it does not fabricate downstream decisions.
 - Dependency conditions use a tiny non-executable vocabulary owned by the CLI.
 - External execution systems such as Beads are consumers of Map, not Map responsibilities.
 - The state layer should remain useful even when `/map` is not explicitly invoked.
