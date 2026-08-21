@@ -8,6 +8,7 @@ priority without attempting to make the conversational /map skill itself yet.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -202,13 +203,7 @@ def persist_answer(db: Any, *, raw_answer: str, operation: str | None) -> dict[s
     return session_summary(db, require_session(db))
 
 
-def atomic_settle_pending(db: Any, *, node_id: str, value: Any) -> dict[str, Any]:
-    """Settle one presented decision and mark its pending answer applied atomically.
-
-    This closes the crash window that existed when graph mutation and the session's
-    applied marker were separate commands. SurrealQL BEGIN/COMMIT runs both updates
-    as one transaction, so after a crash either both are durable or neither is.
-    """
+def _pending_apply_session(db: Any) -> dict[str, Any]:
     session = require_session(db)
     if session.get("pending_user_answer") is None:
         raise ValueError("No pending user answer exists")
@@ -216,51 +211,110 @@ def atomic_settle_pending(db: Any, *, node_id: str, value: Any) -> dict[str, Any
         raise ValueError("Pending user answer is already marked applied")
     if not session.get("setup_confirmed", False):
         raise ValueError("Cannot mutate authoritative Map state before setup confirmation")
+    return session
 
-    node = map_state.get_node(db, node_id)
-    if not node:
-        raise ValueError(f"No node {node_id!r}")
-    if node.get("kind") != "decision":
-        raise ValueError(f"{node_id!r} is {node.get('kind')!r}, not a decision")
-    if node.get("state") not in map_state.DECISION_ACTIONABLE_STATES:
-        raise ValueError(
-            f"{node_id!r} is in state {node.get('state')!r}; expected one of "
-            f"{sorted(map_state.DECISION_ACTIONABLE_STATES)}"
-        )
+
+def _validate_settlement_targets(
+    db: Any,
+    session: dict[str, Any],
+    settlements: list[tuple[str, Any]],
+) -> list[tuple[str, Any, dict[str, Any]]]:
+    if not settlements:
+        raise ValueError("At least one settlement is required")
 
     presented = {map_state.node_key(item) for item in session.get("presented_frontier", []) or []}
-    key = map_state.node_key(node["id"])
-    if key not in presented:
-        raise ValueError(f"{node_id!r} was not in the exact presented frontier for this pending answer")
+    seen: set[str] = set()
+    validated: list[tuple[str, Any, dict[str, Any]]] = []
 
-    raw = db.query_raw(
-        """
-        BEGIN TRANSACTION;
-        UPDATE $node_id MERGE { state: 'settled', value: $value, updated_at: time::now() };
-        UPDATE $session_id MERGE {
+    for node_id, value in settlements:
+        node = map_state.get_node(db, node_id)
+        if not node:
+            raise ValueError(f"No node {node_id!r}")
+        key = map_state.node_key(node["id"])
+        if key in seen:
+            raise ValueError(f"Duplicate settlement target {node_id!r}")
+        seen.add(key)
+        if node.get("kind") != "decision":
+            raise ValueError(f"{node_id!r} is {node.get('kind')!r}, not a decision")
+        if node.get("state") not in map_state.DECISION_ACTIONABLE_STATES:
+            raise ValueError(
+                f"{node_id!r} is in state {node.get('state')!r}; expected one of "
+                f"{sorted(map_state.DECISION_ACTIONABLE_STATES)}"
+            )
+        if key not in presented:
+            raise ValueError(f"{node_id!r} was not in the exact presented frontier for this pending answer")
+        validated.append((node_id, value, node))
+
+    return validated
+
+
+def atomic_settle_batch(db: Any, *, settlements: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Settle several presented decisions and mark one pending answer applied atomically."""
+    session = _pending_apply_session(db)
+    validated = _validate_settlement_targets(db, session, settlements)
+
+    statements = ["BEGIN TRANSACTION;"]
+    params: dict[str, Any] = {"session_id": SESSION_ID}
+    for index, (node_id, value, _) in enumerate(validated):
+        node_param = f"node_{index}"
+        value_param = f"value_{index}"
+        statements.append(
+            f"UPDATE ${node_param} MERGE {{ state: 'settled', value: ${value_param}, updated_at: time::now() }};"
+        )
+        params[node_param] = map_state.rid(node_id)
+        params[value_param] = value
+
+    statements.extend([
+        """UPDATE $session_id MERGE {
             phase: 'answer_applied',
             pending_operation_applied: true,
             updated_at: time::now()
-        };
-        COMMIT TRANSACTION;
-        """,
-        {"node_id": map_state.rid(node_id), "value": value, "session_id": SESSION_ID},
-    )
+        };""",
+        "COMMIT TRANSACTION;",
+    ])
+
+    raw = db.query_raw("\n".join(statements), params)
     map_state.check_raw_response(raw)
 
-    node_after = map_state.get_node(db, node_id)
+    nodes_after: list[dict[str, Any]] = []
+    for node_id, value, _ in validated:
+        node_after = map_state.get_node(db, node_id)
+        if not node_after or node_after.get("state") != "settled" or node_after.get("value") != value:
+            raise RuntimeError(f"Atomic batch settlement did not persist expected state for {node_id!r}")
+        nodes_after.append(node_after)
+
     session_after = require_session(db)
-    if not node_after or node_after.get("state") != "settled" or node_after.get("value") != value:
-        raise RuntimeError("Atomic settlement did not persist the expected decision state")
     if not session_after.get("pending_operation_applied", False):
-        raise RuntimeError("Atomic settlement did not persist the session application marker")
+        raise RuntimeError("Atomic batch settlement did not persist the session application marker")
 
     return {
         "ok": True,
         "atomic": True,
-        "node": node_after,
+        "count": len(nodes_after),
+        "nodes": nodes_after,
         "session": session_summary(db, session_after),
     }
+
+
+def atomic_settle_pending(db: Any, *, node_id: str, value: Any) -> dict[str, Any]:
+    """Compatibility wrapper for atomically settling one presented decision."""
+    result = atomic_settle_batch(db, settlements=[(node_id, value)])
+    return {
+        "ok": result["ok"],
+        "atomic": result["atomic"],
+        "node": result["nodes"][0],
+        "session": result["session"],
+    }
+
+
+def parse_settlement_object(text: str) -> list[tuple[str, Any]]:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"apply-settles expects a JSON object: {exc.msg}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("apply-settles expects a JSON object mapping decision IDs to values")
+    return [(str(node_id), value) for node_id, value in payload.items()]
 
 
 def mark_applied(db: Any) -> dict[str, Any]:
@@ -353,6 +407,15 @@ def build_parser() -> argparse.ArgumentParser:
     apply_settle.add_argument("id")
     apply_settle.add_argument("value", help="JSON scalar/object/array, or plain text")
 
+    apply_settles = sub.add_parser(
+        "apply-settles",
+        help="Atomically settle several presented decisions from one pending answer",
+    )
+    apply_settles.add_argument(
+        "settlements",
+        help='JSON object mapping decision IDs to values, e.g. \'{"first-due":"user-selected","local-persistence":true}\'',
+    )
+
     sub.add_parser(
         "applied",
         help="Manual compatibility marker; rejected when a pending graph operation exists",
@@ -396,6 +459,8 @@ def main(argv: list[str] | None = None) -> int:
                 map_state.emit(persist_answer(db, raw_answer=args.answer, operation=args.operation))
             elif command == "apply-settle":
                 map_state.emit(atomic_settle_pending(db, node_id=args.id, value=map_state.parse_scalar(args.value)))
+            elif command == "apply-settles":
+                map_state.emit(atomic_settle_batch(db, settlements=parse_settlement_object(args.settlements)))
             elif command == "applied":
                 map_state.emit(mark_applied(db))
             elif command == "advance":
@@ -416,3 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"map-state: {exc}", file=sys.stderr)
         return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
