@@ -180,10 +180,37 @@ def condition_matches(prerequisite: dict[str, Any], condition: dict[str, Any] | 
     raise ValueError(f"Unsupported dependency condition op: {op!r}")
 
 
-def compute_frontier(db: Any) -> dict[str, Any]:
+def contained_scope(db: Any, focus_id: str) -> set[str]:
+    """Return the focus node plus everything recursively contained beneath it.
+
+    This is the first locality primitive. Candidate decisions are scoped by containment,
+    while their prerequisites may still live outside the scope and are evaluated normally.
+    """
+    focus = get_node(db, focus_id)
+    if not focus:
+        raise ValueError(f"No focus node {focus_id!r}")
+
+    edges = list(db.select("contains") or [])
+    children: dict[str, list[str]] = {}
+    for edge in edges:
+        children.setdefault(node_key(edge["in"]), []).append(node_key(edge["out"]))
+
+    seen = {node_key(focus["id"])}
+    queue = [node_key(focus["id"])]
+    while queue:
+        current = queue.pop(0)
+        for child in children.get(current, []):
+            if child not in seen:
+                seen.add(child)
+                queue.append(child)
+    return seen
+
+
+def compute_frontier(db: Any, focus_id: str | None = None) -> dict[str, Any]:
     nodes = all_nodes(db)
     by_id = {node_key(node["id"]): node for node in nodes}
     dependencies = list(db.select("depends_on") or [])
+    scope_ids = contained_scope(db, focus_id) if focus_id is not None else None
 
     outgoing: dict[str, list[dict[str, Any]]] = {}
     for edge in dependencies:
@@ -195,6 +222,8 @@ def compute_frontier(db: Any) -> dict[str, Any]:
 
     for node in nodes:
         if node.get("kind") != "decision" or node.get("state") != "open":
+            continue
+        if scope_ids is not None and node_key(node["id"]) not in scope_ids:
             continue
 
         reasons: list[str] = []
@@ -225,7 +254,10 @@ def compute_frontier(db: Any) -> dict[str, Any]:
         else:
             ready.append(summary)
 
-    return {"frontier": ready, "blocked": blocked, "inapplicable": inapplicable}
+    result = {"frontier": ready, "blocked": blocked, "inapplicable": inapplicable}
+    if focus_id is not None:
+        result = {"focus": get_node(db, focus_id)["id"], **result}
+    return result
 
 
 def settle_decision(db: Any, node_id: str, value: Any) -> Any:
@@ -264,13 +296,7 @@ def promote_idea(db: Any, node_id: str, parent_id: str | None = None) -> dict[st
         {"node": rid(node_id)},
     )
     if parent_id is not None:
-        relate(
-            db,
-            parent_id,
-            "contains",
-            node_id,
-            note="Promoted from a parked idea into active user intent.",
-        )
+        relate(db, parent_id, "contains", node_id)
 
     promoted = get_node(db, node_id)
     if promoted is None:  # pragma: no cover - defensive SDK/storage invariant
@@ -337,7 +363,7 @@ def seed_chores(db: Any) -> None:
     create_node(db, "shared-household", {
         "kind": "idea", "state": "parked", "authority": "none",
         "subject": "Shared household chores",
-        "detail": "Possible future multi-user/shared-household capability; intentionally non-binding.",
+        "detail": "Multi-user/shared-household chore capability.",
     })
     relate(db, "shared-household", "related_to", "chores")
 
@@ -359,7 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init", help="Initialize .map/db and apply the schema")
     sub.add_parser("status", help="Show node/relation counts")
     sub.add_parser("list", help="List all graph nodes")
-    sub.add_parser("frontier", help="Show open, blocked, and conditionally inapplicable decisions")
+    frontier = sub.add_parser("frontier", help="Show open, blocked, and conditionally inapplicable decisions")
+    frontier.add_argument("--focus", help="Limit candidate decisions to this node and its contained descendants")
     sub.add_parser("ideas", help="List parked ideas")
     sub.add_parser("seed-chores", help="Reset state and seed the recurring-chore regression fixture")
 
@@ -414,15 +441,16 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "show":
                 emit(get_node(db, args.id))
             elif args.command == "frontier":
-                emit(compute_frontier(db))
+                emit(compute_frontier(db, args.focus))
             elif args.command == "ideas":
                 emit([n for n in all_nodes(db) if n.get("kind") == "idea" and n.get("state") == "parked"])
             elif args.command == "seed-chores":
                 seed_chores(db)
                 emit({"ok": True, "fixture": "chores", **compute_frontier(db)})
             elif args.command == "settle":
-                settle_decision(db, args.id, parse_scalar(args.value))
-                emit({"ok": True, "settled": args.id, "value": parse_scalar(args.value), **compute_frontier(db)})
+                value = parse_scalar(args.value)
+                settle_decision(db, args.id, value)
+                emit({"ok": True, "settled": args.id, "value": value, **compute_frontier(db)})
             elif args.command == "promote":
                 promoted = promote_idea(db, args.id, args.parent)
                 emit({"ok": True, "promoted": args.id, "node": promoted, **compute_frontier(db)})
