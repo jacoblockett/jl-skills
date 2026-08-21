@@ -18,15 +18,13 @@ Proven locally so far:
 - dependent decisions marked `needs_review` and re-evaluated against current revisions;
 - read-only `history`, `context`, `related`, `validate`, `search`, and `explain` queries;
 - current-context queries exclude superseded history while history remains queryable;
-- validation of the current regression fixture with zero errors/warnings.
+- validation of the current regression fixture with zero errors/warnings;
+- durable session setup/confirmation/frontier checkpoints across fresh CLI processes;
+- raw-answer recovery before authoritative mutation;
+- applied-answer recovery before session finalization;
+- atomic decision settlement plus session application marker in one SurrealQL transaction.
 
-Implemented but awaiting local integration proof:
-
-- durable `/map` session start/confirmation/checkpoint/resume state;
-- raw-answer persistence before graph mutation;
-- explicit recovery priority after a process/session interruption.
-
-Still intentionally unimplemented: the conversational `/map` SKILL.md/agents, transitive affected-descendant analysis, atomic coupling of multi-write graph mutation with session recovery markers, general promotion/revision semantics beyond proven fixtures, and public packaging.
+Still intentionally unimplemented: the conversational `/map` SKILL.md/agents, transitive affected-descendant analysis, atomic pending-answer forms for revision/promotion and other authoritative mutations, general promotion/revision semantics beyond proven fixtures, and public packaging.
 
 ## Install
 
@@ -79,24 +77,29 @@ Key ordering invariant:
 
 1. persist the exact presented frontier;
 2. persist the raw user answer;
-3. apply graph mutation;
-4. mark that application successful;
-5. clear the pending answer and advance.
+3. apply authoritative graph mutation and its session marker atomically when the mutation requires one;
+4. clear the pending answer and advance.
 
-Recovery commands:
+For the proven settlement path:
 
 ```bash
-map-state session applied
+map-state session apply-settle clear-backlog one
+map-state session resume
 map-state session advance --phase discovery
+```
+
+`apply-settle` validates that setup is confirmed, a raw answer is pending, the decision was in the exact presented frontier, and the decision is still actionable. It then updates the decision and `pending_operation_applied=true` inside one `BEGIN TRANSACTION ... COMMIT TRANSACTION` query.
+
+A pending raw answer always takes priority over asking a new question. The prototype refuses to discard an unapplied answer unless `session advance --no-mutation` explicitly states no graph mutation was required. The old manual `session applied` path is rejected when a pending graph operation exists, preventing the previously unsafe split between graph mutation and application marker.
+
+Other session controls:
+
+```bash
 map-state session resume
 map-state session pause
 map-state session abandon
 map-state session finish
 ```
-
-A pending raw answer always takes priority over asking a new question. The prototype refuses to discard an unapplied answer unless `session advance --no-mutation` explicitly states no graph mutation was required.
-
-The graph mutation and `session applied` marker are not yet one atomic transaction, so full crash-atomic mutation is not claimed yet.
 
 ## Prototype invariants
 
@@ -109,6 +112,7 @@ The graph mutation and `session applied` marker are not yet one atomic transacti
 - Superseded prerequisites resolve to their current replacement for frontier/context evaluation.
 - A changed prerequisite must not leave dependent settled state silently trusted.
 - Read/query commands do not mutate authoritative graph state.
+- Pending-answer authoritative mutations must not use a split mutation/application-marker sequence.
 - External execution systems such as Beads are consumers of Map, not Map responsibilities.
 
 The larger design/history and integration logs live in the separate private `persist` repository.
