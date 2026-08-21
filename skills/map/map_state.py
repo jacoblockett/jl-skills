@@ -241,11 +241,12 @@ def settle_decision(db: Any, node_id: str, value: Any) -> Any:
 
 
 def wipe(db: Any) -> None:
+    # db.query() executes immediately in the current Python SDK and returns results.
     # Relation rows are deleted first to keep ENFORCED graph tables unsurprising.
     for table in sorted(RELATIONS):
-        db.query(f"DELETE {table};").execute()
-    db.query("DELETE map_session;").execute()
-    db.query("DELETE node;").execute()
+        db.query(f"DELETE {table};")
+    db.query("DELETE map_session;")
+    db.query("DELETE node;")
 
 
 def seed_chores(db: Any) -> None:
