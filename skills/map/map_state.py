@@ -33,6 +33,8 @@ RELATIONS = {
 }
 
 DECISION_READY_STATES = {"settled", "satisfied"}
+DECISION_ACTIONABLE_STATES = {"open", "needs_review"}
+DECISION_REVIEWABLE_STATES = {"settled", "satisfied"}
 
 
 def db_dir(root: Path) -> Path:
@@ -60,7 +62,6 @@ def printable(value: Any) -> Any:
         return {str(k): printable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [printable(v) for v in value]
-    # RecordID and SDK-specific values stringify cleanly and are not JSON-native.
     if value.__class__.__module__.startswith("surrealdb"):
         return str(value)
     return value
@@ -164,8 +165,6 @@ def condition_matches(prerequisite: dict[str, Any], condition: dict[str, Any] | 
     if not condition:
         return True
 
-    # Prototype condition vocabulary. Deliberately non-executable and tiny.
-    # {"field": "value", "op": "eq", "value": "separate"}
     field = condition.get("field", "value")
     op = condition.get("op", "eq")
     expected = condition.get("value")
@@ -181,11 +180,7 @@ def condition_matches(prerequisite: dict[str, Any], condition: dict[str, Any] | 
 
 
 def contained_scope(db: Any, focus_id: str) -> set[str]:
-    """Return the focus node plus everything recursively contained beneath it.
-
-    This is the first locality primitive. Candidate decisions are scoped by containment,
-    while their prerequisites may still live outside the scope and are evaluated normally.
-    """
+    """Return the focus node plus everything recursively contained beneath it."""
     focus = get_node(db, focus_id)
     if not focus:
         raise ValueError(f"No focus node {focus_id!r}")
@@ -206,10 +201,35 @@ def contained_scope(db: Any, focus_id: str) -> set[str]:
     return seen
 
 
+def supersession_map(db: Any) -> dict[str, str]:
+    """Map superseded node IDs to their direct replacements."""
+    replacements: dict[str, str] = {}
+    for edge in list(db.select("supersedes") or []):
+        old_id = node_key(edge["out"])
+        new_id = node_key(edge["in"])
+        if old_id in replacements and replacements[old_id] != new_id:
+            raise RuntimeError(f"{old_id} has multiple direct superseding nodes")
+        replacements[old_id] = new_id
+    return replacements
+
+
+def resolve_current_id(node_id: str, replacements: dict[str, str]) -> str:
+    """Follow a supersession chain to the current effective node."""
+    current = node_id
+    seen: set[str] = set()
+    while current in replacements:
+        if current in seen:
+            raise RuntimeError(f"Supersession cycle detected at {current}")
+        seen.add(current)
+        current = replacements[current]
+    return current
+
+
 def compute_frontier(db: Any, focus_id: str | None = None) -> dict[str, Any]:
     nodes = all_nodes(db)
     by_id = {node_key(node["id"]): node for node in nodes}
     dependencies = list(db.select("depends_on") or [])
+    replacements = supersession_map(db)
     scope_ids = contained_scope(db, focus_id) if focus_id is not None else None
 
     outgoing: dict[str, list[dict[str, Any]]] = {}
@@ -221,7 +241,7 @@ def compute_frontier(db: Any, focus_id: str | None = None) -> dict[str, Any]:
     inapplicable: list[dict[str, Any]] = []
 
     for node in nodes:
-        if node.get("kind") != "decision" or node.get("state") != "open":
+        if node.get("kind") != "decision" or node.get("state") not in DECISION_ACTIONABLE_STATES:
             continue
         if scope_ids is not None and node_key(node["id"]) not in scope_ids:
             continue
@@ -229,9 +249,11 @@ def compute_frontier(db: Any, focus_id: str | None = None) -> dict[str, Any]:
         reasons: list[str] = []
         applicable = True
         for edge in outgoing.get(node_key(node["id"]), []):
-            prerequisite = by_id.get(node_key(edge["out"]))
+            original_id = node_key(edge["out"])
+            current_id = resolve_current_id(original_id, replacements)
+            prerequisite = by_id.get(current_id)
             if not prerequisite:
-                reasons.append(f"missing prerequisite {edge['out']}")
+                reasons.append(f"missing prerequisite {current_id}")
                 continue
 
             if prerequisite.get("state") not in DECISION_READY_STATES:
@@ -244,6 +266,7 @@ def compute_frontier(db: Any, focus_id: str | None = None) -> dict[str, Any]:
 
         summary = {
             "id": node["id"],
+            "state": node.get("state"),
             "subject": node.get("subject"),
             "reasons": reasons,
         }
@@ -256,7 +279,8 @@ def compute_frontier(db: Any, focus_id: str | None = None) -> dict[str, Any]:
 
     result = {"frontier": ready, "blocked": blocked, "inapplicable": inapplicable}
     if focus_id is not None:
-        result = {"focus": get_node(db, focus_id)["id"], **result}
+        focus = get_node(db, focus_id)
+        result = {"focus": focus["id"], **result}
     return result
 
 
@@ -266,18 +290,93 @@ def settle_decision(db: Any, node_id: str, value: Any) -> Any:
         raise ValueError(f"No node {node_id!r}")
     if node.get("kind") != "decision":
         raise ValueError(f"{node_id!r} is {node.get('kind')!r}, not a decision")
+    if node.get("state") == "superseded":
+        raise ValueError(f"{node_id!r} is superseded; settle its current replacement instead")
     return db.query(
         "UPDATE $node MERGE { state: 'settled', value: $value, updated_at: time::now() };",
         {"node": rid(node_id), "value": value},
     )
 
 
-def promote_idea(db: Any, node_id: str, parent_id: str | None = None) -> dict[str, Any]:
-    """Promote a parked future-goal idea into active user intent.
+def revise_decision(
+    db: Any,
+    old_id: str,
+    new_id: str,
+    value: Any,
+    *,
+    subject: str | None = None,
+) -> dict[str, Any]:
+    """Replace a decision without overwriting history.
 
-    This deliberately implements only idea -> intent for the first evolution fixture.
-    Other promotion targets should be added only when a real use case requires them.
+    Settled direct decision dependents are marked needs_review. Existing dependency
+    edges continue to reference the historical decision; frontier evaluation follows
+    supersedes edges to the current replacement.
     """
+    old = get_node(db, old_id)
+    if not old:
+        raise ValueError(f"No node {old_id!r}")
+    if old.get("kind") != "decision":
+        raise ValueError(f"{old_id!r} is {old.get('kind')!r}, not a decision")
+    if old.get("state") == "superseded":
+        raise ValueError(f"{old_id!r} is already superseded; revise the current replacement")
+    if get_node(db, new_id):
+        raise ValueError(f"Replacement node {new_id!r} already exists")
+
+    replacements = supersession_map(db)
+    old_key = node_key(old["id"])
+    if old_key in replacements:
+        raise ValueError(f"{old_id!r} already has a replacement")
+
+    create_node(
+        db,
+        new_id,
+        {
+            "kind": "decision",
+            "state": "settled",
+            "authority": "user",
+            "subject": subject or old.get("subject") or old_id,
+            "detail": old.get("detail"),
+            "value": value,
+            "source_note": f"Revision of {old['id']}",
+            "tags": old.get("tags", []),
+        },
+    )
+
+    for edge in list(db.select("contains") or []):
+        if node_key(edge["out"]) == old_key:
+            relate(db, node_key(edge["in"]), "contains", new_id)
+
+    relate(db, new_id, "supersedes", old_id, note="New authoritative decision revision.")
+    db.query(
+        "UPDATE $node MERGE { state: 'superseded', updated_at: time::now() };",
+        {"node": rid(old_id)},
+    )
+
+    affected: list[dict[str, Any]] = []
+    for edge in list(db.select("depends_on") or []):
+        if node_key(edge["out"]) != old_key:
+            continue
+        dependent = get_node(db, node_key(edge["in"]))
+        if not dependent or dependent.get("kind") != "decision":
+            continue
+        if dependent.get("state") in DECISION_REVIEWABLE_STATES:
+            db.query(
+                "UPDATE $node MERGE { state: 'needs_review', updated_at: time::now() };",
+                {"node": dependent["id"]},
+            )
+            refreshed = get_node(db, node_key(dependent["id"]))
+            if refreshed:
+                affected.append(refreshed)
+
+    new = get_node(db, new_id)
+    old_after = get_node(db, old_id)
+    if new is None or old_after is None:
+        raise RuntimeError("Revision records were not persisted")
+    return {"old": old_after, "new": new, "affected": affected}
+
+
+def promote_idea(db: Any, node_id: str, parent_id: str | None = None) -> dict[str, Any]:
+    """Promote a parked future-goal idea into active user intent."""
     node = get_node(db, node_id)
     if not node:
         raise ValueError(f"No node {node_id!r}")
@@ -299,14 +398,12 @@ def promote_idea(db: Any, node_id: str, parent_id: str | None = None) -> dict[st
         relate(db, parent_id, "contains", node_id)
 
     promoted = get_node(db, node_id)
-    if promoted is None:  # pragma: no cover - defensive SDK/storage invariant
+    if promoted is None:
         raise RuntimeError(f"Promoted node {node_id!r} disappeared")
     return promoted
 
 
 def wipe(db: Any) -> None:
-    # db.query() executes immediately in the current Python SDK and returns results.
-    # Relation rows are deleted first to keep ENFORCED graph tables unsurprising.
     for table in sorted(RELATIONS):
         db.query(f"DELETE {table};")
     db.query("DELETE map_session;")
@@ -385,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init", help="Initialize .map/db and apply the schema")
     sub.add_parser("status", help="Show node/relation counts")
     sub.add_parser("list", help="List all graph nodes")
-    frontier = sub.add_parser("frontier", help="Show open, blocked, and conditionally inapplicable decisions")
+    frontier = sub.add_parser("frontier", help="Show actionable, blocked, and conditionally inapplicable decisions")
     frontier.add_argument("--focus", help="Limit candidate decisions to this node and its contained descendants")
     sub.add_parser("ideas", help="List parked ideas")
     sub.add_parser("seed-chores", help="Reset state and seed the recurring-chore regression fixture")
@@ -396,6 +493,12 @@ def build_parser() -> argparse.ArgumentParser:
     settle = sub.add_parser("settle", help="Settle a decision with a value")
     settle.add_argument("id")
     settle.add_argument("value", help="JSON scalar/object/array, or plain text")
+
+    revise = sub.add_parser("revise", help="Replace a decision while preserving its historical record")
+    revise.add_argument("old_id")
+    revise.add_argument("new_id")
+    revise.add_argument("value", help="New JSON scalar/object/array, or plain text")
+    revise.add_argument("--subject", help="Optional replacement subject text")
 
     promote = sub.add_parser("promote", help="Promote a parked idea into active user intent")
     promote.add_argument("id")
@@ -451,6 +554,10 @@ def main(argv: list[str] | None = None) -> int:
                 value = parse_scalar(args.value)
                 settle_decision(db, args.id, value)
                 emit({"ok": True, "settled": args.id, "value": value, **compute_frontier(db)})
+            elif args.command == "revise":
+                value = parse_scalar(args.value)
+                result = revise_decision(db, args.old_id, args.new_id, value, subject=args.subject)
+                emit({"ok": True, "revision": result, **compute_frontier(db)})
             elif args.command == "promote":
                 promoted = promote_idea(db, args.id, args.parent)
                 emit({"ok": True, "promoted": args.id, "node": promoted, **compute_frontier(db)})
@@ -470,7 +577,7 @@ def main(argv: list[str] | None = None) -> int:
                 if condition is not None and args.relation != "depends_on":
                     raise ValueError("--condition is only supported for depends_on")
                 emit(relate(db, args.source, args.relation, args.target, note=args.note, condition=condition))
-            else:  # pragma: no cover
+            else:
                 raise AssertionError(args.command)
 
         command_with_db(root, run)
