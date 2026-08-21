@@ -7,17 +7,15 @@ description: Build, refine, resume, or query a durable local graph of user inten
 
 Map is persistent external memory for structured intent. The `.map/` database is authoritative; this skill is the guided reasoning/editor workflow over it.
 
-This skill is installed at user scope under `~/.agents/skills/map`. Its Python/SurrealDB runtime is deliberately separate from the agent harness environment.
-
-**Never assume `map-state` is on the harness PATH.** For every CLI operation in this skill, invoke the installed launcher:
+The installer renders the Map CLI for this installation scope into the command below. For every Map state operation, invoke:
 
 ```bash
-python "$HOME/.agents/skills/map/map_exec.py" <map-state arguments...>
+{{JL_MAP_CLI}} <map-state arguments...>
 ```
 
-Examples below use `map-state ...` as compact notation only. Translate them through that launcher when actually executing commands.
+Examples below use `map-state ...` as compact notation only. Translate them through the rendered command above when actually executing commands.
 
-Never read or edit SurrealKV files directly.
+Never assume `map-state` is globally on PATH. Never read or edit SurrealKV files directly.
 
 Do not spawn subagents by default. Keep orchestration in the parent until a concrete evaluation proves a separate semantic transaction is worth agentizing.
 
@@ -30,7 +28,7 @@ Do not spawn subagents by default. Keep orchestration in the parent until a conc
 - Facts are the agent's job when they can be established from available evidence; decisions are the user's job when choice materially affects intent.
 - External tools such as Beads, Jira, PRDs, itineraries, or Markdown exports are consumers of Map, not Map responsibilities.
 - Do not ask the user to manufacture acceptance criteria for you.
-- Do not use arbitrary SurrealQL or bypass the installed Map launcher/CLI.
+- Do not use arbitrary SurrealQL or bypass the installed Map CLI.
 
 ## Invocation modes
 
