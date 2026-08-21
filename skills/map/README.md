@@ -4,35 +4,53 @@ Early prototype of `/map`, a durable, queryable intent graph for agents.
 
 The database is authoritative. `/map` and ordinary agents query it through a CLI rather than reading storage files directly. Authoritative graph state and temporary workflow/session continuity are deliberately separate.
 
-## Install the actual agent skill
+## Install with `jl-skill`
 
-Keeping `SKILL.md` inside this repository is source control only. It is not automatically discoverable by Codex or another agent harness from `skills/map/`.
+Map is packaged for the generic `jl-skill` installer. The requested scope controls where the skill, harness integration, runtime, and project state are provisioned.
 
-Map installs at user scope under the shared Agent Skills path:
+Examples:
 
-```text
-~/.agents/skills/map/
+```bash
+jl-skill map --scope user
+jl-skill map --scope cwd
+jl-skill map --scope "C:\Programming\my-project"
+
+jl-skill map --scope cwd --agent codex
+jl-skill map --scope cwd --agent codex --agent claude
 ```
+
+If `--agent` is omitted, `jl-skill` detects supported harnesses and selects all detected ones. Detection does not alter scope. For example, `--scope cwd` installs only at current-project scope even when Codex or Claude were detected from user-level application/configuration paths.
+
+Current first adapters:
+
+- Codex: project skill resources under `.agents/skills`, project instructions in `AGENTS.md`.
+- Claude Code: project skill resources under `.claude/skills`, project instructions in `CLAUDE.md`.
+
+For project/path scope, the current Map Python runtime and package files are also provisioned below the target's `.jl-skill/` directory. Map state lives below the target's `.map/` directory. User-level writes for a project-scoped install are limited to `jl-skill` bookkeeping/receipts needed to find and update the installation later.
+
+`skills/map/install.py` and `map_exec.py` were development bootstrap experiments and are no longer the installation contract.
+
+## Build the installer during development
 
 From the repository root:
 
 ```bash
-python skills/map/install.py
+go build -o jl-skill.exe .
 ```
 
-The installer creates `~/.agents/skills/map` as a directory link/junction back to this repository's `skills/map` directory, so a normal `git pull` updates the installed skill immediately. It deliberately does not create a duplicate custom copy under `~/.codex/skills`.
-
-It also creates a dedicated Map runtime outside the repository (`%LOCALAPPDATA%/jl-map/venv` on Windows, the XDG/local-share equivalent elsewhere), installs the Python prototype there, and verifies both skill discovery files and the runtime executable.
-
-The installed skill invokes Map through:
+Then, from a disposable project directory:
 
 ```bash
-python "$HOME/.agents/skills/map/map_exec.py" ...
+/path/to/jl-skill.exe map --scope cwd
 ```
 
-so the harness does not need an activated Conda/venv or a globally visible `map-state` executable.
+The current Map runtime still requires Python 3.11+ on the target machine. `jl-skill` installs Map's Python dependency into a scope-local runtime directory rather than modifying the harness's Python environment.
 
-Restart/reload a harness after first install if it caches skill discovery.
+## Package manifest
+
+`jl-skill.json` declares the Map package to the generic installer. It identifies the skill entry, runtime files/dependencies, ordinary-agent instruction fragment, and project initializer. Harness-specific filesystem placement belongs to `jl-skill` adapters rather than this manifest.
+
+`AGENTS.fragment.md` is installer-managed instruction content for ordinary agents. Adapters render the same package contribution into the appropriate instruction file for the selected harness/scope using deterministic managed blocks.
 
 ## Current milestone
 
@@ -48,18 +66,17 @@ Proven locally so far:
 - dependent decisions marked `needs_review` and re-evaluated against current revisions;
 - read-only `history`, `context`, `related`, `validate`, `search`, and `explain` queries;
 - current-context queries exclude superseded history while history remains queryable;
-- validation of the current regression fixture with zero errors/warnings;
 - durable session setup/confirmation/frontier checkpoints across fresh CLI processes;
 - raw-answer recovery before authoritative mutation;
 - applied-answer recovery before session finalization;
 - atomic single-decision settlement plus session marker;
 - atomic multi-decision settlement batches plus one session marker, preserving JSON value types.
 
-A first functional `SKILL.md` now exists. It deliberately uses the proven parent-agent + CLI workflow without adding a child-agent fleet. The next milestone is end-to-end conversational evaluation of that skill.
+A first functional `SKILL.md` exists and uses the proven parent-agent + CLI workflow without adding a child-agent fleet.
 
 Still intentionally incomplete: atomic pending-answer forms for revision/promotion and other structural mutations, transitive affected-descendant mutation, atomic initial baseline creation, general promotion/revision semantics beyond proven fixtures, and polished public packaging.
 
-## Prototype development install
+## Direct prototype development
 
 For direct CLI development from `skills/map/`:
 
@@ -67,7 +84,7 @@ For direct CLI development from `skills/map/`:
 pip install -e .
 ```
 
-This is **not** the agent-skill installation mechanism. It only exposes `map-state` inside the currently active Python environment.
+This is not the agent-skill installation mechanism. It only exposes `map-state` inside the currently active Python environment.
 
 Use a disposable working directory for prototype testing:
 
@@ -76,24 +93,7 @@ map-state init
 map-state seed-chores
 ```
 
-`seed-chores` is a development fixture only and is not intended as a production command.
-
-## Skill
-
-`SKILL.md` is the first executable conversational workflow for Map. It defines:
-
-- startup and unfinished-session recovery;
-- new-vs-existing scope resolution;
-- mandatory scope/setup confirmation;
-- `mvp|thorough` depth and `normal|adversarial` stance;
-- material-question discovery policy;
-- exact frontier checkpointing before questions;
-- raw-answer persistence before interpretation/mutation;
-- atomic settlement batches;
-- read-only query behavior;
-- conservative failure handling when a needed mutation does not yet have a safe atomic primitive.
-
-The skill does not spawn subagents by default. Additional agents should be introduced only when a concrete evaluation proves that an independent semantic transaction improves correctness enough to justify the orchestration cost.
+`seed-chores` is a development fixture only.
 
 ## Read/query surface
 
@@ -108,7 +108,7 @@ map-state search <text>
 map-state explain <node>
 ```
 
-`history` reconstructs the full supersession lineage. `context` returns compact current authoritative state for a branch. `related` exposes literal direct graph edges. `validate` checks structural invariants without repair. `search` performs deterministic lexical retrieval and excludes superseded history unless `--include-history` is supplied. `explain` gathers graph-supported lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations without inventing rationale that was never stored.
+`history` reconstructs supersession lineage. `context` returns compact current authoritative state for a branch. `related` exposes literal direct graph edges. `validate` checks structural invariants without repair. `search` performs deterministic lexical retrieval and excludes superseded history unless `--include-history` is supplied. `explain` gathers graph-supported lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations without inventing rationale that was never stored.
 
 ## Durable workflow session prototype
 
@@ -135,22 +135,6 @@ map-state session apply-settles '{"late-anchor":"preserve-original","local-persi
 
 Both use the same transaction-safe batch engine. Every target must be actionable and must have appeared in the exact presented frontier for the pending answer.
 
-A pending raw answer always takes priority over asking a new question. The old manual `session applied` path is rejected when a pending graph operation exists, preventing the unsafe split between graph mutation and application marker.
-
-Other session controls:
-
-```bash
-map-state session status
-map-state session confirm
-map-state session checkpoint <ids...>
-map-state session answer "<raw answer>"
-map-state session resume
-map-state session advance --phase discovery
-map-state session pause
-map-state session abandon
-map-state session finish
-```
-
 ## Prototype invariants
 
 - `.map/db` is authoritative structured state.
@@ -165,4 +149,4 @@ map-state session finish
 - Pending-answer authoritative mutations must not use a split mutation/application-marker sequence.
 - External execution systems such as Beads are consumers of Map, not Map responsibilities.
 
-The larger design/history and integration logs live in the separate private `persist` repository.
+The larger design/history and installer specifications live in the separate private `persist` repository.
