@@ -4,6 +4,36 @@ Early prototype of `/map`, a durable, queryable intent graph for agents.
 
 The database is authoritative. `/map` and ordinary agents query it through a CLI rather than reading storage files directly. Authoritative graph state and temporary workflow/session continuity are deliberately separate.
 
+## Install the actual agent skill
+
+Keeping `SKILL.md` inside this repository is source control only. It is not automatically discoverable by Codex or another agent harness from `skills/map/`.
+
+Map installs at user scope under the shared Agent Skills path:
+
+```text
+~/.agents/skills/map/
+```
+
+From the repository root:
+
+```bash
+python skills/map/install.py
+```
+
+The installer creates `~/.agents/skills/map` as a directory link/junction back to this repository's `skills/map` directory, so a normal `git pull` updates the installed skill immediately. It deliberately does not create a duplicate custom copy under `~/.codex/skills`.
+
+It also creates a dedicated Map runtime outside the repository (`%LOCALAPPDATA%/jl-map/venv` on Windows, the XDG/local-share equivalent elsewhere), installs the Python prototype there, and verifies both skill discovery files and the runtime executable.
+
+The installed skill invokes Map through:
+
+```bash
+python "$HOME/.agents/skills/map/map_exec.py" ...
+```
+
+so the harness does not need an activated Conda/venv or a globally visible `map-state` executable.
+
+Restart/reload a harness after first install if it caches skill discovery.
+
 ## Current milestone
 
 The Python prototype uses the SurrealDB SDK in embedded `surrealkv://` mode. No SurrealDB server or daemon is required; state persists under `<working-root>/.map/db/`.
@@ -27,17 +57,17 @@ Proven locally so far:
 
 A first functional `SKILL.md` now exists. It deliberately uses the proven parent-agent + CLI workflow without adding a child-agent fleet. The next milestone is end-to-end conversational evaluation of that skill.
 
-Still intentionally incomplete: atomic pending-answer forms for revision/promotion and other structural mutations, transitive affected-descendant mutation, atomic initial baseline creation, general promotion/revision semantics beyond proven fixtures, and public packaging.
+Still intentionally incomplete: atomic pending-answer forms for revision/promotion and other structural mutations, transitive affected-descendant mutation, atomic initial baseline creation, general promotion/revision semantics beyond proven fixtures, and polished public packaging.
 
-## Install
+## Prototype development install
 
-From `skills/map/`:
+For direct CLI development from `skills/map/`:
 
 ```bash
 pip install -e .
 ```
 
-Rerun that after pulling a revision that changes `pyproject.toml`.
+This is **not** the agent-skill installation mechanism. It only exposes `map-state` inside the currently active Python environment.
 
 Use a disposable working directory for prototype testing:
 
