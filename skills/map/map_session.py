@@ -143,8 +143,8 @@ def confirm_session(db: Any) -> dict[str, Any]:
     if session.get("pending_user_answer") is not None:
         raise ValueError("Cannot confirm setup while a user answer is pending recovery")
     db.query(
-        "UPDATE $session MERGE { setup_confirmed: true, status: 'active', phase: 'confirmed', updated_at: time::now() };",
-        {"session": SESSION_ID},
+        "UPDATE $session_id MERGE { setup_confirmed: true, status: 'active', phase: 'confirmed', updated_at: time::now() };",
+        {"session_id": SESSION_ID},
     )
     return session_summary(db, require_session(db))
 
@@ -180,8 +180,8 @@ def checkpoint_session(db: Any, *, phase: str, frontier: list[str]) -> dict[str,
         requested.append(map_state.rid(node_id))
 
     db.query(
-        "UPDATE $session MERGE { status: 'active', phase: $phase, presented_frontier: $frontier, updated_at: time::now() };",
-        {"session": SESSION_ID, "phase": phase, "frontier": requested},
+        "UPDATE $session_id MERGE { status: 'active', phase: $phase, presented_frontier: $frontier, updated_at: time::now() };",
+        {"session_id": SESSION_ID, "phase": phase, "frontier": requested},
     )
     return session_summary(db, require_session(db))
 
@@ -196,8 +196,8 @@ def persist_answer(db: Any, *, raw_answer: str, operation: str | None) -> dict[s
         raise ValueError("No presented frontier is awaiting an answer")
 
     db.query(
-        "UPDATE $session MERGE { phase: 'answer_received', pending_user_answer: $answer, pending_operation: $operation, pending_operation_applied: false, updated_at: time::now() };",
-        {"session": SESSION_ID, "answer": raw_answer, "operation": operation},
+        "UPDATE $session_id MERGE { phase: 'answer_received', pending_user_answer: $answer, pending_operation: $operation, pending_operation_applied: false, updated_at: time::now() };",
+        {"session_id": SESSION_ID, "answer": raw_answer, "operation": operation},
     )
     return session_summary(db, require_session(db))
 
@@ -207,8 +207,8 @@ def mark_applied(db: Any) -> dict[str, Any]:
     if session.get("pending_user_answer") is None:
         raise ValueError("No pending user answer exists")
     db.query(
-        "UPDATE $session MERGE { phase: 'answer_applied', pending_operation_applied: true, updated_at: time::now() };",
-        {"session": SESSION_ID},
+        "UPDATE $session_id MERGE { phase: 'answer_applied', pending_operation_applied: true, updated_at: time::now() };",
+        {"session_id": SESSION_ID},
     )
     return session_summary(db, require_session(db))
 
@@ -221,8 +221,8 @@ def advance_session(db: Any, *, phase: str, no_mutation: bool) -> dict[str, Any]
         raise ValueError("Pending answer has not been marked applied; use 'session applied' after graph mutation or --no-mutation")
 
     db.query(
-        "UPDATE $session MERGE { phase: $phase, presented_frontier: [], pending_user_answer: NONE, pending_operation: NONE, pending_operation_applied: false, updated_at: time::now() };",
-        {"session": SESSION_ID, "phase": phase},
+        "UPDATE $session_id MERGE { phase: $phase, presented_frontier: [], pending_user_answer: NONE, pending_operation: NONE, pending_operation_applied: false, updated_at: time::now() };",
+        {"session_id": SESSION_ID, "phase": phase},
     )
     return session_summary(db, require_session(db))
 
@@ -233,18 +233,18 @@ def resume_session(db: Any) -> dict[str, Any]:
         raise ValueError("Current session was abandoned; start a new session")
     if session.get("status") == "paused":
         db.query(
-            "UPDATE $session MERGE { status: 'active', updated_at: time::now() };",
-            {"session": SESSION_ID},
+            "UPDATE $session_id MERGE { status: 'active', updated_at: time::now() };",
+            {"session_id": SESSION_ID},
         )
         session = require_session(db)
     return {"resume_action": resume_action(session), "session": session_summary(db, session)}
 
 
 def set_status(db: Any, status: str) -> dict[str, Any]:
-    session = require_session(db)
+    require_session(db)
     db.query(
-        "UPDATE $session MERGE { status: $status, updated_at: time::now() };",
-        {"session": SESSION_ID, "status": status},
+        "UPDATE $session_id MERGE { status: $status, updated_at: time::now() };",
+        {"session_id": SESSION_ID, "status": status},
     )
     return session_summary(db, require_session(db))
 
