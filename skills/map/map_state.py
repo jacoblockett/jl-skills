@@ -240,6 +240,44 @@ def settle_decision(db: Any, node_id: str, value: Any) -> Any:
     )
 
 
+def promote_idea(db: Any, node_id: str, parent_id: str | None = None) -> dict[str, Any]:
+    """Promote a parked future-goal idea into active user intent.
+
+    This deliberately implements only idea -> intent for the first evolution fixture.
+    Other promotion targets should be added only when a real use case requires them.
+    """
+    node = get_node(db, node_id)
+    if not node:
+        raise ValueError(f"No node {node_id!r}")
+    if node.get("kind") != "idea" or node.get("state") != "parked":
+        raise ValueError(f"{node_id!r} must be a parked idea before it can be promoted")
+
+    if parent_id is not None:
+        parent = get_node(db, parent_id)
+        if not parent:
+            raise ValueError(f"No parent node {parent_id!r}")
+        if parent.get("kind") != "intent":
+            raise ValueError(f"Parent {parent_id!r} is {parent.get('kind')!r}, not an intent")
+
+    db.query(
+        "UPDATE $node MERGE { kind: 'intent', state: 'active', authority: 'user', updated_at: time::now() };",
+        {"node": rid(node_id)},
+    )
+    if parent_id is not None:
+        relate(
+            db,
+            parent_id,
+            "contains",
+            node_id,
+            note="Promoted from a parked idea into active user intent.",
+        )
+
+    promoted = get_node(db, node_id)
+    if promoted is None:  # pragma: no cover - defensive SDK/storage invariant
+        raise RuntimeError(f"Promoted node {node_id!r} disappeared")
+    return promoted
+
+
 def wipe(db: Any) -> None:
     # db.query() executes immediately in the current Python SDK and returns results.
     # Relation rows are deleted first to keep ENFORCED graph tables unsurprising.
@@ -332,6 +370,10 @@ def build_parser() -> argparse.ArgumentParser:
     settle.add_argument("id")
     settle.add_argument("value", help="JSON scalar/object/array, or plain text")
 
+    promote = sub.add_parser("promote", help="Promote a parked idea into active user intent")
+    promote.add_argument("id")
+    promote.add_argument("--parent", help="Existing intent that should contain the promoted intent")
+
     add = sub.add_parser("add-node", help="Create a graph node")
     add.add_argument("id")
     add.add_argument("kind", choices=["intent", "decision", "constraint", "criterion", "idea", "fact"])
@@ -381,6 +423,9 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "settle":
                 settle_decision(db, args.id, parse_scalar(args.value))
                 emit({"ok": True, "settled": args.id, "value": parse_scalar(args.value), **compute_frontier(db)})
+            elif args.command == "promote":
+                promoted = promote_idea(db, args.id, args.parent)
+                emit({"ok": True, "promoted": args.id, "node": promoted, **compute_frontier(db)})
             elif args.command == "add-node":
                 value = parse_scalar(args.value) if args.value is not None else None
                 result = create_node(db, args.id, {
