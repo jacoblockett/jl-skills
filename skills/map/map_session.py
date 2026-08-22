@@ -1,8 +1,8 @@
 """Durable workflow/session state for the /map prototype.
 
-Session records are deliberately separate from authoritative graph nodes. This module
-models confirmation, exact frontier checkpoints, raw-answer persistence, and recovery
-priority without attempting to make the conversational /map skill itself yet.
+Session records are deliberately separate from authoritative graph nodes. The public
+session command grammar is intentionally unchanged for now; only the underlying
+node-state semantics use the cleaned `decided` vocabulary.
 """
 
 from __future__ import annotations
@@ -85,7 +85,6 @@ def resume_action(session: dict[str, Any]) -> str:
     answer = session.get("pending_user_answer")
     applied = session.get("pending_operation_applied", False)
     operation = session.get("pending_operation")
-
     if answer is not None:
         if applied:
             return "finalize_applied_answer_before_new_questions"
@@ -115,8 +114,7 @@ def start_session(
         db.delete(SESSION_ID)
 
     for focus_id in focus:
-        node = map_state.get_node(db, focus_id)
-        if not node:
+        if not map_state.get_node(db, focus_id):
             raise ValueError(f"No focus node {focus_id!r}")
 
     db.create(SESSION_ID, {
@@ -133,8 +131,7 @@ def start_session(
         "pending_operation": None,
         "pending_operation_applied": False,
     })
-    session = require_session(db)
-    return session_summary(db, session)
+    return session_summary(db, require_session(db))
 
 
 def confirm_session(db: Any) -> dict[str, Any]:
@@ -154,7 +151,6 @@ def eligible_frontier_ids(db: Any, session: dict[str, Any]) -> set[str]:
     focus_records = session.get("focus_nodes", []) or []
     if not focus_records:
         return {map_state.node_key(item["id"]) for item in map_state.compute_frontier(db)["frontier"]}
-
     eligible: set[str] = set()
     for focus in focus_records:
         result = map_state.compute_frontier(db, str(focus))
@@ -195,7 +191,6 @@ def persist_answer(db: Any, *, raw_answer: str, operation: str | None) -> dict[s
         raise ValueError("A user answer is already pending; recover it before accepting another")
     if not session.get("presented_frontier"):
         raise ValueError("No presented frontier is awaiting an answer")
-
     db.query(
         "UPDATE $session_id MERGE { phase: 'answer_received', pending_user_answer: $answer, pending_operation: $operation, pending_operation_applied: false, updated_at: time::now() };",
         {"session_id": SESSION_ID, "answer": raw_answer, "operation": operation},
@@ -221,11 +216,9 @@ def _validate_settlement_targets(
 ) -> list[tuple[str, Any, dict[str, Any]]]:
     if not settlements:
         raise ValueError("At least one settlement is required")
-
     presented = {map_state.node_key(item) for item in session.get("presented_frontier", []) or []}
     seen: set[str] = set()
     validated: list[tuple[str, Any, dict[str, Any]]] = []
-
     for node_id, value in settlements:
         node = map_state.get_node(db, node_id)
         if not node:
@@ -244,12 +237,11 @@ def _validate_settlement_targets(
         if key not in presented:
             raise ValueError(f"{node_id!r} was not in the exact presented frontier for this pending answer")
         validated.append((node_id, value, node))
-
     return validated
 
 
-def atomic_settle_batch(db: Any, *, settlements: list[tuple[str, Any]]) -> dict[str, Any]:
-    """Settle several presented decisions and mark one pending answer applied atomically."""
+def atomic_decide_batch(db: Any, *, settlements: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Decide several presented decisions and mark one pending answer applied atomically."""
     session = _pending_apply_session(db)
     validated = _validate_settlement_targets(db, session, settlements)
 
@@ -259,7 +251,7 @@ def atomic_settle_batch(db: Any, *, settlements: list[tuple[str, Any]]) -> dict[
         node_param = f"node_{index}"
         value_param = f"value_{index}"
         statements.append(
-            f"UPDATE ${node_param} MERGE {{ state: 'settled', value: ${value_param}, updated_at: time::now() }};"
+            f"UPDATE ${node_param} MERGE {{ state: 'decided', value: ${value_param}, authority: 'user', updated_at: time::now() }};"
         )
         params[node_param] = map_state.rid(node_id)
         params[value_param] = value
@@ -272,20 +264,19 @@ def atomic_settle_batch(db: Any, *, settlements: list[tuple[str, Any]]) -> dict[
         };""",
         "COMMIT TRANSACTION;",
     ])
-
     raw = db.query_raw("\n".join(statements), params)
     map_state.check_raw_response(raw)
 
     nodes_after: list[dict[str, Any]] = []
     for node_id, value, _ in validated:
         node_after = map_state.get_node(db, node_id)
-        if not node_after or node_after.get("state") != "settled" or node_after.get("value") != value:
-            raise RuntimeError(f"Atomic batch settlement did not persist expected state for {node_id!r}")
+        if not node_after or node_after.get("state") != "decided" or node_after.get("value") != value:
+            raise RuntimeError(f"Atomic decision batch did not persist expected state for {node_id!r}")
         nodes_after.append(node_after)
 
     session_after = require_session(db)
     if not session_after.get("pending_operation_applied", False):
-        raise RuntimeError("Atomic batch settlement did not persist the session application marker")
+        raise RuntimeError("Atomic decision batch did not persist the session application marker")
 
     return {
         "ok": True,
@@ -296,9 +287,8 @@ def atomic_settle_batch(db: Any, *, settlements: list[tuple[str, Any]]) -> dict[
     }
 
 
-def atomic_settle_pending(db: Any, *, node_id: str, value: Any) -> dict[str, Any]:
-    """Compatibility wrapper for atomically settling one presented decision."""
-    result = atomic_settle_batch(db, settlements=[(node_id, value)])
+def atomic_decide_pending(db: Any, *, node_id: str, value: Any) -> dict[str, Any]:
+    result = atomic_decide_batch(db, settlements=[(node_id, value)])
     return {
         "ok": result["ok"],
         "atomic": result["atomic"],
@@ -338,7 +328,6 @@ def advance_session(db: Any, *, phase: str, no_mutation: bool) -> dict[str, Any]
         raise ValueError("No pending user answer exists to finalize")
     if not session.get("pending_operation_applied", False) and not no_mutation:
         raise ValueError("Pending answer has not been applied; use an atomic 'session apply-*' command or --no-mutation")
-
     db.query(
         "UPDATE $session_id MERGE { phase: $phase, presented_frontier: [], pending_user_answer: NONE, pending_operation: NONE, pending_operation_applied: false, updated_at: time::now() };",
         {"session_id": SESSION_ID, "phase": phase},
@@ -378,7 +367,7 @@ def finish_session(db: Any) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="map-state session", description="Durable /map workflow session state")
+    parser = argparse.ArgumentParser(prog="map session", description="Durable /map workflow session state")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Directory whose .map/ state should be used")
     sub = parser.add_subparsers(dest="session_command", required=True)
 
@@ -402,14 +391,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     apply_settle = sub.add_parser(
         "apply-settle",
-        help="Atomically settle one presented decision and mark its pending answer applied",
+        help="Atomically decide one presented decision and mark its pending answer applied",
     )
     apply_settle.add_argument("id")
     apply_settle.add_argument("value", help="JSON scalar/object/array, or plain text")
 
     apply_settles = sub.add_parser(
         "apply-settles",
-        help="Atomically settle several presented decisions from one pending answer",
+        help="Atomically decide several presented decisions from one pending answer",
     )
     apply_settles.add_argument(
         "settlements",
@@ -435,7 +424,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     root: Path = args.root
-
     try:
         def run(db: Any):
             command = args.session_command
@@ -458,9 +446,9 @@ def main(argv: list[str] | None = None) -> int:
             elif command == "answer":
                 map_state.emit(persist_answer(db, raw_answer=args.answer, operation=args.operation))
             elif command == "apply-settle":
-                map_state.emit(atomic_settle_pending(db, node_id=args.id, value=map_state.parse_scalar(args.value)))
+                map_state.emit(atomic_decide_pending(db, node_id=args.id, value=map_state.parse_scalar(args.value)))
             elif command == "apply-settles":
-                map_state.emit(atomic_settle_batch(db, settlements=parse_settlement_object(args.settlements)))
+                map_state.emit(atomic_decide_batch(db, settlements=parse_settlement_object(args.settlements)))
             elif command == "applied":
                 map_state.emit(mark_applied(db))
             elif command == "advance":
@@ -479,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
         map_state.command_with_db(root, run)
         return 0
     except Exception as exc:
-        print(f"map-state: {exc}", file=sys.stderr)
+        print(f"map: {exc}", file=sys.stderr)
         return 1
 
 
