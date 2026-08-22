@@ -1,152 +1,188 @@
 # Map
 
-Early prototype of `/map`, a durable, queryable intent graph for agents.
+Python prototype of `/map`, a durable, queryable graph of user intent for agents and humans.
 
-The database is authoritative. `/map` and ordinary agents query it through a CLI rather than reading storage files directly. Authoritative graph state and temporary workflow/session continuity are deliberately separate.
+The graph is authoritative. `/map` and ordinary agents interact with it through the Map CLI rather than reading SurrealKV files directly. Authoritative graph state and temporary workflow/session continuity are separate.
 
-## Install with `jl-skill`
+## Installation boundary
 
-Map is packaged for the generic `jl-skill` installer. The requested scope controls where the skill, harness integration, runtime, and project state are provisioned.
+Installing the Map skill makes the capability available. It does **not** create a Map database for the installation scope.
 
-Examples:
+A complete Map skill installation includes:
 
-```bash
-jl-skill map --scope user
-jl-skill map --scope cwd
-jl-skill map --scope "C:\Programming\my-project"
+- the harness-discoverable `SKILL.md`;
+- the Map runtime/tool used by that skill;
+- Map-specific harness agent/subagent helpers where applicable;
+- installer-managed ordinary-agent instructions (`AGENTS.md`, `CLAUDE.md`, or harness equivalent).
 
-jl-skill map --scope cwd --agent codex
-jl-skill map --scope cwd --agent codex --agent claude
+`.map/` state is created later, when Map is actually used against a working root.
+
+For a user-scope installation, the intended installer-owned runtime layout is:
+
+```text
+%LOCALAPPDATA%\JL-Skills\
+├─ registry.json
+└─ map\
+   └─ runtime\
+      └─ <semver>\
+         └─ ...Map runtime...
 ```
 
-If `--agent` is omitted, `jl-skill` detects supported harnesses and selects all detected ones. Detection does not alter scope. For example, `--scope cwd` installs only at current-project scope even when Codex or Claude were detected from user-level application/configuration paths.
+The installed skill receives the exact runtime path from `jl-skill`; the runtime does not need to sit next to `SKILL.md` or be globally on PATH.
 
-Current first adapters:
-
-- Codex: project skill resources under `.agents/skills`, project instructions in `AGENTS.md`.
-- Claude Code: project skill resources under `.claude/skills`, project instructions in `CLAUDE.md`.
-
-For project/path scope, the current Map Python runtime and package files are also provisioned below the target's `.jl-skill/` directory. Map state lives below the target's `.map/` directory. User-level writes for a project-scoped install are limited to `jl-skill` bookkeeping/receipts needed to find and update the installation later.
-
-`skills/map/install.py` and `map_exec.py` were development bootstrap experiments and are no longer the installation contract.
-
-## Build the installer during development
-
-From the repository root:
-
-```bash
-go build -o jl-skill.exe .
-```
-
-Then, from a disposable project directory:
-
-```bash
-/path/to/jl-skill.exe map --scope cwd
-```
-
-The current Map runtime still requires Python 3.11+ on the target machine. `jl-skill` installs Map's Python dependency into a scope-local runtime directory rather than modifying the harness's Python environment.
+The current prototype runtime is Python. Public-distribution packaging is intentionally deferred until the Python behavior and interface are settled.
 
 ## Package manifest
 
-`jl-skill.json` declares the Map package to the generic installer. It identifies the skill entry, runtime files/dependencies, ordinary-agent instruction fragment, and project initializer. Harness-specific filesystem placement belongs to `jl-skill` adapters rather than this manifest.
+`jl-skill.json` declares Map's skill entry, Python runtime files/dependency, runtime entrypoint, CLI token, and ordinary-agent instruction fragment.
 
-`AGENTS.fragment.md` is installer-managed instruction content for ordinary agents. Adapters render the same package contribution into the appropriate instruction file for the selected harness/scope using deterministic managed blocks.
+It intentionally does **not** declare an installer-time Map initializer or validator. Installing the skill must not create `.map/` state merely because the user chose an installation scope.
 
-## Current milestone
+Harness-specific filesystem placement belongs to `jl-skill` adapters rather than the Map manifest.
 
-The Python prototype uses the SurrealDB SDK in embedded `surrealkv://` mode. No SurrealDB server or daemon is required; state persists under `<working-root>/.map/db/`.
+## Current CLI
 
-Proven locally so far:
-
-- graph nodes for intents, decisions, constraints, criteria, ideas, and facts;
-- semantic relation tables and conditional dependencies;
-- dependency-aware global and focused frontiers;
-- parked idea promotion without fabricated downstream decisions;
-- non-destructive decision revision with multi-hop `supersedes` history;
-- dependent decisions marked `needs_review` and re-evaluated against current revisions;
-- read-only `history`, `context`, `related`, `validate`, `search`, and `explain` queries;
-- current-context queries exclude superseded history while history remains queryable;
-- durable session setup/confirmation/frontier checkpoints across fresh CLI processes;
-- raw-answer recovery before authoritative mutation;
-- applied-answer recovery before session finalization;
-- atomic single-decision settlement plus session marker;
-- atomic multi-decision settlement batches plus one session marker, preserving JSON value types.
-
-A first functional `SKILL.md` exists and uses the proven parent-agent + CLI workflow without adding a child-agent fleet.
-
-Still intentionally incomplete: atomic pending-answer forms for revision/promotion and other structural mutations, transitive affected-descendant mutation, atomic initial baseline creation, general promotion/revision semantics beyond proven fixtures, and polished public packaging.
-
-## Direct prototype development
-
-For direct CLI development from `skills/map/`:
+Direct prototype development from `skills/map/`:
 
 ```bash
 pip install -e .
 ```
 
-This is not the agent-skill installation mechanism. It only exposes `map-state` inside the currently active Python environment.
+This exposes:
 
-Use a disposable working directory for prototype testing:
-
-```bash
-map-state init
-map-state seed-chores
+```text
+map
 ```
 
-`seed-chores` is a development fixture only.
+The normal command surface is:
+
+```text
+map init
+map status
+map list
+map show <id>
+map questions [--focus <id>]
+map ideas
+map decide <id> <value>
+map revise <id> <value>
+map promote <id> [--parent <id>]
+map add <kind> <subject> [options]
+map relate <source> <relation> <target> [options]
+map history <id>
+map context <id>
+map related <id>
+map validate
+map search <query>
+map explain <id>
+map session ...
+```
+
+`questions` is the human-facing command for the decision frontier. The returned structure still distinguishes `frontier`, `blocked`, and `inapplicable` decisions.
+
+### Node creation
+
+Normal callers do not invent database record IDs:
+
+```bash
+map add intent "Build authentication"
+map add constraint "No cloud service"
+map add decision "What is the minimum password length?" --authority inferred
+map add idea "Support passkeys later"
+```
+
+Map generates a collision-safe record ID and returns it. `--id` remains available only as an explicit override for import/testing.
+
+Kinds have semantic initial states:
+
+```text
+intent      active
+decision    open
+constraint  active
+criterion   active
+idea        parked
+fact        active
+```
+
+State validity is constrained by kind. In particular, a decision is `open`, `decided`, `needs_review`, `inapplicable`, `invalidated`, or `superseded`. `satisfied` is not a decision state.
+
+Authority/provenance remains independent from kind/state. Direct CLI additions default to user provenance except parked ideas, which default to `none`; agents must specify `--authority inferred`, `external`, or `derived` when that is the actual provenance.
+
+### Decision changes
+
+```bash
+map decide <id> <value>
+```
+
+moves an actionable decision to `decided`. Calling `decide` again on an already-decided node is rejected so authoritative history cannot be silently overwritten.
+
+```bash
+map revise <id> <new-value>
+```
+
+creates a new generated decision record, marks the previous decision `superseded`, preserves the lineage, and marks directly affected decided dependents `needs_review`. `--new-id` is an explicit import/testing override rather than normal grammar.
 
 ## Read/query surface
 
-Ordinary-agent oriented, non-mutating queries:
-
 ```bash
-map-state history <node>
-map-state context <node>
-map-state related <node>
-map-state validate
-map-state search <text>
-map-state explain <node>
+map history <id>
+map context <id>
+map related <id>
+map validate
+map search <text>
+map explain <id>
 ```
 
-`history` reconstructs supersession lineage. `context` returns compact current authoritative state for a branch. `related` exposes literal direct graph edges. `validate` checks structural invariants without repair. `search` performs deterministic lexical retrieval and excludes superseded history unless `--include-history` is supplied. `explain` gathers graph-supported lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations without inventing rationale that was never stored.
+`history` reconstructs supersession lineage. `context` returns compact current authoritative state for a branch. `related` exposes literal direct graph edges. `validate` checks both graph structure and kind/state semantics without repair. `search` performs deterministic lexical retrieval and excludes superseded history unless `--include-history` is supplied. `explain` gathers graph-supported lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations without inventing rationale that was never stored.
 
 ## Durable workflow session prototype
 
-Session state lives in `map_session`, not the authoritative graph.
+Session state lives in `map_session`, not the authoritative graph. The session command names are intentionally unchanged pending a separate grammar review.
 
 Key ordering invariant:
 
 1. persist the exact presented frontier;
 2. persist the raw user answer;
-3. apply authoritative settlement mutations and the session marker atomically;
+3. atomically apply authoritative decision values and the session application marker;
 4. clear the pending answer and advance.
 
-Single settlement:
+Current commands include:
 
 ```bash
-map-state session apply-settle clear-backlog one
+map session start ...
+map session status
+map session confirm
+map session checkpoint ...
+map session answer ...
+map session apply-settle ...
+map session apply-settles ...
+map session applied
+map session advance ...
+map session resume
+map session pause
+map session abandon
+map session finish
 ```
 
-Batch settlement:
+The `apply-settle`/`apply-settles` names are legacy session grammar for now. Their underlying node-state result is `decided`, not `settled`.
 
-```bash
-map-state session apply-settles '{"late-anchor":"preserve-original","local-persistence":true}'
-```
+## Current milestone
 
-Both use the same transaction-safe batch engine. Every target must be actionable and must have appeared in the exact presented frontier for the pending answer.
+The prototype uses embedded SurrealDB/SurrealKV and persists graph state under `<working-root>/.map/db/`. No SurrealDB daemon is required.
 
-## Prototype invariants
+Implemented:
 
-- `.map/db` is authoritative structured state.
-- Session/checkpoint records are workflow state, not user intent.
-- No semantic graph mutation should occur through `/map` before scope/setup confirmation.
-- Parked ideas are queryable but do not enter the required decision frontier.
-- Focus limits candidate decisions, not outside prerequisites needed to evaluate them.
-- Historical decisions are preserved rather than overwritten.
-- Superseded prerequisites resolve to their current replacement for frontier/context evaluation.
-- A changed prerequisite must not leave dependent settled state silently trusted.
-- Read/query commands do not mutate authoritative graph state.
-- Pending-answer authoritative mutations must not use a split mutation/application-marker sequence.
-- External execution systems such as Beads are consumers of Map, not Map responsibilities.
+- intents, decisions, constraints, criteria, ideas, and facts;
+- semantic relations and conditional dependencies;
+- global and focused decision frontiers;
+- parked idea promotion;
+- non-destructive decision revision and supersession history;
+- dependent `needs_review` reopening;
+- read-only history/context/related/validate/search/explain queries;
+- durable setup/question/answer recovery;
+- atomic single- and multi-decision pending-answer application;
+- generated collision-safe node IDs;
+- kind-specific state validation and migration away from the old `settled` decision state.
 
-The larger design/history and installer specifications live in the separate private `persist` repository.
+Still intentionally incomplete inside a pending-answer cycle: revision/promotion and other structural mutations, transitive affected-descendant mutation, atomic initial baseline creation, and a crash-safe intent-satisfaction lifecycle mutation.
+
+`seed_chores()` remains an internal development fixture in `map_state.py` for prototype evaluation but is no longer part of the public CLI.
