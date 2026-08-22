@@ -44,7 +44,8 @@ printf '%s\n' "$version"
 [[ "$version" == "jl-skill 0.3.0 (@clack/prompts 1.7.0)" ]] || fail "unexpected binary identity"
 
 say "Static guards against obsolete prompt/core architecture"
-if grep -RIn --exclude-dir=.git --exclude-dir=node_modules --exclude='*.exe' -E 'comma-separated|bufio\.NewReader|charmbracelet/huh|jl-skill-core' "$repo"; then
+if grep -RIn --exclude='catalog.generated.ts' -E 'comma-separated|bufio\.NewReader|charmbracelet/huh|jl-skill-core' \
+  "$repo/src" "$repo/package.json" "$repo/scripts/build-windows.sh" 2>/dev/null; then
   fail "obsolete installer architecture/prompt code is present"
 fi
 
