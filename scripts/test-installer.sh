@@ -6,32 +6,31 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/jl-skill-test.XXXXXX")"
 project="$work/project"
 fake_home="$work/home"
 fake_home_win="$(cygpath -w "$fake_home")"
-bin="$work/jl-skill.exe"
+bin="$work/build/jl-skill.exe"
 
 cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
 
-mkdir -p "$project" "$fake_home"
+mkdir -p "$project" "$fake_home" "$work/build"
 
 say() { printf '\n==> %s\n' "$*"; }
 fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
 
-say "Building current jl-skill source"
-(
-  cd "$repo"
-  go build -buildvcs=false -o "$bin" .
-)
+say "Building standalone consumer jl-skill.exe"
+bash "$repo/scripts/build-windows.sh" "$work/build"
 
 version="$($bin --version)"
 printf '%s\n' "$version"
-[[ "$version" == "jl-skill 0.1.1-tui (keyboard wizard)" ]] || fail "unexpected binary identity; stale/non-TUI build suspected"
+[[ "$version" == "jl-skill 0.2.0 (@clack/prompts 1.7.0)" ]] || fail "unexpected consumer binary identity"
 
-say "Static guard: obsolete freeform installer prompt must not exist"
-if grep -RIn --exclude-dir=.git --exclude='*.exe' -E 'Skills to install.*comma|comma-separated|bufio\.NewReader' "$repo"/*.go "$repo"/tui.go "$repo"/installer.go 2>/dev/null; then
-  fail "obsolete freeform installer prompt/code is present"
+say "Static guards"
+if grep -RIn --include='*.go' --exclude-dir=.git -E 'Skills to install.*comma|comma-separated|bufio\.NewReader|charmbracelet/huh' "$repo" 2>/dev/null; then
+  fail "obsolete freeform/Huh installer UI code is present"
 fi
+grep -Fq "from '@clack/prompts'" "$repo/src/jl-skill.ts" || fail "consumer frontend is not using @clack/prompts"
+grep -Fq '"@clack/prompts": "1.7.0"' "$repo/package.json" || fail "@clack/prompts is not pinned to 1.7.0"
 
 say "Installing Map into an isolated project for Codex"
 USERPROFILE="$fake_home_win" HOME="$fake_home" "$bin" map --scope "$project" --agent codex
@@ -66,16 +65,17 @@ grep -Fq '"agent": "codex"' "$registry" || fail "Codex receipt missing"
 grep -Fq '"skill": "map"' "$registry" || fail "Map receipt missing"
 
 printf '\nPASS: automated installer regression succeeded.\n'
-printf '  build identity: %s\n' "$version"
-printf '  project scope:   %s\n' "$project"
-printf '  runtime:         isolated venv verified\n'
+printf '  consumer:        exact @clack/prompts frontend\n'
+printf '  build identity:  %s\n' "$version"
+printf '  runtime:         isolated Python venv verified\n'
 printf '  Map DB:          validate passed\n'
 printf '  idempotency:     managed block remains singular\n'
 printf '  scope isolation: no Claude project install\n'
 
-say "Opening the bare keyboard wizard in a fresh temporary directory"
-printf 'Expected: arrow-key list controls; Space toggles; Enter proceeds. Ctrl+C cancels.\n'
-printf 'This final visual check is intentionally interactive. Cancelling is fine.\n\n'
+say "Opening the actual Clack wizard in a fresh temporary directory"
+printf 'This is @clack/prompts, the same prompt package used by current Vite.\n'
+printf 'Expected controls: arrows navigate, Space selects, Enter confirms. Ctrl+C cancels.\n'
+printf 'Cancelling after visually checking it is fine.\n\n'
 (
   cd "$work"
   USERPROFILE="$fake_home_win" HOME="$fake_home" "$bin"
@@ -85,4 +85,4 @@ if [[ "$status" -ne 0 ]]; then
   printf '\nWizard exited with status %s (Ctrl+C/cancel is expected).\n' "$status"
 fi
 
-printf '\nInstaller test run complete. Temporary files will now be removed.\n'
+printf '\nInstaller test run complete. Temporary test project removed.\n'
