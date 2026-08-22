@@ -7,6 +7,7 @@
   ],
   "runtime_files": [
     "map_agent_query.py",
+    "map_cli.py",
     "map_entry.py",
     "map_query.py",
     "map_session.py",
@@ -17,7 +18,7 @@
   "runtime_dependencies": [
     "surrealdb"
   ],
-  "runtime_entrypoint": "map_entry:main",
+  "runtime_entrypoint": "map_cli:main",
   "runtime_cli": "map",
   "cli_token": "JL_MAP_CLI",
   "instruction_fragment": "AGENTS.fragment.md"
