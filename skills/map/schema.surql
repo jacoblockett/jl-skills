@@ -63,9 +63,11 @@ DEFINE FIELD IF NOT EXISTS created_at ON related_to TYPE datetime DEFAULT time::
 DEFINE TABLE IF NOT EXISTS map_session SCHEMAFULL TYPE NORMAL;
 DEFINE FIELD IF NOT EXISTS summary ON map_session TYPE string DEFAULT "";
 DEFINE FIELD IF NOT EXISTS exchange_depth ON map_session TYPE int DEFAULT 6 ASSERT $value >= 2;
-DEFINE FIELD IF NOT EXISTS exchange ON map_session TYPE array<object> DEFAULT [];
-DEFINE FIELD IF NOT EXISTS exchange.*.role ON map_session TYPE "user" | "assistant";
-DEFINE FIELD IF NOT EXISTS exchange.*.message ON map_session TYPE string;
+-- Remove the first recovery-capsule prototype's nested exchange schema. The
+-- runtime owns the tiny {role, message} shape; SurrealDB stores the raw objects.
+REMOVE FIELD IF EXISTS exchange.*.role ON map_session;
+REMOVE FIELD IF EXISTS exchange.*.message ON map_session;
+DEFINE FIELD OVERWRITE exchange ON map_session TYPE array<object> FLEXIBLE DEFAULT [];
 DEFINE FIELD IF NOT EXISTS pending ON map_session TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS created_at ON map_session TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_at ON map_session TYPE datetime DEFAULT time::now();
