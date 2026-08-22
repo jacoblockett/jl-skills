@@ -1,21 +1,29 @@
 -- /map prototype schema.
--- Keep this intentionally small. The ontology should grow only when fixtures prove
--- that a new type or relation is necessary.
+-- Keep the ontology deliberately small and enforce state semantics by node kind.
 
 DEFINE TABLE IF NOT EXISTS node SCHEMAFULL TYPE NORMAL;
-DEFINE FIELD IF NOT EXISTS kind ON node TYPE
+DEFINE FIELD OVERWRITE kind ON node TYPE
     "intent" | "decision" | "constraint" | "criterion" | "idea" | "fact";
-DEFINE FIELD IF NOT EXISTS state ON node TYPE
-    "active" | "open" | "settled" | "satisfied" | "parked" |
-    "inapplicable" | "superseded" | "dormant" | "abandoned" |
-    "needs_review" | "invalidated";
-DEFINE FIELD IF NOT EXISTS authority ON node TYPE
+
+-- Compatibility migration from the earlier prototype vocabulary. Broaden the
+-- field temporarily so existing prototype Maps can move away from `settled`.
+DEFINE FIELD OVERWRITE state ON node TYPE string;
+UPDATE node SET state = "decided" WHERE kind = "decision" AND state = "settled";
+UPDATE node SET state = "active" WHERE kind IN ["constraint", "criterion", "fact"] AND state = "settled";
+UPDATE node SET state = "satisfied" WHERE kind = "intent" AND state = "settled";
+
+DEFINE FIELD OVERWRITE state ON node TYPE string ASSERT
+    (kind = "intent" AND $value IN ["active", "satisfied", "dormant", "superseded", "abandoned"]) OR
+    (kind = "decision" AND $value IN ["open", "decided", "inapplicable", "superseded", "needs_review", "invalidated"]) OR
+    (kind = "constraint" AND $value IN ["active", "superseded", "abandoned"]) OR
+    (kind = "criterion" AND $value IN ["active", "satisfied", "superseded", "abandoned"]) OR
+    (kind = "idea" AND $value IN ["parked", "superseded", "abandoned"]) OR
+    (kind = "fact" AND $value IN ["active", "superseded", "invalidated"]);
+
+DEFINE FIELD OVERWRITE authority ON node TYPE
     "user" | "inferred" | "external" | "derived" | "none";
 DEFINE FIELD IF NOT EXISTS subject ON node TYPE string;
 DEFINE FIELD IF NOT EXISTS detail ON node TYPE option<string>;
--- `any` already accepts every SurrealDB value, including null/none-style absence.
--- SurrealQL does not accept `option<any>` because `any` is not valid as the inner
--- kind of an option type expression.
 DEFINE FIELD IF NOT EXISTS value ON node TYPE any;
 DEFINE FIELD IF NOT EXISTS source_note ON node TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS tags ON node TYPE array<string> DEFAULT [];
@@ -32,8 +40,6 @@ DEFINE FIELD IF NOT EXISTS created_at ON contains TYPE datetime DEFAULT time::no
 
 DEFINE TABLE IF NOT EXISTS depends_on SCHEMAFULL TYPE RELATION IN node OUT node ENFORCED;
 DEFINE FIELD IF NOT EXISTS note ON depends_on TYPE option<string>;
--- A deliberately opaque object for the prototype. The CLI, not arbitrary SurrealQL,
--- will own the supported condition vocabulary.
 DEFINE FIELD IF NOT EXISTS condition ON depends_on TYPE option<object> FLEXIBLE;
 DEFINE FIELD IF NOT EXISTS created_at ON depends_on TYPE datetime DEFAULT time::now();
 
@@ -53,7 +59,6 @@ DEFINE TABLE IF NOT EXISTS related_to SCHEMAFULL TYPE RELATION IN node OUT node 
 DEFINE FIELD IF NOT EXISTS note ON related_to TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS created_at ON related_to TYPE datetime DEFAULT time::now();
 
--- Workflow continuity lives beside, but not inside, the authoritative intent graph.
 DEFINE TABLE IF NOT EXISTS map_session SCHEMAFULL TYPE NORMAL;
 DEFINE FIELD IF NOT EXISTS status ON map_session TYPE "active" | "paused" | "complete" | "abandoned";
 DEFINE FIELD IF NOT EXISTS phase ON map_session TYPE string;
