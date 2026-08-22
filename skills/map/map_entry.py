@@ -141,15 +141,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def validated_graph(db: Any) -> dict[str, Any]:
-    result = map_query.validate_graph(db)
-    errors = set(result.get("errors", []))
-    errors.update(map_state.semantic_state_errors(map_state.all_nodes(db)))
-    result["errors"] = sorted(errors)
-    result["ok"] = not result["errors"]
-    return result
-
-
 def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
     command = command_name(args_list)
@@ -232,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "related":
                 map_state.emit(map_query.related_for(db, args.id))
             elif args.command == "validate":
-                map_state.emit(validated_graph(db))
+                map_state.emit(map_query.validate_graph(db))
             elif args.command == "search":
                 map_state.emit(map_agent_query.search_nodes(
                     db,
