@@ -16,7 +16,7 @@
   ],
   "runtime": "python",
   "runtime_dependencies": [
-    "surrealdb"
+    "surrealdb==2.0.0"
   ],
   "runtime_entrypoint": "map_cli:main",
   "runtime_cli": "map",

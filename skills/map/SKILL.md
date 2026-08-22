@@ -17,6 +17,7 @@ Examples use `map ...` as compact notation. Never assume `map` is globally on PA
 - Never silently overwrite user intent; preserve revision history.
 - Park non-binding possibilities as ideas.
 - Facts are the agent's job when evidence can establish them; material choices are the user's job.
+- Give external facts `--authority external` and a concise `--source-note` identifying their provenance.
 - Do not ask the user to manufacture acceptance criteria.
 - Do not spawn subagents by default.
 
@@ -90,9 +91,9 @@ map relate <idea-id> related_to <intent-id>
 map add decision "<decision question>" --authority inferred
 map relate <intent-id> contains <decision-id>
 ```
-Record only durable constraints actually established by the user. Keep non-binding possibilities parked. Create decisions only for material ambiguity. Use `depends_on` only for real prerequisites.
+Record only durable constraints actually established by the user. Keep non-binding possibilities parked. Create decisions only for material ambiguity. Use `depends_on` only for real prerequisites. When research establishes a durable fact, use `map add fact "<fact>" --authority external --source-note "<source>"` and relate it only where materially relevant.
 
-Run `map validate` after writes. If the user's preceding response had been pending, clear it only after required writes and validation succeed: `map session pending --clear`.
+Run `map validate` after writes. If the user's preceding response had been pending, clear it only after required writes and validation succeed: `map session pending --clear`. A crash during several ordinary writes does not require a special batch API: pending recovery state remains until the graph is reconciled and validated.
 
 ## Discovery and questions
 The frontier is not a pre-enumerated questionnaire. A question is material when its answer could change correctness, usability, safety, performance, coherence, feasibility, or satisfaction of the stated outcome.
@@ -126,6 +127,8 @@ map add ...
 map relate ...
 ```
 Use real JSON types when applicable. Inspect/validate enough to establish that the intended consequence is durable. Only then clear resolved pending work with `map session pending --clear`. If no graph mutation was required, establish that explicitly before clearing it.
+
+`map revise` reopens directly dependent decided decisions as `needs_review`. Do not manually reopen deeper descendants merely because an ancestor changed; they become reviewable only if their own direct prerequisite is subsequently changed.
 
 Before the next assistant response, append that exact response to `exchange`; set `pending` first if it asks unresolved questions.
 

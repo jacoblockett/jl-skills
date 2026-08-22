@@ -48,7 +48,7 @@ Direct prototype development from `skills/map/`:
 pip install -e .
 ```
 
-This exposes `map`.
+This exposes `map`. The prototype pins the validated Python SDK/runtime dependency at `surrealdb==2.0.0`.
 
 The normal command surface is:
 
@@ -73,7 +73,7 @@ map explain <id>
 map session ...
 ```
 
-`questions` is the human-facing command for the decision frontier. The returned structure still distinguishes `frontier`, `blocked`, and `inapplicable` decisions.
+`questions` is the human-facing command for the decision frontier. The returned structure distinguishes `frontier`, `blocked`, and `inapplicable` decisions.
 
 ### Node creation
 
@@ -83,6 +83,7 @@ Normal callers do not invent database record IDs:
 map add intent "Build authentication"
 map add constraint "No cloud service"
 map add decision "What is the minimum password length?" --authority inferred
+map add fact "Provider documents feature X" --authority external --source-note "provider documentation"
 map add idea "Support passkeys later"
 ```
 
@@ -101,13 +102,19 @@ fact        active
 
 State validity is constrained by kind. In particular, a decision is `open`, `decided`, `needs_review`, `inapplicable`, `invalidated`, or `superseded`. `satisfied` is not a decision state.
 
-Authority/provenance remains independent from kind/state. Direct CLI additions default to user provenance except parked ideas, which default to `none`; agents must specify `--authority inferred`, `external`, or `derived` when that is the actual provenance.
+Authority/provenance remains independent from kind/state. Direct CLI additions default to user provenance except parked ideas, which default to `none`; agents must specify `--authority inferred`, `external`, or `derived` when that is the actual provenance. `--source-note` carries concise human-readable source/provenance detail when useful.
+
+### Relations
+
+`map relate` rejects missing endpoints and known-invalid semantic edges before writing them. `depends_on` must connect decisions, `constrains` must originate from a constraint, `supports` must originate from a fact, and `contains` cannot create a cycle. Conditional dependencies support the small deterministic `eq`, `neq`, and `in` operator set.
 
 ### Decision changes
 
 `map decide <id> <value>` moves an actionable decision to `decided`. Calling `decide` again on an already-decided node is rejected so authoritative history cannot be silently overwritten.
 
-`map revise <id> <new-value>` creates a new generated decision record, marks the previous decision `superseded`, preserves lineage, and marks directly affected decided dependents `needs_review`. `--new-id` is an explicit import/testing override rather than normal grammar.
+`map revise <id> <new-value>` atomically creates a replacement decision, preserves containment and prerequisite dependency edges, marks the previous decision `superseded`, records lineage, and marks directly affected decided dependents `needs_review`. A deeper descendant remains decided until its own direct prerequisite changes; this avoids invalidating downstream decisions when an intermediate decision is merely reconfirmed. `--new-id` is an explicit import/testing override rather than normal grammar.
+
+Idea promotion plus optional parent containment is also committed as one transaction.
 
 ## Read/query surface
 
@@ -120,7 +127,7 @@ map search <text>
 map explain <id>
 ```
 
-`history` reconstructs supersession lineage. `context` returns compact current authoritative state for a branch. `related` exposes literal direct graph edges. `validate` checks graph structure and kind/state semantics without repair. `search` performs deterministic lexical retrieval and excludes superseded history unless `--include-history` is supplied. Exact subject matches dominate weaker token overlap. `explain` gathers graph-supported lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations without inventing rationale.
+`history` reconstructs supersession lineage. `context` returns compact current authoritative state for a branch. `related` exposes literal direct graph edges. `validate` checks graph structure and kind/state/relation semantics without repair. `search` performs deterministic lexical retrieval and excludes superseded history unless `--include-history` is supplied. Exact subject matches dominate weaker token overlap. `explain` gathers graph-supported lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations without inventing rationale. Node/frontier output is deterministically ordered by record ID where order is otherwise semantic-neutral.
 
 ## Durable recovery session
 
@@ -148,6 +155,8 @@ The core ordering invariant is:
 2. persist and verify semantic consequences through ordinary `map` commands;
 3. clear `session pending` only after those consequences are verified durable.
 
+This also makes a separate atomic “baseline creation” API unnecessary. If ordinary baseline writes are interrupted, `pending` remains and recovery reconciles the partially persisted graph before continuing.
+
 If a crash happens after step 2 but before step 3, recovery sees the pending work, inspects the authoritative graph, and can determine that the mutation already landed rather than blindly applying it twice.
 
 `map session end` refuses while pending work exists. `--force` explicitly discards potentially unpersisted recovery state and is intended only when the user chooses to abandon it.
@@ -159,16 +168,16 @@ The prototype uses embedded SurrealDB/SurrealKV and persists graph state under `
 Implemented:
 
 - intents, decisions, constraints, criteria, ideas, and facts;
-- semantic relations and conditional dependencies;
+- semantic relations and conditional dependencies with early mutation guards;
 - global and focused decision frontiers;
 - parked idea promotion;
-- non-destructive decision revision and supersession history;
-- dependent `needs_review` reopening;
+- atomic non-destructive decision revision and supersession history;
+- direct dependent `needs_review` reopening;
 - read-only history/context/related/validate/search/explain queries;
-- generated collision-safe node IDs;
+- generated collision-safe node IDs and deterministic neutral ordering;
 - kind-specific state validation and migration away from the old `settled` decision state;
 - durable recovery summary, rolling raw exchange, pending-work recovery, and session-first A → B → C ordering.
 
-Still intentionally incomplete: transitive affected-descendant mutation, atomic initial baseline creation, and a crash-safe intent-satisfaction lifecycle mutation.
+Remaining product-level behaviors are intentionally not invented here; they should be decided from actual Map usage rather than added speculatively.
 
 `seed_chores()` remains an internal development fixture in `map_state.py` for prototype evaluation but is not part of the public CLI.

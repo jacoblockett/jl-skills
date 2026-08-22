@@ -412,17 +412,19 @@ def validate_graph(db: Any) -> dict[str, Any]:
             errors.append(f"depends_on source {source_id} is {source.get('kind')!r}, not a decision")
         if target and target.get("kind") != "decision":
             errors.append(f"depends_on target {target_id} is {target.get('kind')!r}, not a decision")
+        try:
+            map_state.validate_dependency_condition(edge.get("condition"))
+        except ValueError as exc:
+            errors.append(f"depends_on condition on {source_id}: {exc}")
 
-        condition = edge.get("condition")
-        if condition is not None:
-            if not isinstance(condition, dict):
-                errors.append(f"depends_on condition on {source_id} is not an object")
-            else:
-                op = condition.get("op", "eq")
-                if op not in {"eq", "neq", "in"}:
-                    errors.append(f"depends_on condition on {source_id} uses unsupported op {op!r}")
-                if op == "in" and not isinstance(condition.get("value"), (list, tuple)):
-                    errors.append(f"depends_on condition on {source_id} uses 'in' with a non-list value")
+    for relation, expected_kind in (("constrains", "constraint"), ("supports", "fact")):
+        for edge in rows_by_relation[relation]:
+            source_id = map_state.node_key(edge["in"])
+            source = by_id.get(source_id)
+            if source and source.get("kind") != expected_kind:
+                errors.append(
+                    f"{relation} source {source_id} is {source.get('kind')!r}, not a {expected_kind}"
+                )
 
     for relation, relation_rows in rows_by_relation.items():
         seen_edges: set[tuple[str, str]] = set()

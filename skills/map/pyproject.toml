@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Prototype durable intent graph for the /map skill"
 requires-python = ">=3.11"
 dependencies = [
-  "surrealdb",
+  "surrealdb==2.0.0",
 ]
 
 [project.scripts]

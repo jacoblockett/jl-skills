@@ -80,11 +80,7 @@ def rid(node_id: Any) -> RecordID:
 
 
 def generate_node_id() -> str:
-    """Generate a collision-safe simple string record key.
-
-    uuid4().hex avoids punctuation that SurrealDB would render with escaped record-ID
-    wrappers while retaining 122 bits of randomness.
-    """
+    """Generate a collision-safe simple string record key."""
     return uuid.uuid4().hex
 
 
@@ -137,9 +133,6 @@ def init_map(root: Path) -> None:
 
 
 def default_authority(kind: str) -> str:
-    # Parked ideas are explicitly non-authoritative. For direct CLI additions, other
-    # kinds default to user provenance; agents must override provenance when inferred,
-    # external, or derived.
     return "none" if kind == "idea" else "user"
 
 
@@ -195,26 +188,8 @@ def create_node(db: Any, node_id: str | None, data: dict[str, Any]) -> Any:
     return db.create(rid(node_id), payload)
 
 
-def relate(
-    db: Any,
-    source: str,
-    relation: str,
-    target: str,
-    *,
-    note: str | None = None,
-    condition: dict[str, Any] | None = None,
-) -> Any:
-    if relation not in RELATIONS:
-        raise ValueError(f"Unknown relation {relation!r}; allowed: {sorted(RELATIONS)}")
-    data: dict[str, Any] = {"note": note}
-    if relation == "depends_on":
-        data["condition"] = condition
-    query = f"RELATE $source->{relation}->$target CONTENT $data;"
-    return db.query(query, {"source": rid(source), "target": rid(target), "data": data})
-
-
 def all_nodes(db: Any) -> list[dict[str, Any]]:
-    return list(db.select("node") or [])
+    return sorted(list(db.select("node") or []), key=lambda node: node_key(node["id"]))
 
 
 def get_node(db: Any, node_id: Any) -> dict[str, Any] | None:
@@ -235,9 +210,22 @@ def parse_scalar(text: str) -> Any:
         return text
 
 
+def validate_dependency_condition(condition: Any) -> None:
+    if condition is None:
+        return
+    if not isinstance(condition, dict):
+        raise ValueError("depends_on condition must be a JSON object")
+    op = condition.get("op", "eq")
+    if op not in {"eq", "neq", "in"}:
+        raise ValueError(f"Unsupported dependency condition op: {op!r}")
+    if op == "in" and not isinstance(condition.get("value"), (list, tuple)):
+        raise ValueError("depends_on condition uses 'in' with a non-list value")
+
+
 def condition_matches(prerequisite: dict[str, Any], condition: dict[str, Any] | None) -> bool:
     if not condition:
         return True
+    validate_dependency_condition(condition)
     field = condition.get("field", "value")
     op = condition.get("op", "eq")
     expected = condition.get("value")
@@ -247,8 +235,8 @@ def condition_matches(prerequisite: dict[str, Any], condition: dict[str, Any] | 
     if op == "neq":
         return actual != expected
     if op == "in":
-        return actual in (expected or [])
-    raise ValueError(f"Unsupported dependency condition op: {op!r}")
+        return actual in expected
+    raise AssertionError(op)
 
 
 def contained_scope(db: Any, focus_id: str) -> set[str]:
@@ -269,6 +257,80 @@ def contained_scope(db: Any, focus_id: str) -> set[str]:
                 seen.add(child)
                 queue.append(child)
     return seen
+
+
+def relation_exists(db: Any, source: Any, relation: str, target: Any) -> bool:
+    source_key = node_key(rid(source))
+    target_key = node_key(rid(target))
+    return any(
+        node_key(edge["in"]) == source_key and node_key(edge["out"]) == target_key
+        for edge in list(db.select(relation) or [])
+    )
+
+
+def _validate_relation_semantics(
+    db: Any,
+    source_node: dict[str, Any],
+    relation: str,
+    target_node: dict[str, Any],
+    condition: dict[str, Any] | None,
+) -> None:
+    source_id = node_key(source_node["id"])
+    target_id = node_key(target_node["id"])
+
+    if relation == "depends_on":
+        if source_id == target_id:
+            raise ValueError(f"Decision {source_id} cannot depend on itself")
+        if source_node.get("kind") != "decision":
+            raise ValueError(f"depends_on source {source_id} is {source_node.get('kind')!r}, not a decision")
+        if target_node.get("kind") != "decision":
+            raise ValueError(f"depends_on target {target_id} is {target_node.get('kind')!r}, not a decision")
+        validate_dependency_condition(condition)
+        return
+
+    if condition is not None:
+        raise ValueError("--condition is only supported for depends_on")
+
+    if relation == "constrains" and source_node.get("kind") != "constraint":
+        raise ValueError(f"constrains source {source_id} is {source_node.get('kind')!r}, not a constraint")
+    if relation == "supports" and source_node.get("kind") != "fact":
+        raise ValueError(f"supports source {source_id} is {source_node.get('kind')!r}, not a fact")
+    if relation == "supersedes" and source_node.get("kind") != target_node.get("kind"):
+        raise ValueError(
+            f"supersession kind mismatch: {source_id} ({source_node.get('kind')}) -> "
+            f"{target_id} ({target_node.get('kind')})"
+        )
+    if relation == "contains":
+        if source_id == target_id:
+            raise ValueError(f"contains edge {source_id} -> {target_id} would create a cycle")
+        if source_id in contained_scope(db, target_id):
+            raise ValueError(f"contains edge {source_id} -> {target_id} would create a cycle")
+
+
+def relate(
+    db: Any,
+    source: str,
+    relation: str,
+    target: str,
+    *,
+    note: str | None = None,
+    condition: dict[str, Any] | None = None,
+) -> Any:
+    if relation not in RELATIONS:
+        raise ValueError(f"Unknown relation {relation!r}; allowed: {sorted(RELATIONS)}")
+    source_node = get_node(db, source)
+    target_node = get_node(db, target)
+    if not source_node:
+        raise ValueError(f"No source node {source!r}")
+    if not target_node:
+        raise ValueError(f"No target node {target!r}")
+    _validate_relation_semantics(db, source_node, relation, target_node, condition)
+
+    data: dict[str, Any] = {"note": note}
+    if relation == "depends_on":
+        data["condition"] = condition
+    query = f"RELATE $source->{relation}->$target CONTENT $data;"
+    return db.query(query, {"source": source_node["id"], "target": target_node["id"], "data": data})
 
 
 def supersession_map(db: Any) -> dict[str, str]:
@@ -330,18 +392,21 @@ def compute_frontier(db: Any, focus_id: str | None = None) -> dict[str, Any]:
                 applicable = False
                 reasons.append(f"condition false for {prerequisite['id']}")
 
-        summary = {
+        item = {
             "id": node["id"],
             "state": node.get("state"),
             "subject": node.get("subject"),
             "reasons": reasons,
         }
         if not applicable:
-            inapplicable.append(summary)
+            inapplicable.append(item)
         elif reasons:
-            blocked.append(summary)
+            blocked.append(item)
         else:
-            ready.append(summary)
+            ready.append(item)
+
+    for items in (ready, blocked, inapplicable):
+        items.sort(key=lambda item: node_key(item["id"]))
 
     result = {"frontier": ready, "blocked": blocked, "inapplicable": inapplicable}
     if focus_id is not None:
@@ -380,7 +445,7 @@ def revise_decision(
     subject: str | None = None,
     authority: str = "user",
 ) -> dict[str, Any]:
-    """Replace a decided decision without overwriting history."""
+    """Atomically replace a decision while preserving lineage and direct review semantics."""
     old = get_node(db, old_id)
     if not old:
         raise ValueError(f"No node {old_id!r}")
@@ -402,51 +467,87 @@ def revise_decision(
     if old_key in replacements:
         raise ValueError(f"{old_id!r} already has a replacement")
 
-    create_node(
-        db,
-        new_id,
-        {
-            "kind": "decision",
-            "state": "decided",
-            "authority": authority,
-            "subject": subject or old.get("subject") or old_id,
-            "detail": old.get("detail"),
-            "value": value,
-            "source_note": f"Revision of {old['id']}",
-            "tags": old.get("tags", []),
-        },
-    )
+    contains_edges = [
+        edge for edge in list(db.select("contains") or [])
+        if node_key(edge["out"]) == old_key
+    ]
+    prerequisite_edges = [
+        edge for edge in list(db.select("depends_on") or [])
+        if node_key(edge["in"]) == old_key
+    ]
 
-    for edge in list(db.select("contains") or []):
-        if node_key(edge["out"]) == old_key:
-            relate(db, node_key(edge["in"]), "contains", new_id)
-
-    relate(db, new_id, "supersedes", old_id, note="New authoritative decision revision.")
-    db.query(
-        "UPDATE $node MERGE { state: 'superseded', updated_at: time::now() };",
-        {"node": rid(old_id)},
-    )
-
-    affected: list[dict[str, Any]] = []
+    affected_ids: list[str] = []
     for edge in list(db.select("depends_on") or []):
         if node_key(edge["out"]) != old_key:
             continue
         dependent = get_node(db, node_key(edge["in"]))
-        if not dependent or dependent.get("kind") != "decision":
-            continue
-        if dependent.get("state") in DECISION_REVIEWABLE_STATES:
-            db.query(
-                "UPDATE $node MERGE { state: 'needs_review', updated_at: time::now() };",
-                {"node": dependent["id"]},
-            )
-            refreshed = get_node(db, node_key(dependent["id"]))
-            if refreshed:
-                affected.append(refreshed)
+        if dependent and dependent.get("kind") == "decision" and dependent.get("state") in DECISION_REVIEWABLE_STATES:
+            key = node_key(dependent["id"])
+            if key not in affected_ids:
+                affected_ids.append(key)
+    affected_ids.sort()
+
+    new_data = {
+        "kind": "decision",
+        "state": "decided",
+        "authority": authority,
+        "subject": subject or old.get("subject") or old_id,
+        "detail": old.get("detail"),
+        "value": value,
+        "source_note": f"Revision of {old['id']}",
+        "tags": old.get("tags", []),
+    }
+
+    statements = ["BEGIN TRANSACTION;", "CREATE $new_record CONTENT $new_data;"]
+    params: dict[str, Any] = {
+        "new_record": rid(new_id),
+        "new_data": new_data,
+        "old_record": old["id"],
+        "supersedes_data": {"note": "New authoritative decision revision."},
+    }
+
+    for index, edge in enumerate(contains_edges):
+        parent_key = f"parent_{index}"
+        data_key = f"contains_data_{index}"
+        statements.append(f"RELATE ${parent_key}->contains->$new_record CONTENT ${data_key};")
+        params[parent_key] = edge["in"]
+        params[data_key] = {"note": edge.get("note")}
+
+    for index, edge in enumerate(prerequisite_edges):
+        target_key = f"prerequisite_{index}"
+        data_key = f"dependency_data_{index}"
+        statements.append(f"RELATE $new_record->depends_on->${target_key} CONTENT ${data_key};")
+        params[target_key] = edge["out"]
+        params[data_key] = {"note": edge.get("note"), "condition": edge.get("condition")}
+
+    statements.extend([
+        "RELATE $new_record->supersedes->$old_record CONTENT $supersedes_data;",
+        "UPDATE $old_record MERGE { state: 'superseded', updated_at: time::now() };",
+    ])
+
+    for index, affected_id in enumerate(affected_ids):
+        key = f"affected_{index}"
+        statements.append(
+            f"UPDATE ${key} MERGE {{ state: 'needs_review', updated_at: time::now() }};"
+        )
+        params[key] = rid(affected_id)
+
+    statements.append("COMMIT TRANSACTION;")
+    raw = db.query_raw("\n".join(statements), params)
+    check_raw_response(raw)
 
     new = get_node(db, new_id)
     old_after = get_node(db, old_id)
-    if new is None or old_after is None:
-        raise RuntimeError("Revision records were not persisted")
+    if new is None or old_after is None or old_after.get("state") != "superseded":
+        raise RuntimeError("Decision revision did not persist expected lineage")
+
+    affected: list[dict[str, Any]] = []
+    for affected_id in affected_ids:
+        refreshed = get_node(db, affected_id)
+        if not refreshed or refreshed.get("state") != "needs_review":
+            raise RuntimeError(f"Decision revision did not reopen direct dependent {affected_id!r}")
+        affected.append(refreshed)
+
     return {"old": old_after, "new": new, "affected": affected}
 
 
@@ -456,21 +557,33 @@ def promote_idea(db: Any, node_id: str, parent_id: str | None = None) -> dict[st
         raise ValueError(f"No node {node_id!r}")
     if node.get("kind") != "idea" or node.get("state") != "parked":
         raise ValueError(f"{node_id!r} must be a parked idea before it can be promoted")
+
+    parent = None
     if parent_id is not None:
         parent = get_node(db, parent_id)
         if not parent:
             raise ValueError(f"No parent node {parent_id!r}")
         if parent.get("kind") != "intent":
             raise ValueError(f"Parent {parent_id!r} is {parent.get('kind')!r}, not an intent")
-    db.query(
-        "UPDATE $node MERGE { kind: 'intent', state: 'active', authority: 'user', updated_at: time::now() };",
-        {"node": rid(node_id)},
-    )
-    if parent_id is not None:
-        relate(db, parent_id, "contains", node_id)
+
+    if parent is None or relation_exists(db, parent["id"], "contains", node["id"]):
+        db.query(
+            "UPDATE $node MERGE { kind: 'intent', state: 'active', authority: 'user', updated_at: time::now() };",
+            {"node": node["id"]},
+        )
+    else:
+        raw = db.query_raw(
+            """BEGIN TRANSACTION;
+            UPDATE $node MERGE { kind: 'intent', state: 'active', authority: 'user', updated_at: time::now() };
+            RELATE $parent->contains->$node CONTENT $contains_data;
+            COMMIT TRANSACTION;""",
+            {"node": node["id"], "parent": parent["id"], "contains_data": {"note": None}},
+        )
+        check_raw_response(raw)
+
     promoted = get_node(db, node_id)
-    if promoted is None:
-        raise RuntimeError(f"Promoted node {node_id!r} disappeared")
+    if promoted is None or promoted.get("kind") != "intent" or promoted.get("state") != "active":
+        raise RuntimeError(f"Promotion of {node_id!r} did not persist expected state")
     return promoted
 
 
