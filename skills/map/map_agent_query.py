@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import argparse
 import re
-import sys
-from pathlib import Path
 from typing import Any
 
 import map_query
 import map_state
 
 
-QUERY_COMMANDS = {"search", "explain"}
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 
@@ -115,12 +111,7 @@ def _current_node(db: Any, node: dict[str, Any]) -> dict[str, Any]:
 
 
 def explain_node(db: Any, node_id: str) -> dict[str, Any]:
-    """Return graph-supported context explaining one current semantic node.
-
-    This does not invent prose rationale. It exposes the current revision, lineage,
-    containment context, constraints, prerequisites, dependents, supports, and
-    directly related nodes so an agent can reason from stored evidence.
-    """
+    """Return graph-supported context explaining one current semantic node."""
     requested = map_state.get_node(db, node_id)
     if not requested:
         raise ValueError(f"No node {node_id!r}")
@@ -210,38 +201,3 @@ def explain_node(db: Any, node_id: str) -> dict[str, Any]:
         "supports": supports,
         "direct_relations": direct,
     }
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="map-state", description="Higher-level read-only Map queries")
-    parser.add_argument("--root", type=Path, default=Path.cwd(), help="Directory whose .map/ state should be used")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    search = sub.add_parser("search", help="Search current Map nodes by semantic text fields")
-    search.add_argument("query")
-    search.add_argument("--limit", type=int, default=10)
-    search.add_argument("--include-history", action="store_true", help="Include superseded historical nodes")
-
-    explain = sub.add_parser("explain", help="Show stored graph context supporting one node")
-    explain.add_argument("id")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    root: Path = args.root
-
-    try:
-        def run(db: Any):
-            if args.command == "search":
-                map_state.emit(search_nodes(db, args.query, limit=args.limit, include_history=args.include_history))
-            elif args.command == "explain":
-                map_state.emit(explain_node(db, args.id))
-            else:
-                raise AssertionError(args.command)
-
-        map_state.command_with_db(root, run)
-        return 0
-    except Exception as exc:
-        print(f"map-state: {exc}", file=sys.stderr)
-        return 1
