@@ -1,7 +1,7 @@
 {
-  "name": "jl-skills-installer-build",
+  "name": "jl-skills-installer",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "dependencies": {
     "@clack/prompts": "1.7.0"
