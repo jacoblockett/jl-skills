@@ -9,7 +9,7 @@ import (
 //go:embed skills/**
 var catalog embed.FS
 
-const version = "0.1.0-dev"
+const version = "0.1.1-tui"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -20,7 +20,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
-		fmt.Println(version)
+		fmt.Printf("jl-skill %s (keyboard wizard)\n", version)
 		return nil
 	}
 	if len(args) > 0 && args[0] == "update" {
