@@ -8,7 +8,7 @@ dependencies = [
 ]
 
 [project.scripts]
-map-state = "map_entry:main"
+map = "map_entry:main"
 
 [tool.setuptools]
 py-modules = ["map_state", "map_entry", "map_query", "map_agent_query", "map_session"]
