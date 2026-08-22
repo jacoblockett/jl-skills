@@ -91,6 +91,11 @@ printf '  Map DB:          init + validation passed\n'
 printf '  idempotency:     managed block remains singular\n'
 printf '  scope isolation: no Claude project install\n'
 
+if [[ -n "${CI:-}" ]]; then
+  printf '\nCI mode: skipping interactive wizard.\n'
+  exit 0
+fi
+
 say "Opening bare create-vite prompt stack"
 printf 'Expected: Clack arrow-key controls; Space toggles multiselects; Enter confirms. Ctrl+C cancels.\n'
 printf 'The wizard runs from %s, not the jl-skills repo.\n\n' "$wizard_project"
