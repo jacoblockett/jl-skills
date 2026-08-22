@@ -18,15 +18,7 @@
     "surrealdb"
   ],
   "runtime_entrypoint": "map_entry:main",
-  "runtime_cli": "map-state",
+  "runtime_cli": "map",
   "cli_token": "JL_MAP_CLI",
-  "instruction_fragment": "AGENTS.fragment.md",
-  "project_init": [
-    "map-state",
-    "init"
-  ],
-  "project_validate": [
-    "map-state",
-    "validate"
-  ]
+  "instruction_fragment": "AGENTS.fragment.md"
 }
