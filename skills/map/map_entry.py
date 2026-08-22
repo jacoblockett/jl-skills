@@ -63,7 +63,6 @@ def build_parser() -> argparse.ArgumentParser:
     questions.add_argument("--focus", help="Limit the frontier to this node and its contained descendants")
 
     sub.add_parser("ideas", help="List parked ideas")
-    sub.add_parser("seed-chores", help="Development fixture: reset state and seed the recurring-chore example")
 
     decide = sub.add_parser("decide", help="Record the answer to an unresolved decision")
     decide.add_argument("id")
@@ -185,9 +184,6 @@ def main(argv: list[str] | None = None) -> int:
                     node for node in map_state.all_nodes(db)
                     if node.get("kind") == "idea" and node.get("state") == "parked"
                 ])
-            elif args.command == "seed-chores":
-                map_state.seed_chores(db)
-                map_state.emit({"ok": True, "fixture": "chores", **map_state.compute_frontier(db)})
             elif args.command == "decide":
                 value = map_state.parse_scalar(args.value)
                 map_state.decide_decision(db, args.id, value, authority=args.authority)
