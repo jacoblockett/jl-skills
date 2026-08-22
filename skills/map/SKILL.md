@@ -5,284 +5,215 @@ description: Build, refine, resume, or query a durable local graph of user inten
 
 # Map
 
-Map is persistent external memory for structured intent. The `.map/` database is authoritative; this skill is the guided reasoning/editor workflow over it.
+Map is persistent external memory for structured intent. The `.map/` graph is authoritative semantic state; `map_session` is only a disposable conversational recovery capsule.
 
-The installer renders the Map CLI for this installation scope into the command below. For every Map state operation, invoke:
+The installer renders the Map CLI for this installation scope into the command below. For every Map operation, invoke:
 
 ```bash
 {{JL_MAP_CLI}} <arguments...>
 ```
 
-Examples below use `map ...` as compact notation only. Translate them through the rendered command above when actually executing commands.
+Examples use `map ...` as compact notation. Never assume `map` is globally on PATH. Never read or edit SurrealKV files directly.
 
-Never assume `map` is globally on PATH. Never read or edit SurrealKV files directly.
+## Boundaries
 
-Do not spawn subagents by default. Keep orchestration in the parent until a concrete evaluation proves a separate semantic transaction is worth agentizing.
-
-## Non-negotiable boundaries
-
-- Separate authoritative graph state from temporary `map_session` workflow state.
 - Read broadly; mutate cautiously.
-- Never silently overwrite user intent. Preserve history when revision support is safe.
-- Park non-binding ideas as ideas. Do not let them constrain the current plan.
-- Facts are the agent's job when they can be established from available evidence; decisions are the user's job when choice materially affects intent.
-- External tools such as Beads, Jira, PRDs, itineraries, or Markdown exports are consumers of Map, not Map responsibilities.
+- Never silently overwrite user intent; preserve revision history.
+- Park non-binding possibilities as ideas.
+- Facts are the agent's job when evidence can establish them; material choices are the user's job.
 - Do not ask the user to manufacture acceptance criteria for you.
 - Do not use arbitrary SurrealQL or bypass the installed Map CLI.
+- Do not spawn subagents by default.
 
-## Invocation modes
+Depth: `mvp` asks every currently necessary decision for the smallest coherent useful path; `thorough` also explores consequential adjacent choices.
 
-Two independent axes control questioning.
+Stance: `normal` clarifies without unnecessary challenge; `adversarial` actively tests assumptions, contradictions, feasibility, dependencies, and failure modes.
 
-Depth:
+## Session recovery contract
 
-- `mvp` (default): every currently answerable decision necessary for the smallest coherent, useful, testable path. No question quota.
-- `thorough`: also explore consequential adjacent decisions that materially improve completeness, robustness, maintainability, usability, or future decision quality.
-
-Stance:
-
-- `normal` (default): clarify without unnecessary challenge.
-- `adversarial`: actively test assumptions, contradictions, feasibility, failure modes, dependencies, and conflicts.
-
-Normalize obvious synonyms when unambiguous. `thorough adversarial` means both axes are enabled.
-
-## Startup
-
-On every explicit Map invocation, first determine whether `.map/` exists and whether an unfinished session exists.
-
-If `.map/` exists, run:
+Session is a crash/context-loss backup, not another graph API.
 
 ```bash
-map session status
+map session init
+map session summary [new_summary]
+map session exchange [-u MESSAGE | -a MESSAGE] [--depth N]
+map session pending [new_pending | --clear]
+map session end [--force]
 ```
 
-If an active or paused session exists, run:
+`exchange` stores exact raw messages, newest last. Default depth is 6; minimum is 2. `--depth` truncates oldest entries when necessary.
+
+`summary` is capped by the runtime at 2200 normalized characters. Maintain it in concise Classical Chinese. Preserve all material facts, decisions, constraints, uncertainty, rationale, and referents without semantic loss. Keep names, identifiers, technical terms, jargon, quotations, user-specific phrasing, and anything lacking a safe equivalent verbatim. Prefer dense clauses; omit filler and redundancy.
+
+Do not update the summary merely because the assistant spoke. Update it only after a user response completes an assistant/user exchange, folding that completed exchange into the previous summary.
+
+Session persistence always precedes authoritative Map mutation:
+
+1. persist the conversational state to session as completely as possible;
+2. perform and verify any semantic Map mutations;
+3. clear `session pending` only after the represented work is verified durable in Map.
+
+If step 3 did not happen, recovery must conservatively assume something may have failed between session persistence and Map persistence.
+
+## Startup and recovery
+
+On every explicit Map invocation, first check whether `.map/` exists. If it does, run:
 
 ```bash
-map session resume
+map status
 ```
 
-Recovery state outranks starting new work. Summarize the exact stored focus, mode, phase, presented frontier, and pending answer status, then ask whether to resume or explicitly abandon. Do not silently start another session.
+If `sessions` is nonzero, recovery outranks new work. Read:
 
-If there is no unfinished session and the invocation is a pure read-only query such as "did we decide...", "why did we choose...", or "show me...", use the query workflow below without creating a session.
+```bash
+map session summary
+map session exchange
+map session pending
+```
 
-If the invocation contains no subject, ask what outcome, problem, idea, or subject the user wants to map.
+Use the summary, raw exchange, and authoritative graph to reconstruct what was happening. Tell the user an unfinished session was found, briefly describe what appears to have been in progress, and ask whether to continue or abandon it.
 
-## Resolve scope before mutation
+If `pending` exists, assume its represented work may not be safely persisted. Inspect the graph before doing anything again. If the graph already contains the consequence, verify it and clear pending. If it is absent or ambiguous, explain that recovery found potentially unpersisted work and ask whether to reconcile/persist it or discard the session. Never blindly replay a mutation.
 
-For a substantive mapping request, determine whether it likely targets existing intent before creating anything.
+Discard unresolved recovery state only with explicit user direction:
 
-If `.map/` exists, use read-only commands such as:
+```bash
+map session end --force
+```
+
+If there is no session and the invocation is a pure read-only query, use the query workflow without creating one.
+
+## Starting substantive work
+
+Resolve whether the request clearly targets existing intent before creating anything:
 
 ```bash
 map search "<request terms>"
 map context <candidate-id>
 ```
 
-Choose an existing focus only when the match is clear. Otherwise treat it as new scope rather than guessing.
+Choose an existing focus only when the match is clear. Otherwise treat it as new scope.
 
-Parse depth and stance. Defaults are `mvp + normal`.
-
-Start a non-authoritative session checkpoint. Existing focus:
+Initialize recovery before semantic work and immediately preserve the exact user invocation:
 
 ```bash
-map session start \
-  --invocation "<raw invocation>" \
-  --interpreted "<concise interpretation>" \
-  --focus <focus-id> \
-  --depth <mvp|thorough> \
-  --stance <normal|adversarial>
+map session init
+map session exchange -u "<verbatim user invocation>"
 ```
 
-For genuinely new scope, omit `--focus`.
-
-Then summarize:
-
-1. what you believe the user wants to achieve or resolve;
-2. the selected depth and stance and their practical effect;
-3. the alternatives (`thorough`, `adversarial`, or both).
-
-Ask the user to confirm the interpretation and setup before substantive graph mutation or questioning.
-
-Do not create semantic nodes before this confirmation.
-
-## After setup confirmation
-
-On confirmation, first persist it:
+Interpret the requested depth/stance and explain the intended scope. Before returning that assistant response, append the exact response:
 
 ```bash
-map session confirm
+map session exchange -a "<verbatim assistant response>"
 ```
 
-Then continue according to existing versus new scope.
-
-### Existing scope
-
-Load current authoritative context and frontier:
+If it asks the user something, also persist the exact outstanding question text before returning it:
 
 ```bash
-map context <focus-id>
-map questions --focus <focus-id>
+map session pending "<exact pending questions>"
 ```
 
-`questions` returns the current decision frontier. Historical decisions must not be treated as current merely because a literal edge still references them. `context` and the frontier evaluator resolve supersession chains.
+## New-scope baseline
 
-### New scope baseline
-
-Create one root `intent` representing the confirmed outcome/problem. Do not invent a record ID; Map generates one and returns it. Retain the returned ID for subsequent relations.
+After the user confirms or clarifies, first append the exact user message, then fold the completed exchange into the recovery summary:
 
 ```bash
-map add intent "<subject>" --detail "<concise durable meaning>"
+map session exchange -u "<verbatim user response>"
+map session summary "<rewritten compact summary>"
 ```
 
-Record only explicit, durable constraints from the confirmed request. Each constraint defaults to `active` user authority. Retain each returned ID before relating it.
+Only then create authoritative graph state.
+
+Create one root intent; let Map generate IDs:
+
+```bash
+map add intent "<subject>" --detail "<durable meaning>"
+```
+
+Record only durable constraints actually established by the user:
 
 ```bash
 map add constraint "<constraint>"
 map relate <constraint-id> constrains <intent-id>
 ```
 
-If the user explicitly introduced a non-binding possibility worth retaining, ideas default to `parked` with `none` authority:
+Retain non-binding possibilities as parked ideas:
 
 ```bash
-map add idea "<idea>" --detail "<neutral durable meaning>"
+map add idea "<idea>" --detail "<meaning>"
 map relate <idea-id> related_to <intent-id>
 ```
 
-Create unresolved decisions only when ambiguity is material under the current depth/stance policy. Decisions default to `open`; discovery-created questions are inferred rather than user-authored, so state their provenance explicitly:
+Create unresolved decisions only when ambiguity is material. Discovery-created decisions are inferred:
 
 ```bash
 map add decision "<decision question>" --authority inferred
 map relate <intent-id> contains <decision-id>
 ```
 
-Use `depends_on` only for a real prerequisite. Conditional applicability must use the tiny supported condition vocabulary, for example:
-
-```bash
-map relate <child-decision-id> depends_on <parent-decision-id> \
-  --condition '{"field":"value","op":"eq","value":"separate"}'
-```
-
-After baseline writes:
+Use `depends_on` only for real prerequisites. Then:
 
 ```bash
 map validate
 ```
 
-If validation fails, stop. Do not ask questions against an invalid graph.
-
-Baseline creation is not yet an atomic multi-node session operation. If any baseline command fails, stop immediately, run `map validate`, inspect what persisted, and repair deterministically before showing a question batch. Do not pretend the baseline committed atomically.
-
-## Discovery policy
-
-The frontier is not a pre-enumerated questionnaire. Discover only decisions worth representing now.
-
-A candidate question is material when its answer could change correctness, usability, safety, performance, coherence, feasibility, or satisfaction of the stated outcome.
-
-Use these gates:
-
-- Concrete requests raise the threshold for additional questions.
-- Optional capabilities default out unless the user introduced them or they become material.
-- Dependent questions wait until prerequisites make them applicable.
-- Do not ask semantic duplicates or reworded versions of decided decisions.
-- If engineering or execution could reasonably postpone the choice and still implement or verify the requested outcome, reject it from MVP depth.
-- Thorough depth may retain consequential adjacent choices, but still rejects speculative branch explosion.
-- Adversarial stance changes challenge level, not breadth by itself.
-- A compound candidate may contain one material constituent and one unnecessary constituent. Keep the material part only.
-
-Do not force a minimum question count. A maximum visible batch of about five is a cap, not a quota.
-
-When discovery identifies a new material decision, persist it before presenting it, attach it to the correct intent with `contains`, add real dependency edges, then recompute the focused frontier with `map questions`.
-
-## Present a question batch safely
-
-Select only currently eligible decisions from:
+If the user's preceding response had been pending, clear it only after the required writes and validation succeed:
 
 ```bash
-map questions --focus <focus-id>
+map session pending --clear
 ```
 
-Before showing the questions, checkpoint the exact IDs:
+## Discovery and questions
+
+The frontier is not a pre-enumerated questionnaire. A question is material when its answer could change correctness, usability, safety, performance, coherence, feasibility, or satisfaction of the stated outcome.
+
+- Concrete requests raise the threshold for extra questions.
+- Optional capabilities default out unless introduced or material.
+- Dependent questions wait for prerequisites.
+- Never ask semantic duplicates of decided choices.
+- MVP rejects choices that can safely wait for implementation.
+- Thorough may explore consequential adjacent choices, not speculative branch explosion.
+- Adversarial changes challenge level, not breadth by itself.
+- Do not force a minimum question count; about five visible questions is a cap, not a quota.
+
+Use `map questions --focus <intent-id>` for the current frontier.
+
+Before presenting a substantive assistant response/question batch, persist the exact assistant message and exact pending questions first. Then perform any graph writes required to represent newly discovered decisions, validate them, and only then return the already-persisted response to the user.
+
+## On every user response
+
+Before interpreting or mutating authoritative Map state:
 
 ```bash
-map session checkpoint <id-1> <id-2> ...
+map session exchange -u "<verbatim user message>"
+map session summary "<summary rewritten from previous summary + completed exchange>"
 ```
 
-Only after that succeeds, present those questions to the user.
+Leave existing `pending` untouched while interpreting the response.
 
-Use concise, neutral wording. Avoid giving a recommended answer by default because it can anchor the user's choice. Give analysis or a recommendation when the user asks for one or when a safety/feasibility issue requires it.
-
-## On the user's answer
-
-The first action after receiving an answer to a checkpointed batch is to persist the raw answer before asking anything new or mutating authoritative graph state:
+Apply semantic consequences only through normal Map commands such as:
 
 ```bash
-map session answer "<verbatim user answer>"
+map decide <id> <value>
+map revise <id> <value>
+map promote <id>
+map add ...
+map relate ...
 ```
 
-Do not require yourself to have fully interpreted the answer before persisting it. If the process dies now, `session resume` will correctly require interpretation of the pending answer first.
-
-Then interpret the answer against the exact `presented_frontier`.
-
-For one or more ordinary decision answers, use one atomic batch operation:
+Use real JSON types when applicable. Validate/inspect enough to establish that the intended consequence is durable. Only then, if the pending work has been resolved:
 
 ```bash
-map session apply-settles '{"<decision-id>":"value","<decision-id>":true}'
+map session pending --clear
 ```
 
-Use actual JSON types. Do not stringify booleans/numbers merely for convenience.
+If the response requires no graph mutation, establish that explicitly before clearing pending.
 
-A partial answer may decide a subset of the presented frontier. Unanswered decisions can reappear after the answer is finalized.
+Before the next assistant response, append that exact response to `exchange`; set `pending` first if it asks unresolved questions.
 
-After successful atomic decision application, finalize the answer:
+## Read-only queries
 
-```bash
-map session advance --phase discovery
-```
-
-Then recompute context/frontier and continue discovery.
-
-If the answer truly requires no semantic graph mutation, explicitly finalize it as such:
-
-```bash
-map session advance --phase discovery --no-mutation
-```
-
-Never use `map decide ...` followed by `map session applied` for a pending answer. That split-write path is intentionally unsafe and `session applied` rejects pending graph operations.
-
-## Unsupported pending-answer mutations
-
-The current prototype has atomic pending-answer application only for decision-answer batches.
-
-If a pending raw answer requires any of these:
-
-- revising/superseding an existing decision;
-- promoting an idea;
-- creating/removing/restructuring multiple authoritative nodes as the semantic consequence of that answer;
-- another mutation that lacks a typed atomic `session apply-*` command;
-
-leave the raw answer pending and stop the workflow. Do not fall back to legacy multi-write commands and then clear the session. Report the missing safe mutation primitive so it can be implemented from the concrete case.
-
-Outside a pending-answer workflow, read-only queries remain safe. Do not perform silent authoritative revisions just because the model prefers a different design.
-
-## Resume behavior
-
-`map session resume` returns the next required action. Obey it literally:
-
-- `confirm_scope_and_setup_before_graph_mutation`: ask for setup confirmation.
-- `resume_exact_presented_frontier`: reproduce the checkpointed question batch; do not discover a different batch first.
-- `interpret_pending_answer_before_new_questions`: interpret the stored raw answer before anything new.
-- `apply_pending_answer_before_new_questions`: apply the stored pending operation safely before anything new.
-- `finalize_applied_answer_before_new_questions`: advance/finalize the already-applied answer before anything new.
-- `continue_session_phase`: continue from the stored phase and focus.
-
-A pending answer always outranks new discovery.
-
-## Read-only query workflow
-
-For a query with no unfinished session, do not start an interview unless the query exposes a genuine ambiguity the user asks to resolve.
-
-Use:
+With no unfinished session, use as needed:
 
 ```bash
 map search "<terms>"
@@ -293,57 +224,31 @@ map related <id>
 map validate
 ```
 
-`search` excludes superseded history by default. Use `--include-history` only when history is relevant.
+`search` excludes superseded history unless `--include-history` is requested. Never invent rationale absent from the graph.
 
-`explain` may expose lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations. Do not invent rationale absent from the graph.
+## Ending work
 
-## Stop condition
+A branch is done when no worthwhile eligible frontier remains under the chosen depth/stance, not when no conceivable future branch exists.
 
-A branch is done for the current session when there is no worthwhile eligible frontier under the chosen depth/stance treatment, not when no conceivable future branch exists.
-
-Before stopping:
+Before ending:
 
 ```bash
 map validate
-map questions --focus <focus-id>
+map questions --focus <intent-id>
 ```
 
-If the graph is valid and there is no material frontier to ask now, summarize the current state and finish the disposable session:
+If no pending conversational work remains, delete the disposable recovery capsule:
 
 ```bash
-map session finish
+map session end
 ```
 
-Do not delete or flatten authoritative Map history when finishing a session.
-
-The current CLI does not yet provide a crash-safe lifecycle mutation that marks the intent itself `satisfied`; therefore do not fabricate that state. Report that there is no current material frontier for the chosen treatment.
+`session end` refuses while pending exists. Use `--force` only when the user explicitly chooses to discard unresolved work. Ending a session never deletes authoritative Map history.
 
 ## Failure handling
 
-- Any CLI/database error: stop the semantic workflow and diagnose the exact failure.
-- Validation errors: stop. Never continue from a graph known to violate structural invariants.
+- Any CLI/database error: stop semantic work and diagnose the exact failure.
+- Validation failure: stop; never continue from a graph known invalid.
 - Never repair by directly editing `.map/db`.
-- Never substitute another skill/workflow for an explicit Map invocation.
-- Never discard a pending raw user answer merely to make progress.
-
-## Current prototype scope
-
-Proven and usable:
-
-- durable graph + focused frontier exposed through `map questions`;
-- conditional dependencies;
-- parked ideas;
-- non-destructive history queries;
-- current context/search/explain/validate queries;
-- durable setup/question/answer recovery;
-- atomic single and multi-decision application with session marker.
-
-Not yet safe inside a pending-answer cycle:
-
-- decision revision/supersession;
-- idea promotion;
-- arbitrary structural mutation;
-- transitive affected-descendant mutation;
-- atomic initial baseline creation.
-
-Let concrete `/map` evaluations drive the next primitive. Do not grow infrastructure speculatively.
+- Never discard pending recovery state merely to make progress.
+- Never substitute another workflow for an explicit Map invocation.
