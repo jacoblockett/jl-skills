@@ -88,8 +88,10 @@ def test_help() -> None:
     ses = subprocess.run([str(vmap()), "session", "--help"], stdout=subprocess.PIPE, text=True, encoding="utf-8", check=True).stdout
     for cmd in "init status list show questions ideas decide revise promote add relate history context related validate search explain".split():
         assert cmd in top, cmd
-    for cmd in "start status confirm checkpoint answer apply-settle apply-settles applied advance resume pause abandon finish".split():
+    for cmd in "init summary exchange pending end".split():
         assert cmd in ses, cmd
+    for removed in "start status confirm checkpoint answer apply-settle apply-settles applied advance resume pause abandon finish".split():
+        assert removed not in ses, removed
     print("PASS: command surface")
 
 
@@ -171,8 +173,10 @@ def test_core() -> None:
     j("core", "decide", "cond-child-neq", "yes")
     j("core", "decide", "cond-child-in", "yes")
 
-    assert len(j("core", "search", "Where should data live?")["results"]) == 1
-    assert len(j("core", "search", "Where should data live?", "--include-history", "--limit", "20")["results"]) >= 3
+    current = j("core", "search", "Where should data live?")["results"]
+    history = j("core", "search", "Where should data live?", "--include-history", "--limit", "20")["results"]
+    assert len(current) == 1, current
+    assert len(history) >= 3, history
     assert j("core", "context", "app")["focus"]["subject"] == "Test application"
     assert "relations" in j("core", "related", "backup-policy")
     assert "history" in j("core", "explain", "backup-policy")
@@ -209,72 +213,101 @@ def test_processes() -> None:
     print("PASS: 250 generated IDs across 250 CLI processes")
 
 
-def test_session() -> None:
-    j("session", "init")
-    add("session", "intent", "Session lifecycle fixture", "s-root")
-    for i in range(1, 7):
-        add("session", "decision", f"Session decision {i}", f"s-d{i}", "--authority", "inferred")
-        rel("session", "s-root", "contains", f"s-d{i}")
-    add("session", "decision", "Blocked session decision", "s-blocked", "--authority", "inferred")
-    rel("session", "s-root", "contains", "s-blocked")
-    rel("session", "s-blocked", "depends_on", "s-d1")
+def test_session_capsule() -> None:
+    for command in [("summary",), ("exchange",), ("pending",), ("end",)]:
+        fail("session", "session", *command)
 
-    s = j("session", "session", "start", "--invocation", "/map session stress test", "--interpreted", "Exercise durable session behavior", "--focus", "s-root", "--depth", "thorough", "--stance", "adversarial")
-    assert s["status"] == "active" and j("session", "session", "status")["exists"] is True
-    fail("session", "session", "start", "--invocation", "second active session", "--interpreted", "should fail")
-    fail("session", "session", "checkpoint", "s-d1")
-    assert j("session", "session", "resume")["resume_action"] == "confirm_scope_and_setup_before_graph_mutation"
-    assert j("session", "session", "pause")["status"] == "paused"
-    assert j("session", "session", "status")["session"]["status"] == "paused"
-    assert j("session", "session", "resume")["resume_action"] == "confirm_scope_and_setup_before_graph_mutation"
-    assert j("session", "session", "confirm")["setup_confirmed"] is True
-    fail("session", "session", "answer", "premature answer")
-    fail("session", "session", "checkpoint", "s-blocked")
+    created = j("session", "session", "init")
+    assert created["ok"] is True and created["depth"] == 6 and created["exchange"] == []
+    assert created["summary"] == "" and created["pending"] is None
+    assert j("session", "status")["sessions"] == 1
+    fail("session", "session", "init")
 
-    j("session", "session", "checkpoint", "s-d1")
-    assert j("session", "session", "resume")["resume_action"] == "resume_exact_presented_frontier"
-    j("session", "session", "answer", "Use true for decision one", "--operation", "decide s-d1")
-    assert j("session", "session", "resume")["resume_action"] == "apply_pending_answer_before_new_questions"
-    fail("session", "session", "applied")
-    assert j("session", "session", "apply-settle", "s-d1", "true")["atomic"] is True
-    assert j("session", "session", "resume")["resume_action"] == "finalize_applied_answer_before_new_questions"
-    j("session", "session", "advance")
-    assert j("session", "session", "resume")["resume_action"] == "continue_session_phase"
-    d1 = j("session", "show", "s-d1")
-    assert d1["state"] == "decided" and d1["value"] is True and d1["authority"] == "user", d1
+    summary = j("session", "session", "summary", "  甲事已定。\n\n乙事未決。\t待 user 回答。  ")
+    assert summary["summary"] == "甲事已定。 乙事未決。 待 user 回答。", summary
+    assert summary["characters"] == len(summary["summary"])
+    assert summary["limit"] == 2200
+    fail("session", "session", "summary", "x" * 2201)
+    assert j("session", "session", "summary")["summary"] == summary["summary"]
 
-    j("session", "session", "checkpoint", "s-d2", "s-d3")
-    j("session", "session", "answer", "Decision two is true and decision three is forty-two", "--operation", "decide s-d2 and s-d3")
-    b = j("session", "session", "apply-settles", '{"s-d2":true,"s-d3":42}')
-    assert b["atomic"] is True and b["count"] == 2, b
-    j("session", "session", "advance")
-    assert j("session", "show", "s-d2")["value"] is True
-    d3 = j("session", "show", "s-d3")
-    assert d3["value"] == 42 and not isinstance(d3["value"], str), d3
+    messages = [
+        ("-u", "user one\nexact"),
+        ("-a", "assistant one  exact"),
+        ("-u", "user two"),
+        ("-a", "assistant two"),
+        ("-u", "user three"),
+        ("-a", "assistant three"),
+        ("-u", "user four"),
+    ]
+    for flag, message in messages:
+        j("session", "session", "exchange", flag, message)
+    exchange = j("session", "session", "exchange")
+    assert exchange["depth"] == 6 and len(exchange["exchange"]) == 6, exchange
+    assert exchange["exchange"][0]["message"] == "assistant one  exact", exchange
+    assert exchange["exchange"][-1] == {"role": "user", "message": "user four"}, exchange
 
-    j("session", "session", "checkpoint", "s-d4")
-    j("session", "session", "answer", "No semantic change is required")
-    assert j("session", "session", "resume")["resume_action"] == "interpret_pending_answer_before_new_questions"
-    j("session", "session", "applied")
-    assert j("session", "session", "resume")["resume_action"] == "finalize_applied_answer_before_new_questions"
-    j("session", "session", "advance")
-    assert j("session", "show", "s-d4")["state"] == "open"
+    exchange = j("session", "session", "exchange", "--depth", "4")
+    assert exchange["depth"] == 4 and len(exchange["exchange"]) == 4
+    assert exchange["exchange"][0]["message"] == "assistant two"
+    fail("session", "session", "exchange", "--depth", "1")
+    fail("session", "session", "exchange", "-u", "one", "-a", "two")
+    exchange = j("session", "session", "exchange", "--depth", "3", "-a", "new assistant")
+    assert exchange["depth"] == 3 and len(exchange["exchange"]) == 3
+    assert exchange["exchange"][-1] == {"role": "assistant", "message": "new assistant"}
 
-    j("session", "session", "checkpoint", "s-d5")
-    j("session", "session", "answer", "Still no graph mutation required")
-    j("session", "session", "advance", "--phase", "discovery", "--no-mutation")
-    assert j("session", "show", "s-d5")["state"] == "open"
+    assert j("session", "session", "pending")["pending"] is None
+    pending_text = "1. First exact question?\n2. Second exact question?"
+    assert j("session", "session", "pending", pending_text)["pending"] == pending_text
+    fail("session", "session", "pending", "   ")
+    fail("session", "session", "pending", "replacement", "--clear")
+    fail("session", "session", "end")
+    assert j("session", "session", "pending", "--clear")["pending"] is None
 
-    assert j("session", "session", "finish")["finished"] is True
-    assert j("session", "session", "status")["exists"] is False
-    j("session", "session", "start", "--invocation", "/map abandon test", "--interpreted", "test abandoned session", "--focus", "s-root")
-    assert j("session", "session", "abandon")["status"] == "abandoned"
-    fail("session", "session", "resume")
-    j("session", "session", "start", "--invocation", "/map replacement session", "--interpreted", "replace abandoned session", "--focus", "s-root")
-    j("session", "session", "confirm")
-    j("session", "session", "finish")
-    valid("session")
-    print("PASS: complete session/recovery surface")
+    ended = j("session", "session", "end")
+    assert ended == {"ended": True, "forced": False, "discarded_pending": False}, ended
+    assert j("session", "status")["sessions"] == 0
+    fail("session", "session", "summary")
+
+    j("session", "session", "init")
+    j("session", "session", "pending", "Potentially unpersisted work")
+    forced = j("session", "session", "end", "--force")
+    assert forced == {"ended": True, "forced": True, "discarded_pending": True}, forced
+    assert j("session", "status")["sessions"] == 0
+    print("PASS: recovery-capsule CRUD and limits")
+
+
+def test_session_ordering_and_recovery() -> None:
+    add("abc", "decision", "Enable the feature?", "abc-decision", "--authority", "inferred")
+    j("abc", "session", "init")
+
+    assistant = "Should the feature be enabled?"
+    answer = "Yes, enable it."
+    j("abc", "session", "exchange", "-a", assistant)
+    j("abc", "session", "pending", assistant)
+
+    # A: the user's exact response and completed-pair summary become durable first.
+    j("abc", "session", "exchange", "-u", answer)
+    j("abc", "session", "summary", "功能啟用待定；assistant 問是否啟用，user 明答 Yes, enable it.")
+    assert j("abc", "session", "pending")["pending"] == assistant
+    assert j("abc", "show", "abc-decision")["state"] == "open"
+
+    # B: normal Map commands persist the semantic consequence.
+    j("abc", "decide", "abc-decision", "true")
+    decided = j("abc", "show", "abc-decision")
+    assert decided["state"] == "decided" and decided["value"] is True, decided
+
+    # A crash here is recoverable: pending intentionally remains until C.
+    assert j("abc", "session", "pending")["pending"] == assistant
+    recovery_exchange = j("abc", "session", "exchange")["exchange"]
+    assert recovery_exchange[-2:] == [
+        {"role": "assistant", "message": assistant},
+        {"role": "user", "message": answer},
+    ]
+
+    # C: only verified persistence allows pending to clear.
+    assert j("abc", "session", "pending", "--clear")["pending"] is None
+    assert j("abc", "session", "end")["ended"] is True
+    print("PASS: session-first A -> B -> C recovery ordering")
 
 
 def test_validator() -> None:
@@ -307,7 +340,8 @@ def main() -> None:
     test_help()
     test_core()
     test_processes()
-    test_session()
+    test_session_capsule()
+    test_session_ordering_and_recovery()
     test_validator()
     print("\n======================================")
     print("ALL MAP RUNTIME STRESS TESTS PASSED")

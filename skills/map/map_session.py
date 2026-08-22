@@ -1,14 +1,13 @@
-"""Durable workflow/session state for the /map prototype.
+"""Durable conversational recovery state for Map.
 
-Session records are deliberately separate from authoritative graph nodes. The public
-session command grammar is intentionally unchanged for now; only the underlying
-node-state semantics use the cleaned `decided` vocabulary.
+Session state is deliberately separate from authoritative graph state. It stores only
+the compact recovery summary, a rolling verbatim exchange, and potentially unpersisted
+pending conversational work.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,13 +19,25 @@ import map_state
 
 SESSION_ID = RecordID("map_session", "current")
 SESSION_COMMAND = "session"
+DEFAULT_EXCHANGE_DEPTH = 6
+MIN_EXCHANGE_DEPTH = 2
+MAX_SUMMARY_CHARS = 2200
+
+
+def _session_rows(db: Any) -> list[dict[str, Any]]:
+    value = db.select("map_session")
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
 
 
 def get_session(db: Any) -> dict[str, Any] | None:
-    value = db.select(SESSION_ID)
-    if isinstance(value, list):
-        return value[0] if value else None
-    return value
+    rows = _session_rows(db)
+    if len(rows) > 1:
+        raise RuntimeError(f"Multiple Map sessions exist ({len(rows)}); end the session before continuing")
+    return rows[0] if rows else None
 
 
 def require_session(db: Any) -> dict[str, Any]:
@@ -36,388 +47,173 @@ def require_session(db: Any) -> dict[str, Any]:
     return session
 
 
-def node_ids(values: list[str]) -> list[RecordID]:
-    return [map_state.rid(value) for value in values]
+def normalize_summary(text: str) -> str:
+    return " ".join(text.split())
 
 
-def session_summary(db: Any, session: dict[str, Any]) -> dict[str, Any]:
-    frontier_nodes: list[dict[str, Any]] = []
-    for record_id in session.get("presented_frontier", []) or []:
-        node = map_state.get_node(db, str(record_id))
-        if node:
-            frontier_nodes.append({
-                "id": node["id"],
-                "state": node.get("state"),
-                "subject": node.get("subject"),
-            })
-        else:
-            frontier_nodes.append({"id": record_id, "missing": True})
-
-    focus_nodes: list[dict[str, Any]] = []
-    for record_id in session.get("focus_nodes", []) or []:
-        node = map_state.get_node(db, str(record_id))
-        if node:
-            focus_nodes.append({"id": node["id"], "kind": node.get("kind"), "subject": node.get("subject")})
-        else:
-            focus_nodes.append({"id": record_id, "missing": True})
-
-    result = {
-        "id": session["id"],
-        "status": session.get("status"),
-        "phase": session.get("phase"),
-        "depth": session.get("depth"),
-        "stance": session.get("stance"),
-        "setup_confirmed": session.get("setup_confirmed", False),
-        "raw_invocation": session.get("raw_invocation"),
-        "interpreted_request": session.get("interpreted_request"),
-        "focus_nodes": focus_nodes,
-        "presented_frontier": frontier_nodes,
-        "pending_user_answer": session.get("pending_user_answer"),
-        "pending_operation": session.get("pending_operation"),
-        "pending_operation_applied": session.get("pending_operation_applied", False),
-        "created_at": session.get("created_at"),
-        "updated_at": session.get("updated_at"),
+def summary_payload(session: dict[str, Any]) -> dict[str, Any]:
+    summary = session.get("summary") or ""
+    return {
+        "summary": summary,
+        "characters": len(summary),
+        "limit": MAX_SUMMARY_CHARS,
     }
-    return {key: value for key, value in result.items() if value is not None}
 
 
-def resume_action(session: dict[str, Any]) -> str:
-    answer = session.get("pending_user_answer")
-    applied = session.get("pending_operation_applied", False)
-    operation = session.get("pending_operation")
-    if answer is not None:
-        if applied:
-            return "finalize_applied_answer_before_new_questions"
-        if operation:
-            return "apply_pending_answer_before_new_questions"
-        return "interpret_pending_answer_before_new_questions"
-    if not session.get("setup_confirmed", False):
-        return "confirm_scope_and_setup_before_graph_mutation"
-    if session.get("presented_frontier"):
-        return "resume_exact_presented_frontier"
-    return "continue_session_phase"
+def exchange_payload(session: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "depth": int(session.get("exchange_depth") or DEFAULT_EXCHANGE_DEPTH),
+        "exchange": list(session.get("exchange") or []),
+    }
 
 
-def start_session(
-    db: Any,
-    *,
-    raw_invocation: str,
-    interpreted_request: str,
-    focus: list[str],
-    depth: str,
-    stance: str,
-) -> dict[str, Any]:
-    existing = get_session(db)
-    if existing and existing.get("status") in {"active", "paused"}:
-        raise ValueError("An unfinished Map session already exists; resume or abandon it before starting another")
-    if existing:
-        db.delete(SESSION_ID)
+def pending_payload(session: dict[str, Any]) -> dict[str, Any]:
+    return {"pending": session.get("pending")}
 
-    for focus_id in focus:
-        if not map_state.get_node(db, focus_id):
-            raise ValueError(f"No focus node {focus_id!r}")
 
+def init_session(db: Any) -> dict[str, Any]:
+    if get_session(db):
+        raise ValueError("A Map session already exists; end it before initializing another")
     db.create(SESSION_ID, {
-        "status": "active",
-        "phase": "setup",
-        "focus_nodes": node_ids(focus),
-        "raw_invocation": raw_invocation,
-        "interpreted_request": interpreted_request,
-        "depth": depth,
-        "stance": stance,
-        "setup_confirmed": False,
-        "presented_frontier": [],
-        "pending_user_answer": None,
-        "pending_operation": None,
-        "pending_operation_applied": False,
+        "summary": "",
+        "exchange_depth": DEFAULT_EXCHANGE_DEPTH,
+        "exchange": [],
+        "pending": None,
     })
-    return session_summary(db, require_session(db))
-
-
-def confirm_session(db: Any) -> dict[str, Any]:
     session = require_session(db)
-    if session.get("status") not in {"active", "paused"}:
-        raise ValueError(f"Cannot confirm session in status {session.get('status')!r}")
-    if session.get("pending_user_answer") is not None:
-        raise ValueError("Cannot confirm setup while a user answer is pending recovery")
-    db.query(
-        "UPDATE $session_id MERGE { setup_confirmed: true, status: 'active', phase: 'confirmed', updated_at: time::now() };",
-        {"session_id": SESSION_ID},
-    )
-    return session_summary(db, require_session(db))
-
-
-def eligible_frontier_ids(db: Any, session: dict[str, Any]) -> set[str]:
-    focus_records = session.get("focus_nodes", []) or []
-    if not focus_records:
-        return {map_state.node_key(item["id"]) for item in map_state.compute_frontier(db)["frontier"]}
-    eligible: set[str] = set()
-    for focus in focus_records:
-        result = map_state.compute_frontier(db, str(focus))
-        eligible.update(map_state.node_key(item["id"]) for item in result["frontier"])
-    return eligible
-
-
-def checkpoint_session(db: Any, *, phase: str, frontier: list[str]) -> dict[str, Any]:
-    session = require_session(db)
-    if not session.get("setup_confirmed", False):
-        raise ValueError("Setup must be confirmed before presenting a substantive frontier")
-    if session.get("pending_user_answer") is not None:
-        raise ValueError("A pending user answer must be recovered before presenting a new frontier")
-
-    eligible = eligible_frontier_ids(db, session)
-    requested: list[RecordID] = []
-    for node_id in frontier:
-        node = map_state.get_node(db, node_id)
-        if not node:
-            raise ValueError(f"No frontier node {node_id!r}")
-        key = map_state.node_key(node["id"])
-        if key not in eligible:
-            raise ValueError(f"{node_id!r} is not currently frontier-eligible for this session focus")
-        requested.append(map_state.rid(node_id))
-
-    db.query(
-        "UPDATE $session_id MERGE { status: 'active', phase: $phase, presented_frontier: $frontier, updated_at: time::now() };",
-        {"session_id": SESSION_ID, "phase": phase, "frontier": requested},
-    )
-    return session_summary(db, require_session(db))
-
-
-def persist_answer(db: Any, *, raw_answer: str, operation: str | None) -> dict[str, Any]:
-    session = require_session(db)
-    if not session.get("setup_confirmed", False):
-        raise ValueError("Cannot persist a substantive answer before setup confirmation")
-    if session.get("pending_user_answer") is not None:
-        raise ValueError("A user answer is already pending; recover it before accepting another")
-    if not session.get("presented_frontier"):
-        raise ValueError("No presented frontier is awaiting an answer")
-    db.query(
-        "UPDATE $session_id MERGE { phase: 'answer_received', pending_user_answer: $answer, pending_operation: $operation, pending_operation_applied: false, updated_at: time::now() };",
-        {"session_id": SESSION_ID, "answer": raw_answer, "operation": operation},
-    )
-    return session_summary(db, require_session(db))
-
-
-def _pending_apply_session(db: Any) -> dict[str, Any]:
-    session = require_session(db)
-    if session.get("pending_user_answer") is None:
-        raise ValueError("No pending user answer exists")
-    if session.get("pending_operation_applied", False):
-        raise ValueError("Pending user answer is already marked applied")
-    if not session.get("setup_confirmed", False):
-        raise ValueError("Cannot mutate authoritative Map state before setup confirmation")
-    return session
-
-
-def _validate_settlement_targets(
-    db: Any,
-    session: dict[str, Any],
-    settlements: list[tuple[str, Any]],
-) -> list[tuple[str, Any, dict[str, Any]]]:
-    if not settlements:
-        raise ValueError("At least one settlement is required")
-    presented = {map_state.node_key(item) for item in session.get("presented_frontier", []) or []}
-    seen: set[str] = set()
-    validated: list[tuple[str, Any, dict[str, Any]]] = []
-    for node_id, value in settlements:
-        node = map_state.get_node(db, node_id)
-        if not node:
-            raise ValueError(f"No node {node_id!r}")
-        key = map_state.node_key(node["id"])
-        if key in seen:
-            raise ValueError(f"Duplicate settlement target {node_id!r}")
-        seen.add(key)
-        if node.get("kind") != "decision":
-            raise ValueError(f"{node_id!r} is {node.get('kind')!r}, not a decision")
-        if node.get("state") not in map_state.DECISION_ACTIONABLE_STATES:
-            raise ValueError(
-                f"{node_id!r} is in state {node.get('state')!r}; expected one of "
-                f"{sorted(map_state.DECISION_ACTIONABLE_STATES)}"
-            )
-        if key not in presented:
-            raise ValueError(f"{node_id!r} was not in the exact presented frontier for this pending answer")
-        validated.append((node_id, value, node))
-    return validated
-
-
-def atomic_decide_batch(db: Any, *, settlements: list[tuple[str, Any]]) -> dict[str, Any]:
-    """Decide several presented decisions and mark one pending answer applied atomically."""
-    session = _pending_apply_session(db)
-    validated = _validate_settlement_targets(db, session, settlements)
-
-    statements = ["BEGIN TRANSACTION;"]
-    params: dict[str, Any] = {"session_id": SESSION_ID}
-    for index, (node_id, value, _) in enumerate(validated):
-        node_param = f"node_{index}"
-        value_param = f"value_{index}"
-        statements.append(
-            f"UPDATE ${node_param} MERGE {{ state: 'decided', value: ${value_param}, authority: 'user', updated_at: time::now() }};"
-        )
-        params[node_param] = map_state.rid(node_id)
-        params[value_param] = value
-
-    statements.extend([
-        """UPDATE $session_id MERGE {
-            phase: 'answer_applied',
-            pending_operation_applied: true,
-            updated_at: time::now()
-        };""",
-        "COMMIT TRANSACTION;",
-    ])
-    raw = db.query_raw("\n".join(statements), params)
-    map_state.check_raw_response(raw)
-
-    nodes_after: list[dict[str, Any]] = []
-    for node_id, value, _ in validated:
-        node_after = map_state.get_node(db, node_id)
-        if not node_after or node_after.get("state") != "decided" or node_after.get("value") != value:
-            raise RuntimeError(f"Atomic decision batch did not persist expected state for {node_id!r}")
-        nodes_after.append(node_after)
-
-    session_after = require_session(db)
-    if not session_after.get("pending_operation_applied", False):
-        raise RuntimeError("Atomic decision batch did not persist the session application marker")
-
     return {
         "ok": True,
-        "atomic": True,
-        "count": len(nodes_after),
-        "nodes": nodes_after,
-        "session": session_summary(db, session_after),
+        "session": str(session["id"]),
+        **summary_payload(session),
+        **exchange_payload(session),
+        **pending_payload(session),
     }
 
 
-def atomic_decide_pending(db: Any, *, node_id: str, value: Any) -> dict[str, Any]:
-    result = atomic_decide_batch(db, settlements=[(node_id, value)])
-    return {
-        "ok": result["ok"],
-        "atomic": result["atomic"],
-        "node": result["nodes"][0],
-        "session": result["session"],
-    }
-
-
-def parse_settlement_object(text: str) -> list[tuple[str, Any]]:
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"apply-settles expects a JSON object: {exc.msg}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("apply-settles expects a JSON object mapping decision IDs to values")
-    return [(str(node_id), value) for node_id, value in payload.items()]
-
-
-def mark_applied(db: Any) -> dict[str, Any]:
-    session = require_session(db)
-    if session.get("pending_user_answer") is None:
-        raise ValueError("No pending user answer exists")
-    if session.get("pending_operation") is not None:
+def set_summary(db: Any, text: str) -> dict[str, Any]:
+    require_session(db)
+    normalized = normalize_summary(text)
+    if len(normalized) > MAX_SUMMARY_CHARS:
         raise ValueError(
-            "Pending graph operation cannot be marked applied manually; use an atomic 'session apply-*' command"
+            f"Summary exceeds {MAX_SUMMARY_CHARS}-character limit "
+            f"({len(normalized)}/{MAX_SUMMARY_CHARS}); consolidate and retry"
         )
     db.query(
-        "UPDATE $session_id MERGE { phase: 'answer_applied', pending_operation_applied: true, updated_at: time::now() };",
-        {"session_id": SESSION_ID},
+        "UPDATE $session MERGE { summary: $summary, updated_at: time::now() };",
+        {"session": SESSION_ID, "summary": normalized},
     )
-    return session_summary(db, require_session(db))
+    return summary_payload(require_session(db))
 
 
-def advance_session(db: Any, *, phase: str, no_mutation: bool) -> dict[str, Any]:
+def update_exchange(
+    db: Any,
+    *,
+    depth: int | None = None,
+    role: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
     session = require_session(db)
-    if session.get("pending_user_answer") is None:
-        raise ValueError("No pending user answer exists to finalize")
-    if not session.get("pending_operation_applied", False) and not no_mutation:
-        raise ValueError("Pending answer has not been applied; use an atomic 'session apply-*' command or --no-mutation")
-    db.query(
-        "UPDATE $session_id MERGE { phase: $phase, presented_frontier: [], pending_user_answer: NONE, pending_operation: NONE, pending_operation_applied: false, updated_at: time::now() };",
-        {"session_id": SESSION_ID, "phase": phase},
-    )
-    return session_summary(db, require_session(db))
+    current_depth = int(session.get("exchange_depth") or DEFAULT_EXCHANGE_DEPTH)
+    if depth is not None:
+        if depth < MIN_EXCHANGE_DEPTH:
+            raise ValueError(f"Exchange depth must be at least {MIN_EXCHANGE_DEPTH}")
+        current_depth = depth
 
+    exchange = list(session.get("exchange") or [])
+    if role is not None:
+        if message is None:
+            raise ValueError("Exchange append requires a message")
+        exchange.append({"role": role, "message": message})
 
-def resume_session(db: Any) -> dict[str, Any]:
-    session = require_session(db)
-    if session.get("status") == "abandoned":
-        raise ValueError("Current session was abandoned; start a new session")
-    if session.get("status") == "paused":
+    if len(exchange) > current_depth:
+        exchange = exchange[-current_depth:]
+
+    if depth is not None or role is not None:
         db.query(
-            "UPDATE $session_id MERGE { status: 'active', updated_at: time::now() };",
-            {"session_id": SESSION_ID},
+            """UPDATE $session MERGE {
+                exchange_depth: $depth,
+                exchange: $exchange,
+                updated_at: time::now()
+            };""",
+            {"session": SESSION_ID, "depth": current_depth, "exchange": exchange},
         )
         session = require_session(db)
-    return {"resume_action": resume_action(session), "session": session_summary(db, session)}
+
+    return exchange_payload(session)
 
 
-def set_status(db: Any, status: str) -> dict[str, Any]:
-    session = require_session(db)
+def set_pending(db: Any, text: str) -> dict[str, Any]:
+    require_session(db)
+    if not text.strip():
+        raise ValueError("Pending content must not be empty; use --clear to remove it")
     db.query(
-        "UPDATE $session_id MERGE { status: $status, updated_at: time::now() };",
-        {"session_id": SESSION_ID, "status": status},
+        "UPDATE $session MERGE { pending: $pending, updated_at: time::now() };",
+        {"session": SESSION_ID, "pending": text},
     )
-    return session_summary(db, require_session(db))
+    return pending_payload(require_session(db))
 
 
-def finish_session(db: Any) -> dict[str, Any]:
+def clear_pending(db: Any) -> dict[str, Any]:
+    require_session(db)
+    db.query(
+        "UPDATE $session MERGE { pending: NONE, updated_at: time::now() };",
+        {"session": SESSION_ID},
+    )
+    return pending_payload(require_session(db))
+
+
+def end_session(db: Any, *, force: bool) -> dict[str, Any]:
     session = require_session(db)
-    if session.get("pending_user_answer") is not None:
-        raise ValueError("Cannot finish while a user answer is pending recovery")
-    snapshot = session_summary(db, session)
-    db.delete(SESSION_ID)
-    return {"finished": True, "session": snapshot}
+    pending = session.get("pending")
+    if pending is not None and not force:
+        raise ValueError("Cannot end Map session while pending work exists; clear it or use --force")
+    discarded_pending = pending is not None
+    db.query("DELETE map_session;")
+    if get_session(db) is not None:
+        raise RuntimeError("Map session deletion did not complete")
+    return {
+        "ended": True,
+        "forced": force,
+        "discarded_pending": discarded_pending,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="map session", description="Durable /map workflow session state")
-    parser.add_argument("--root", type=Path, default=Path.cwd(), help="Directory whose .map/ state should be used")
+    parser = argparse.ArgumentParser(
+        prog="map session",
+        description="Durable conversational recovery state for Map",
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help="Directory whose .map/ state should be used",
+    )
     sub = parser.add_subparsers(dest="session_command", required=True)
 
-    start = sub.add_parser("start", help="Create a non-authoritative setup checkpoint")
-    start.add_argument("--invocation", required=True)
-    start.add_argument("--interpreted", required=True)
-    start.add_argument("--focus", action="append", default=[])
-    start.add_argument("--depth", choices=["mvp", "thorough"], default="mvp")
-    start.add_argument("--stance", choices=["normal", "adversarial"], default="normal")
+    sub.add_parser("init", help="Initialize a new recovery session")
 
-    sub.add_parser("status", help="Show the current session checkpoint")
-    sub.add_parser("confirm", help="Confirm interpreted scope/setup before semantic graph mutation")
+    summary = sub.add_parser("summary", help="Read or replace the compact recovery summary")
+    summary.add_argument("new_summary", nargs="?")
 
-    checkpoint = sub.add_parser("checkpoint", help="Persist the exact frontier before presenting questions")
-    checkpoint.add_argument("--phase", default="questioning")
-    checkpoint.add_argument("frontier", nargs="*")
-
-    answer = sub.add_parser("answer", help="Persist the raw user answer before graph mutation")
-    answer.add_argument("answer")
-    answer.add_argument("--operation", help="Optional intended graph operation description")
-
-    apply_settle = sub.add_parser(
-        "apply-settle",
-        help="Atomically decide one presented decision and mark its pending answer applied",
-    )
-    apply_settle.add_argument("id")
-    apply_settle.add_argument("value", help="JSON scalar/object/array, or plain text")
-
-    apply_settles = sub.add_parser(
-        "apply-settles",
-        help="Atomically decide several presented decisions from one pending answer",
-    )
-    apply_settles.add_argument(
-        "settlements",
-        help='JSON object mapping decision IDs to values, e.g. \'{"first-due":"user-selected","local-persistence":true}\'',
+    exchange = sub.add_parser("exchange", help="Read or update the rolling verbatim exchange")
+    roles = exchange.add_mutually_exclusive_group()
+    roles.add_argument("-u", "--user", metavar="MESSAGE", help="Append an exact user message")
+    roles.add_argument("-a", "--assistant", metavar="MESSAGE", help="Append an exact assistant message")
+    exchange.add_argument(
+        "--depth",
+        type=int,
+        metavar="N",
+        help=f"Set retained message count (default {DEFAULT_EXCHANGE_DEPTH}, minimum {MIN_EXCHANGE_DEPTH})",
     )
 
-    sub.add_parser(
-        "applied",
-        help="Manual compatibility marker; rejected when a pending graph operation exists",
-    )
+    pending = sub.add_parser("pending", help="Read, replace, or clear potentially unpersisted work")
+    pending.add_argument("new_pending", nargs="?")
+    pending.add_argument("--clear", action="store_true", help="Clear pending work after Map persistence is verified")
 
-    advance = sub.add_parser("advance", help="Clear a recovered/applied answer and continue")
-    advance.add_argument("--phase", default="discovery")
-    advance.add_argument("--no-mutation", action="store_true", help="Explicitly confirm that this answer required no graph mutation")
+    end = sub.add_parser("end", help="Delete the current recovery session")
+    end.add_argument("--force", action="store_true", help="Delete even when pending work exists")
 
-    sub.add_parser("resume", help="Return the highest-priority exact recovery action")
-    sub.add_parser("pause", help="Pause without discarding workflow continuity")
-    sub.add_parser("abandon", help="Explicitly abandon the current session")
-    sub.add_parser("finish", help="Delete stable session state after successful completion")
     return parser
 
 
@@ -427,40 +223,37 @@ def main(argv: list[str] | None = None) -> int:
     try:
         def run(db: Any):
             command = args.session_command
-            if command == "start":
-                map_state.emit(start_session(
+            if command == "init":
+                map_state.emit(init_session(db))
+            elif command == "summary":
+                if args.new_summary is None:
+                    map_state.emit(summary_payload(require_session(db)))
+                else:
+                    map_state.emit(set_summary(db, args.new_summary))
+            elif command == "exchange":
+                role = None
+                message = None
+                if args.user is not None:
+                    role, message = "user", args.user
+                elif args.assistant is not None:
+                    role, message = "assistant", args.assistant
+                map_state.emit(update_exchange(
                     db,
-                    raw_invocation=args.invocation,
-                    interpreted_request=args.interpreted,
-                    focus=args.focus,
                     depth=args.depth,
-                    stance=args.stance,
+                    role=role,
+                    message=message,
                 ))
-            elif command == "status":
-                session = get_session(db)
-                map_state.emit({"exists": bool(session), "session": session_summary(db, session) if session else None})
-            elif command == "confirm":
-                map_state.emit(confirm_session(db))
-            elif command == "checkpoint":
-                map_state.emit(checkpoint_session(db, phase=args.phase, frontier=args.frontier))
-            elif command == "answer":
-                map_state.emit(persist_answer(db, raw_answer=args.answer, operation=args.operation))
-            elif command == "apply-settle":
-                map_state.emit(atomic_decide_pending(db, node_id=args.id, value=map_state.parse_scalar(args.value)))
-            elif command == "apply-settles":
-                map_state.emit(atomic_decide_batch(db, settlements=parse_settlement_object(args.settlements)))
-            elif command == "applied":
-                map_state.emit(mark_applied(db))
-            elif command == "advance":
-                map_state.emit(advance_session(db, phase=args.phase, no_mutation=args.no_mutation))
-            elif command == "resume":
-                map_state.emit(resume_session(db))
-            elif command == "pause":
-                map_state.emit(set_status(db, "paused"))
-            elif command == "abandon":
-                map_state.emit(set_status(db, "abandoned"))
-            elif command == "finish":
-                map_state.emit(finish_session(db))
+            elif command == "pending":
+                if args.clear and args.new_pending is not None:
+                    raise ValueError("pending text and --clear are mutually exclusive")
+                if args.clear:
+                    map_state.emit(clear_pending(db))
+                elif args.new_pending is not None:
+                    map_state.emit(set_pending(db, args.new_pending))
+                else:
+                    map_state.emit(pending_payload(require_session(db)))
+            elif command == "end":
+                map_state.emit(end_session(db, force=args.force))
             else:
                 raise AssertionError(command)
 

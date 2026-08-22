@@ -2,7 +2,7 @@
 
 Python prototype of `/map`, a durable, queryable graph of user intent for agents and humans.
 
-The graph is authoritative. `/map` and ordinary agents interact with it through the Map CLI rather than reading SurrealKV files directly. Authoritative graph state and temporary workflow/session continuity are separate.
+The graph is authoritative. `/map` and ordinary agents interact with it through the Map CLI rather than reading SurrealKV files directly. Authoritative graph state and disposable conversational recovery state are separate.
 
 ## Installation boundary
 
@@ -48,11 +48,7 @@ Direct prototype development from `skills/map/`:
 pip install -e .
 ```
 
-This exposes:
-
-```text
-map
-```
+This exposes `map`.
 
 The normal command surface is:
 
@@ -109,17 +105,9 @@ Authority/provenance remains independent from kind/state. Direct CLI additions d
 
 ### Decision changes
 
-```bash
-map decide <id> <value>
-```
+`map decide <id> <value>` moves an actionable decision to `decided`. Calling `decide` again on an already-decided node is rejected so authoritative history cannot be silently overwritten.
 
-moves an actionable decision to `decided`. Calling `decide` again on an already-decided node is rejected so authoritative history cannot be silently overwritten.
-
-```bash
-map revise <id> <new-value>
-```
-
-creates a new generated decision record, marks the previous decision `superseded`, preserves the lineage, and marks directly affected decided dependents `needs_review`. `--new-id` is an explicit import/testing override rather than normal grammar.
+`map revise <id> <new-value>` creates a new generated decision record, marks the previous decision `superseded`, preserves lineage, and marks directly affected decided dependents `needs_review`. `--new-id` is an explicit import/testing override rather than normal grammar.
 
 ## Read/query surface
 
@@ -132,38 +120,37 @@ map search <text>
 map explain <id>
 ```
 
-`history` reconstructs supersession lineage. `context` returns compact current authoritative state for a branch. `related` exposes literal direct graph edges. `validate` checks both graph structure and kind/state semantics without repair. `search` performs deterministic lexical retrieval and excludes superseded history unless `--include-history` is supplied. `explain` gathers graph-supported lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations without inventing rationale that was never stored.
+`history` reconstructs supersession lineage. `context` returns compact current authoritative state for a branch. `related` exposes literal direct graph edges. `validate` checks graph structure and kind/state semantics without repair. `search` performs deterministic lexical retrieval and excludes superseded history unless `--include-history` is supplied. Exact subject matches dominate weaker token overlap. `explain` gathers graph-supported lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations without inventing rationale.
 
-## Durable workflow session prototype
+## Durable recovery session
 
-Session state lives in `map_session`, not the authoritative graph. The session command names are intentionally unchanged pending a separate grammar review.
+`map_session` is not another mutation API. It is a disposable recovery capsule for conversational state that may be lost during a crash or context switch.
 
-Key ordering invariant:
-
-1. persist the exact presented frontier;
-2. persist the raw user answer;
-3. atomically apply authoritative decision values and the session application marker;
-4. clear the pending answer and advance.
-
-Current commands include:
-
-```bash
-map session start ...
-map session status
-map session confirm
-map session checkpoint ...
-map session answer ...
-map session apply-settle ...
-map session apply-settles ...
-map session applied
-map session advance ...
-map session resume
-map session pause
-map session abandon
-map session finish
+```text
+map session init
+map session summary [new_summary]
+map session exchange [-u MESSAGE | -a MESSAGE] [--depth N]
+map session pending [new_pending | --clear]
+map session end [--force]
 ```
 
-The `apply-settle`/`apply-settles` names are legacy session grammar for now. Their underlying node-state result is `decided`, not `settled`.
+The recovery capsule contains:
+
+- a normalized summary capped at 2200 characters;
+- a rolling verbatim assistant/user exchange, default depth 6 and minimum 2;
+- exact pending conversational work that may not yet be safely represented in the graph.
+
+The summary is intentionally compact and is updated after a user response completes an assistant/user exchange, not merely when the assistant speaks. The skill writes it in concise Classical Chinese while preserving technical terms, names, identifiers, quotations, and anything that cannot be translated without semantic loss.
+
+The core ordering invariant is:
+
+1. persist conversational state to `map_session` as completely as possible;
+2. persist and verify semantic consequences through ordinary `map` commands;
+3. clear `session pending` only after those consequences are verified durable.
+
+If a crash happens after step 2 but before step 3, recovery sees the pending work, inspects the authoritative graph, and can determine that the mutation already landed rather than blindly applying it twice.
+
+`map session end` refuses while pending work exists. `--force` explicitly discards potentially unpersisted recovery state and is intended only when the user chooses to abandon it.
 
 ## Current milestone
 
@@ -178,11 +165,10 @@ Implemented:
 - non-destructive decision revision and supersession history;
 - dependent `needs_review` reopening;
 - read-only history/context/related/validate/search/explain queries;
-- durable setup/question/answer recovery;
-- atomic single- and multi-decision pending-answer application;
 - generated collision-safe node IDs;
-- kind-specific state validation and migration away from the old `settled` decision state.
+- kind-specific state validation and migration away from the old `settled` decision state;
+- durable recovery summary, rolling raw exchange, pending-work recovery, and session-first A → B → C ordering.
 
-Still intentionally incomplete inside a pending-answer cycle: revision/promotion and other structural mutations, transitive affected-descendant mutation, atomic initial baseline creation, and a crash-safe intent-satisfaction lifecycle mutation.
+Still intentionally incomplete: transitive affected-descendant mutation, atomic initial baseline creation, and a crash-safe intent-satisfaction lifecycle mutation.
 
-`seed_chores()` remains an internal development fixture in `map_state.py` for prototype evaluation but is no longer part of the public CLI.
+`seed_chores()` remains an internal development fixture in `map_state.py` for prototype evaluation but is not part of the public CLI.

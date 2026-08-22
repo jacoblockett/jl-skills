@@ -138,6 +138,8 @@ def build_parser() -> argparse.ArgumentParser:
     explain = sub.add_parser("explain", help="Show stored graph context supporting one node")
     explain.add_argument("id")
 
+    sub.add_parser("session", help="Manage durable conversational recovery state")
+
     return parser
 
 
@@ -145,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
     command = command_name(args_list)
 
-    # Session grammar is intentionally left alone for the next design pass.
+    # Session owns a compact parser and is dispatched before the primary parser.
     if command == map_session.SESSION_COMMAND:
         return map_session.main(without_command(args_list, command))
 
