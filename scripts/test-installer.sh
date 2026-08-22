@@ -2,38 +2,54 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-work="$(mktemp -d "${TMPDIR:-/tmp}/jl-skill-test.XXXXXX")"
-project="$work/project"
-fake_home="$work/home"
-fake_home_win="$(cygpath -w "$fake_home")"
-bin="$work/build/jl-skill.exe"
-
-cleanup() {
-  rm -rf "$work"
-}
-trap cleanup EXIT
-
-mkdir -p "$project" "$fake_home" "$work/build"
+if [[ -d /c/Programming ]]; then
+  work="${1:-/c/Programming/jl-skill-test}"
+else
+  work="${1:-$(cd "$repo/.." && pwd -P)/jl-skill-test}"
+fi
+run_root="$work/run"
+project="$run_root/project"
+wizard_project="$run_root/wizard-project"
+fake_home="$run_root/home"
+bin_dir="$run_root/bin"
+bin="$bin_dir/jl-skill.exe"
 
 say() { printf '\n==> %s\n' "$*"; }
 fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
 
-say "Building standalone consumer jl-skill.exe"
-bash "$repo/scripts/build-windows.sh" "$work/build"
+rm -rf "$run_root"
+mkdir -p "$project" "$wizard_project" "$fake_home" "$bin_dir"
+
+if command -v cygpath >/dev/null 2>&1; then
+  project_arg="$(cygpath -w "$project")"
+  fake_home_env="$(cygpath -w "$fake_home")"
+else
+  project_arg="$project"
+  fake_home_env="$fake_home"
+fi
+
+say "Verifying installer is Bun-only"
+if find "$repo" -maxdepth 1 -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) -print | grep -q .; then
+  find "$repo" -maxdepth 1 -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) -print
+  fail "legacy Go installer files are still present"
+fi
+
+grep -Fq '"@clack/prompts": "1.7.0"' "$repo/package.json" || fail "@clack/prompts 1.7.0 is not pinned"
+
+say "Building standalone consumer executable"
+bash "$repo/scripts/build-windows.sh" "$bin_dir"
 
 version="$($bin --version)"
 printf '%s\n' "$version"
-[[ "$version" == "jl-skill 0.2.0 (@clack/prompts 1.7.0)" ]] || fail "unexpected consumer binary identity"
+[[ "$version" == "jl-skill 0.3.0 (@clack/prompts 1.7.0)" ]] || fail "unexpected binary identity"
 
-say "Static guards"
-if grep -RIn --include='*.go' --exclude-dir=.git -E 'Skills to install.*comma|comma-separated|bufio\.NewReader|charmbracelet/huh' "$repo" 2>/dev/null; then
-  fail "obsolete freeform/Huh installer UI code is present"
+say "Static guards against obsolete prompt/core architecture"
+if grep -RIn --exclude-dir=.git --exclude-dir=node_modules --exclude='*.exe' -E 'comma-separated|bufio\.NewReader|charmbracelet/huh|jl-skill-core' "$repo"; then
+  fail "obsolete installer architecture/prompt code is present"
 fi
-grep -Fq "from '@clack/prompts'" "$repo/src/jl-skill.ts" || fail "consumer frontend is not using @clack/prompts"
-grep -Fq '"@clack/prompts": "1.7.0"' "$repo/package.json" || fail "@clack/prompts is not pinned to 1.7.0"
 
-say "Installing Map into an isolated project for Codex"
-USERPROFILE="$fake_home_win" HOME="$fake_home" "$bin" map --scope "$project" --agent codex
+say "Installing Map into isolated project for Codex"
+USERPROFILE="$fake_home_env" HOME="$fake_home" "$bin" map --scope "$project_arg" --agent codex
 
 [[ -f "$project/.agents/skills/map/SKILL.md" ]] || fail "Codex project skill missing"
 [[ -f "$project/AGENTS.md" ]] || fail "project AGENTS.md missing"
@@ -44,19 +60,19 @@ USERPROFILE="$fake_home_win" HOME="$fake_home" "$bin" map --scope "$project" --a
 [[ ! -e "$project/CLAUDE.md" ]] || fail "CLAUDE.md was created during Codex-only install"
 [[ ! -d "$project/.jl-skill/runtime/map/site-packages" ]] || fail "legacy non-isolated site-packages directory exists"
 
-grep -Fq "$project" "$project/.agents/skills/map/SKILL.md" || fail "installed SKILL.md does not contain scope-local CLI path"
+grep -Fq 'map-state.cmd' "$project/.agents/skills/map/SKILL.md" || fail "installed SKILL.md does not contain scope-local CLI"
 [[ "$(grep -Fc '<!-- jl-skill:begin map -->' "$project/AGENTS.md")" -eq 1 ]] || fail "managed Map block count is not 1"
 [[ "$(grep -Fc '<!-- jl-skill:end map -->' "$project/AGENTS.md")" -eq 1 ]] || fail "managed Map block end count is not 1"
 
 say "Reinstalling to verify idempotency"
-USERPROFILE="$fake_home_win" HOME="$fake_home" "$bin" map --scope "$project" --agent codex
+USERPROFILE="$fake_home_env" HOME="$fake_home" "$bin" map --scope "$project_arg" --agent codex
 [[ "$(grep -Fc '<!-- jl-skill:begin map -->' "$project/AGENTS.md")" -eq 1 ]] || fail "reinstall duplicated managed Map block"
 
-say "Validating installed Map database/runtime"
-USERPROFILE="$fake_home_win" HOME="$fake_home" \
+say "Validating Map runtime directly"
+USERPROFILE="$fake_home_env" HOME="$fake_home" \
   "$project/.jl-skill/runtime/map/venv/Scripts/python.exe" \
   "$project/.jl-skill/runtime/map/runner.py" \
-  --root "$project" validate >/dev/null
+  --root "$project_arg" validate >/dev/null
 
 say "Checking installer receipt isolation"
 registry="$fake_home/.jl-skill/registry.json"
@@ -65,24 +81,25 @@ grep -Fq '"agent": "codex"' "$registry" || fail "Codex receipt missing"
 grep -Fq '"skill": "map"' "$registry" || fail "Map receipt missing"
 
 printf '\nPASS: automated installer regression succeeded.\n'
-printf '  consumer:        exact @clack/prompts frontend\n'
+printf '  test root:       %s\n' "$work"
 printf '  build identity:  %s\n' "$version"
+printf '  implementation:  Bun/TypeScript only\n'
+printf '  prompt package:  @clack/prompts 1.7.0\n'
 printf '  runtime:         isolated Python venv verified\n'
-printf '  Map DB:          validate passed\n'
+printf '  Map DB:          init + validation passed\n'
 printf '  idempotency:     managed block remains singular\n'
 printf '  scope isolation: no Claude project install\n'
 
-say "Opening the actual Clack wizard in a fresh temporary directory"
-printf 'This is @clack/prompts, the same prompt package used by current Vite.\n'
-printf 'Expected controls: arrows navigate, Space selects, Enter confirms. Ctrl+C cancels.\n'
-printf 'Cancelling after visually checking it is fine.\n\n'
+say "Opening bare create-vite prompt stack"
+printf 'Expected: Clack arrow-key controls; Space toggles multiselects; Enter confirms. Ctrl+C cancels.\n'
+printf 'The wizard runs from %s, not the jl-skills repo.\n\n' "$wizard_project"
 (
-  cd "$work"
-  USERPROFILE="$fake_home_win" HOME="$fake_home" "$bin"
+  cd "$wizard_project"
+  USERPROFILE="$fake_home_env" HOME="$fake_home" "$bin"
 ) || status=$?
 status="${status:-0}"
 if [[ "$status" -ne 0 ]]; then
   printf '\nWizard exited with status %s (Ctrl+C/cancel is expected).\n' "$status"
 fi
 
-printf '\nInstaller test run complete. Temporary test project removed.\n'
+printf '\nInstaller test run complete. Test files remain at %s for inspection.\n' "$work"
