@@ -13,13 +13,20 @@
     "map_state.py",
     "schema.surql"
   ],
+  "runtime": "python",
   "runtime_dependencies": [
     "surrealdb"
   ],
+  "runtime_entrypoint": "map_entry:main",
+  "runtime_cli": "map-state",
+  "cli_token": "JL_MAP_CLI",
   "instruction_fragment": "AGENTS.fragment.md",
-  "runtime": "python",
   "project_init": [
     "map-state",
     "init"
+  ],
+  "project_validate": [
+    "map-state",
+    "validate"
   ]
 }
