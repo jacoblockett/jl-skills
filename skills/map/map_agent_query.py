@@ -74,7 +74,9 @@ def search_nodes(db: Any, query: str, *, limit: int = 10, include_history: bool 
     nodes = map_state.all_nodes(db)
     replacements = map_state.supersession_map(db)
     terms = _tokens(query)
+    query_cf = query.casefold()
     ranked: list[tuple[int, dict[str, Any]]] = []
+    exact: list[tuple[int, dict[str, Any]]] = []
 
     for node in nodes:
         key = map_state.node_key(node["id"])
@@ -85,7 +87,15 @@ def search_nodes(db: Any, query: str, *, limit: int = 10, include_history: bool 
                 continue
         score = _score_node(node, query, terms)
         if score:
-            ranked.append((score, node))
+            item = (score, node)
+            ranked.append(item)
+            if _text(node.get("subject")).casefold() == query_cf:
+                exact.append(item)
+
+    # An exact subject match is an unambiguous lookup signal. Do not dilute it with
+    # weak token-overlap hits such as other nodes that happen to contain "should".
+    if exact:
+        ranked = exact
 
     ranked.sort(key=lambda item: (-item[0], map_state.node_key(item[1]["id"])))
     results = []
