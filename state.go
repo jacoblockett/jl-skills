@@ -36,7 +36,7 @@ func agentPaths(agent string, s scope) (string, string, error) {
 func detectedAgents() []string {
 	var out []string
 	for _, spec := range agentCatalog {
-		if harnessDetected(spec.Command, spec.Marker) {
+		if harnessDetected(spec) {
 			out = append(out, spec.ID)
 		}
 	}
@@ -44,16 +44,46 @@ func detectedAgents() []string {
 	return out
 }
 
-func harnessDetected(command, marker string) bool {
-	if _, err := exec.LookPath(command); err == nil {
+func harnessDetected(spec agentSpec) bool {
+	if _, err := exec.LookPath(spec.Command); err == nil {
 		return true
 	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
 	}
-	st, err := os.Stat(filepath.Join(home, marker))
-	return err == nil && st.IsDir()
+
+	switch spec.ID {
+	case "codex":
+		// Codex desktop/CLI may be present without a PATH command. A real Codex
+		// home contains state/config rather than merely an unrelated empty folder.
+		return anyPathExists(
+			filepath.Join(home, ".codex", "config.toml"),
+			filepath.Join(home, ".codex", "sessions"),
+			filepath.Join(home, ".codex", "AGENTS.md"),
+		)
+	case "claude":
+		// Do not treat ~/.claude alone as proof of Claude Code. Other developer
+		// tools/extensions can create that directory. Require a CLI or a known
+		// Claude Code state/config marker.
+		return anyPathExists(
+			filepath.Join(home, ".claude", "settings.json"),
+			filepath.Join(home, ".claude", "projects"),
+			filepath.Join(home, ".claude.json"),
+		)
+	default:
+		return false
+	}
+}
+
+func anyPathExists(paths ...string) bool {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveScope(raw string) (scope, error) {
