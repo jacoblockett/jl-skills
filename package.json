@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.3.0",
   "type": "module",
+  "scripts": {
+    "build": "bun scripts/build.ts"
+  },
   "dependencies": {
     "@clack/prompts": "1.7.0"
   },
