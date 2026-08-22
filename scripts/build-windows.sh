@@ -23,7 +23,6 @@ printf '==> Generating embedded skill catalog\n'
 printf '==> Compiling standalone jl-skill.exe\n'
 "$bun" build "$repo/src/jl-skill.ts" \
   --compile \
-  --target=bun-windows-x64-baseline \
   --outfile "$out/jl-skill.exe"
 
 printf 'Built: %s\n' "$out/jl-skill.exe"
