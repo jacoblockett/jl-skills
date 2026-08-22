@@ -17,63 +17,44 @@ func runInstall(args []string) error {
 	var skills []string
 	var scopeRaw string
 	var agents repeatedFlag
-	interactive := isInteractive()
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		switch a {
-		case "--scope":
+		switch {
+		case a == "--scope":
 			if i+1 >= len(args) {
 				return errors.New("--scope requires user, cwd, or a path")
 			}
 			i++
 			scopeRaw = args[i]
-		case "--agent":
+		case strings.HasPrefix(a, "--scope="):
+			scopeRaw = strings.TrimPrefix(a, "--scope=")
+		case a == "--agent":
 			if i+1 >= len(args) {
 				return errors.New("--agent requires a harness name")
 			}
 			i++
 			agents = append(agents, args[i])
-		case "--help", "-h":
+		case strings.HasPrefix(a, "--agent="):
+			agents = append(agents, strings.TrimPrefix(a, "--agent="))
+		case a == "--help" || a == "-h":
 			printHelp()
 			return nil
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("unknown option %s", a)
 		default:
-			if strings.HasPrefix(a, "-") {
-				return fmt.Errorf("unknown option %s", a)
-			}
 			skills = append(skills, a)
 		}
 	}
 
-	if len(skills) > 0 {
-		if err := validateSkills(skills); err != nil {
-			return err
-		}
-	}
-
-	prompted := false
 	if len(skills) == 0 {
-		if !interactive {
-			return errors.New("no skills selected")
-		}
-		chosen, err := promptSkills()
-		if err != nil {
-			return normalizePromptError(err)
-		}
-		skills = chosen
-		prompted = true
+		return errors.New("no skills selected; interactive choices are handled by the jl-skill frontend")
 	}
-
-	if scopeRaw == "" {
-		if !interactive {
-			return errors.New("--scope is required in non-interactive mode")
-		}
-		chosen, err := promptScope()
-		if err != nil {
-			return normalizePromptError(err)
-		}
-		scopeRaw = chosen
-		prompted = true
+	if err := validateSkills(skills); err != nil {
+		return err
+	}
+	if strings.TrimSpace(scopeRaw) == "" {
+		return errors.New("--scope is required; interactive choices are handled by the jl-skill frontend")
 	}
 
 	s, err := resolveScope(scopeRaw)
@@ -81,26 +62,20 @@ func runInstall(args []string) error {
 		return err
 	}
 
-	resolvedAgents, agentPrompted, err := chooseAgents(agents, interactive)
+	resolvedAgents, err := normalizeAgents(agents)
 	if err != nil {
-		return normalizePromptError(err)
+		return err
 	}
-	prompted = prompted || agentPrompted
+	if len(resolvedAgents) == 0 {
+		resolvedAgents = detectedAgents()
+		if len(resolvedAgents) == 0 {
+			return errors.New("no supported AI harness detected; use --agent explicitly")
+		}
+	}
 
-	if prompted {
-		ok, err := promptInstallConfirmation(skills, s, resolvedAgents)
-		if err != nil {
-			return normalizePromptError(err)
-		}
-		if !ok {
-			fmt.Println("Cancelled.")
-			return nil
-		}
-	} else {
-		fmt.Printf("Scope: %s\n", s.Identity)
-		fmt.Printf("Agents: %s\n", strings.Join(resolvedAgents, ", "))
-		fmt.Printf("Skills: %s\n", strings.Join(skills, ", "))
-	}
+	fmt.Printf("Scope: %s\n", s.Identity)
+	fmt.Printf("Agents: %s\n", strings.Join(resolvedAgents, ", "))
+	fmt.Printf("Skills: %s\n", strings.Join(skills, ", "))
 
 	for _, name := range skills {
 		m, err := loadManifest(name)
@@ -119,27 +94,31 @@ func runUpdate(args []string) error {
 	var scopeRaw string
 	var agents repeatedFlag
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--scope":
+		a := args[i]
+		switch {
+		case a == "--scope":
 			if i+1 >= len(args) {
 				return errors.New("--scope requires user, cwd, or a path")
 			}
 			i++
 			scopeRaw = args[i]
-		case "--agent":
+		case strings.HasPrefix(a, "--scope="):
+			scopeRaw = strings.TrimPrefix(a, "--scope=")
+		case a == "--agent":
 			if i+1 >= len(args) {
 				return errors.New("--agent requires a harness name")
 			}
 			i++
 			agents = append(agents, args[i])
-		case "--help", "-h":
+		case strings.HasPrefix(a, "--agent="):
+			agents = append(agents, strings.TrimPrefix(a, "--agent="))
+		case a == "--help" || a == "-h":
 			printUpdateHelp()
 			return nil
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("unknown update option %s", a)
 		default:
-			if strings.HasPrefix(args[i], "-") {
-				return fmt.Errorf("unknown update option %s", args[i])
-			}
-			names = append(names, args[i])
+			names = append(names, a)
 		}
 	}
 
@@ -157,24 +136,6 @@ func runUpdate(args []string) error {
 	}
 	if len(groups) == 0 {
 		return errors.New("no installations match update filters")
-	}
-
-	interactive := isInteractive()
-	hasFilters := len(names) > 0 || scopeRaw != "" || len(agents) > 0
-	if interactive && !hasFilters {
-		selected, err := promptUpdateGroups(groups)
-		if err != nil {
-			return normalizePromptError(err)
-		}
-		groups = selected
-		ok, err := promptUpdateConfirmation(groups)
-		if err != nil {
-			return normalizePromptError(err)
-		}
-		if !ok {
-			fmt.Println("Cancelled.")
-			return nil
-		}
 	}
 
 	for _, g := range groups {
@@ -379,18 +340,8 @@ Usage:
   jl-skill [skills...] --scope user|cwd|PATH [--agent AGENT]...
   jl-skill update [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
 
-Interactive usage:
-  jl-skill
-  jl-skill map
-  jl-skill update
-
-Supported harnesses:
-  codex
-  claude
-
-Interactive mode uses a keyboard-driven selector. Explicit command-line flags remain
-available for scripting and automation. When exactly one supported harness is detected,
-it is selected automatically.`)
+Interactive usage is provided by the consumer jl-skill frontend using @clack/prompts.
+The Go binary is the embedded installer core used by that frontend.`)
 }
 
 func printUpdateHelp() {
@@ -399,11 +350,5 @@ func printUpdateHelp() {
 Usage:
   jl-skill update [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
 
-With no filters on an interactive terminal, jl-skill presents all managed installations
-as a multi-select list and asks for confirmation before updating.`)
-}
-
-func isInteractive() bool {
-	st, err := os.Stdin.Stat()
-	return err == nil && (st.Mode()&os.ModeCharDevice) != 0
+Bare interactive update selection is provided by the consumer jl-skill frontend.`)
 }
