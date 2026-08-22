@@ -1,20 +1,16 @@
-"""Small state-engine prototype for the /map skill.
-
-This is intentionally not the /map conversational skill. It is the deterministic
-primitive that the future skill and ordinary agents will query.
-"""
+"""Deterministic state engine for the /map skill."""
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
 try:
     from surrealdb import RecordID, Surreal
-except ImportError as exc:  # pragma: no cover - useful message before dependency install
+except ImportError as exc:  # pragma: no cover
     raise SystemExit(
         "Missing dependency: surrealdb. Install this prototype with `pip install -e .` "
         "from skills/map/."
@@ -31,10 +27,29 @@ RELATIONS = {
     "supersedes",
     "related_to",
 }
+NODE_KINDS = ("intent", "decision", "constraint", "criterion", "idea", "fact")
+AUTHORITIES = ("user", "inferred", "external", "derived", "none")
 
-DECISION_READY_STATES = {"settled", "satisfied"}
+DEFAULT_STATE = {
+    "intent": "active",
+    "decision": "open",
+    "constraint": "active",
+    "criterion": "active",
+    "idea": "parked",
+    "fact": "active",
+}
+VALID_STATES = {
+    "intent": {"active", "satisfied", "dormant", "superseded", "abandoned"},
+    "decision": {"open", "decided", "inapplicable", "superseded", "needs_review", "invalidated"},
+    "constraint": {"active", "superseded", "abandoned"},
+    "criterion": {"active", "satisfied", "superseded", "abandoned"},
+    "idea": {"parked", "superseded", "abandoned"},
+    "fact": {"active", "superseded", "invalidated"},
+}
+
+DECISION_READY_STATES = {"decided"}
 DECISION_ACTIONABLE_STATES = {"open", "needs_review"}
-DECISION_REVIEWABLE_STATES = {"settled", "satisfied"}
+DECISION_REVIEWABLE_STATES = {"decided"}
 
 
 def db_dir(root: Path) -> Path:
@@ -42,8 +57,6 @@ def db_dir(root: Path) -> Path:
 
 
 def db_url(root: Path) -> str:
-    # Surreal's embedded URL accepts an absolute filesystem path. as_posix() also
-    # avoids backslash escaping problems when this is run from Windows.
     return f"surrealkv://{db_dir(root).as_posix()}"
 
 
@@ -51,10 +64,28 @@ def schema_text() -> str:
     return (Path(__file__).resolve().parent / "schema.surql").read_text(encoding="utf-8")
 
 
-def rid(node_id: str) -> RecordID:
-    if node_id.startswith("node:"):
-        node_id = node_id.split(":", 1)[1]
-    return RecordID("node", node_id)
+def normalize_node_id(node_id: Any) -> str:
+    text = str(node_id)
+    if text.startswith("node:"):
+        text = text.split(":", 1)[1]
+    if text.startswith("⟨") and text.endswith("⟩"):
+        text = text[1:-1]
+    if not text:
+        raise ValueError("Node ID must not be empty")
+    return text
+
+
+def rid(node_id: Any) -> RecordID:
+    return RecordID("node", normalize_node_id(node_id))
+
+
+def generate_node_id() -> str:
+    """Generate a collision-safe simple string record key.
+
+    uuid4().hex avoids punctuation that SurrealDB would render with escaped record-ID
+    wrappers while retaining 122 bits of randomness.
+    """
+    return uuid.uuid4().hex
 
 
 def printable(value: Any) -> Any:
@@ -72,7 +103,6 @@ def emit(value: Any) -> None:
 
 
 def check_raw_response(raw: Any) -> None:
-    """Raise on SurrealQL errors while tolerating SDK response-shape changes."""
     statements = raw.get("result", []) if isinstance(raw, dict) else raw
     if not isinstance(statements, (list, tuple)):
         return
@@ -106,11 +136,56 @@ def init_map(root: Path) -> None:
         db.close()
 
 
-def create_node(db: Any, node_id: str, data: dict[str, Any]) -> Any:
+def default_authority(kind: str) -> str:
+    # Parked ideas are explicitly non-authoritative. For direct CLI additions, other
+    # kinds default to user provenance; agents must override provenance when inferred,
+    # external, or derived.
+    return "none" if kind == "idea" else "user"
+
+
+def validate_node_semantics(kind: str, state: str) -> None:
+    if kind not in NODE_KINDS:
+        raise ValueError(f"Unknown node kind {kind!r}; allowed: {list(NODE_KINDS)}")
+    if state not in VALID_STATES[kind]:
+        raise ValueError(
+            f"State {state!r} is invalid for {kind!r}; allowed: {sorted(VALID_STATES[kind])}"
+        )
+
+
+def semantic_state_errors(nodes: list[dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    for node in nodes:
+        kind = node.get("kind")
+        state = node.get("state")
+        node_id = node_key(node.get("id"))
+        if kind not in NODE_KINDS:
+            errors.append(f"{node_id} has unknown kind {kind!r}")
+            continue
+        if state not in VALID_STATES[kind]:
+            errors.append(
+                f"{node_id} has invalid {kind} state {state!r}; allowed: {sorted(VALID_STATES[kind])}"
+            )
+    return errors
+
+
+def create_node(db: Any, node_id: str | None, data: dict[str, Any]) -> Any:
+    kind = data["kind"]
+    if kind not in NODE_KINDS:
+        raise ValueError(f"Unknown node kind {kind!r}; allowed: {list(NODE_KINDS)}")
+    state = data.get("state") or DEFAULT_STATE[kind]
+    authority = data.get("authority") or default_authority(kind)
+    validate_node_semantics(kind, state)
+    if authority not in AUTHORITIES:
+        raise ValueError(f"Unknown authority {authority!r}; allowed: {list(AUTHORITIES)}")
+
+    node_id = normalize_node_id(node_id) if node_id is not None else generate_node_id()
+    if get_node(db, node_id):
+        raise ValueError(f"Node {node_id!r} already exists")
+
     payload = {
-        "kind": data["kind"],
-        "state": data["state"],
-        "authority": data["authority"],
+        "kind": kind,
+        "state": state,
+        "authority": authority,
         "subject": data["subject"],
         "detail": data.get("detail"),
         "value": data.get("value"),
@@ -142,7 +217,7 @@ def all_nodes(db: Any) -> list[dict[str, Any]]:
     return list(db.select("node") or [])
 
 
-def get_node(db: Any, node_id: str) -> dict[str, Any] | None:
+def get_node(db: Any, node_id: Any) -> dict[str, Any] | None:
     value = db.select(rid(node_id))
     if isinstance(value, list):
         return value[0] if value else None
@@ -154,7 +229,6 @@ def node_key(value: Any) -> str:
 
 
 def parse_scalar(text: str) -> Any:
-    """Accept convenient JSON scalars/objects while keeping ordinary text as text."""
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -164,12 +238,10 @@ def parse_scalar(text: str) -> Any:
 def condition_matches(prerequisite: dict[str, Any], condition: dict[str, Any] | None) -> bool:
     if not condition:
         return True
-
     field = condition.get("field", "value")
     op = condition.get("op", "eq")
     expected = condition.get("value")
     actual = prerequisite.get(field)
-
     if op == "eq":
         return actual == expected
     if op == "neq":
@@ -180,18 +252,16 @@ def condition_matches(prerequisite: dict[str, Any], condition: dict[str, Any] | 
 
 
 def contained_scope(db: Any, focus_id: str) -> set[str]:
-    """Return the focus node plus everything recursively contained beneath it."""
     focus = get_node(db, focus_id)
     if not focus:
         raise ValueError(f"No focus node {focus_id!r}")
-
     edges = list(db.select("contains") or [])
     children: dict[str, list[str]] = {}
     for edge in edges:
         children.setdefault(node_key(edge["in"]), []).append(node_key(edge["out"]))
-
-    seen = {node_key(focus["id"])}
-    queue = [node_key(focus["id"])]
+    start = node_key(focus["id"])
+    seen = {start}
+    queue = [start]
     while queue:
         current = queue.pop(0)
         for child in children.get(current, []):
@@ -202,7 +272,6 @@ def contained_scope(db: Any, focus_id: str) -> set[str]:
 
 
 def supersession_map(db: Any) -> dict[str, str]:
-    """Map superseded node IDs to their direct replacements."""
     replacements: dict[str, str] = {}
     for edge in list(db.select("supersedes") or []):
         old_id = node_key(edge["out"])
@@ -214,7 +283,6 @@ def supersession_map(db: Any) -> dict[str, str]:
 
 
 def resolve_current_id(node_id: str, replacements: dict[str, str]) -> str:
-    """Follow a supersession chain to the current effective node."""
     current = node_id
     seen: set[str] = set()
     while current in replacements:
@@ -255,11 +323,9 @@ def compute_frontier(db: Any, focus_id: str | None = None) -> dict[str, Any]:
             if not prerequisite:
                 reasons.append(f"missing prerequisite {current_id}")
                 continue
-
             if prerequisite.get("state") not in DECISION_READY_STATES:
                 reasons.append(f"waiting for {prerequisite['id']}")
                 continue
-
             if not condition_matches(prerequisite, edge.get("condition")):
                 applicable = False
                 reasons.append(f"condition false for {prerequisite['id']}")
@@ -284,34 +350,37 @@ def compute_frontier(db: Any, focus_id: str | None = None) -> dict[str, Any]:
     return result
 
 
-def settle_decision(db: Any, node_id: str, value: Any) -> Any:
+def decide_decision(db: Any, node_id: str, value: Any, *, authority: str = "user") -> Any:
     node = get_node(db, node_id)
     if not node:
         raise ValueError(f"No node {node_id!r}")
     if node.get("kind") != "decision":
         raise ValueError(f"{node_id!r} is {node.get('kind')!r}, not a decision")
-    if node.get("state") == "superseded":
-        raise ValueError(f"{node_id!r} is superseded; settle its current replacement instead")
+    if node.get("state") not in DECISION_ACTIONABLE_STATES:
+        if node.get("state") == "decided":
+            raise ValueError(f"{node_id!r} is already decided; use revise to change an authoritative decision")
+        raise ValueError(
+            f"{node_id!r} is in state {node.get('state')!r}; expected one of "
+            f"{sorted(DECISION_ACTIONABLE_STATES)}"
+        )
+    if authority not in AUTHORITIES:
+        raise ValueError(f"Unknown authority {authority!r}; allowed: {list(AUTHORITIES)}")
     return db.query(
-        "UPDATE $node MERGE { state: 'settled', value: $value, updated_at: time::now() };",
-        {"node": rid(node_id), "value": value},
+        "UPDATE $node MERGE { state: 'decided', value: $value, authority: $authority, updated_at: time::now() };",
+        {"node": rid(node_id), "value": value, "authority": authority},
     )
 
 
 def revise_decision(
     db: Any,
     old_id: str,
-    new_id: str,
     value: Any,
     *,
+    new_id: str | None = None,
     subject: str | None = None,
+    authority: str = "user",
 ) -> dict[str, Any]:
-    """Replace a decision without overwriting history.
-
-    Settled direct decision dependents are marked needs_review. Existing dependency
-    edges continue to reference the historical decision; frontier evaluation follows
-    supersedes edges to the current replacement.
-    """
+    """Replace a decided decision without overwriting history."""
     old = get_node(db, old_id)
     if not old:
         raise ValueError(f"No node {old_id!r}")
@@ -319,6 +388,12 @@ def revise_decision(
         raise ValueError(f"{old_id!r} is {old.get('kind')!r}, not a decision")
     if old.get("state") == "superseded":
         raise ValueError(f"{old_id!r} is already superseded; revise the current replacement")
+    if old.get("state") not in {"decided", "needs_review"}:
+        raise ValueError(f"{old_id!r} is {old.get('state')!r}; use decide for an unresolved decision")
+    if authority not in AUTHORITIES:
+        raise ValueError(f"Unknown authority {authority!r}; allowed: {list(AUTHORITIES)}")
+
+    new_id = normalize_node_id(new_id) if new_id is not None else generate_node_id()
     if get_node(db, new_id):
         raise ValueError(f"Replacement node {new_id!r} already exists")
 
@@ -332,8 +407,8 @@ def revise_decision(
         new_id,
         {
             "kind": "decision",
-            "state": "settled",
-            "authority": "user",
+            "state": "decided",
+            "authority": authority,
             "subject": subject or old.get("subject") or old_id,
             "detail": old.get("detail"),
             "value": value,
@@ -376,27 +451,23 @@ def revise_decision(
 
 
 def promote_idea(db: Any, node_id: str, parent_id: str | None = None) -> dict[str, Any]:
-    """Promote a parked future-goal idea into active user intent."""
     node = get_node(db, node_id)
     if not node:
         raise ValueError(f"No node {node_id!r}")
     if node.get("kind") != "idea" or node.get("state") != "parked":
         raise ValueError(f"{node_id!r} must be a parked idea before it can be promoted")
-
     if parent_id is not None:
         parent = get_node(db, parent_id)
         if not parent:
             raise ValueError(f"No parent node {parent_id!r}")
         if parent.get("kind") != "intent":
             raise ValueError(f"Parent {parent_id!r} is {parent.get('kind')!r}, not an intent")
-
     db.query(
         "UPDATE $node MERGE { kind: 'intent', state: 'active', authority: 'user', updated_at: time::now() };",
         {"node": rid(node_id)},
     )
     if parent_id is not None:
         relate(db, parent_id, "contains", node_id)
-
     promoted = get_node(db, node_id)
     if promoted is None:
         raise RuntimeError(f"Promoted node {node_id!r} disappeared")
@@ -411,7 +482,7 @@ def wipe(db: Any) -> None:
 
 
 def seed_chores(db: Any) -> None:
-    """Seed the first real regression fixture at its initial unresolved frontier."""
+    """Development fixture: reset state and seed the recurring-chore example."""
     wipe(db)
 
     create_node(db, "chores", {
@@ -429,7 +500,7 @@ def seed_chores(db: Any) -> None:
     ]
     for node_id, subject in constraints:
         create_node(db, node_id, {
-            "kind": "constraint", "state": "settled", "authority": "user", "subject": subject,
+            "kind": "constraint", "state": "active", "authority": "user", "subject": subject,
         })
         relate(db, node_id, "constrains", "chores")
 
@@ -444,7 +515,7 @@ def seed_chores(db: Any) -> None:
     ]
     for node_id, subject in decisions:
         create_node(db, node_id, {
-            "kind": "decision", "state": "open", "authority": "user", "subject": subject,
+            "kind": "decision", "state": "open", "authority": "inferred", "subject": subject,
         })
         relate(db, "chores", "contains", node_id)
 
@@ -472,120 +543,3 @@ def command_with_db(root: Path, fn):
         return fn(db)
     finally:
         db.close()
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="map-state", description="Prototype /map intent-graph state CLI")
-    parser.add_argument("--root", type=Path, default=Path.cwd(), help="Directory whose .map/ state should be used")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    sub.add_parser("init", help="Initialize .map/db and apply the schema")
-    sub.add_parser("status", help="Show node/relation counts")
-    sub.add_parser("list", help="List all graph nodes")
-    frontier = sub.add_parser("frontier", help="Show actionable, blocked, and conditionally inapplicable decisions")
-    frontier.add_argument("--focus", help="Limit candidate decisions to this node and its contained descendants")
-    sub.add_parser("ideas", help="List parked ideas")
-    sub.add_parser("seed-chores", help="Reset state and seed the recurring-chore regression fixture")
-
-    show = sub.add_parser("show", help="Show one node")
-    show.add_argument("id")
-
-    settle = sub.add_parser("settle", help="Settle a decision with a value")
-    settle.add_argument("id")
-    settle.add_argument("value", help="JSON scalar/object/array, or plain text")
-
-    revise = sub.add_parser("revise", help="Replace a decision while preserving its historical record")
-    revise.add_argument("old_id")
-    revise.add_argument("new_id")
-    revise.add_argument("value", help="New JSON scalar/object/array, or plain text")
-    revise.add_argument("--subject", help="Optional replacement subject text")
-
-    promote = sub.add_parser("promote", help="Promote a parked idea into active user intent")
-    promote.add_argument("id")
-    promote.add_argument("--parent", help="Existing intent that should contain the promoted intent")
-
-    add = sub.add_parser("add-node", help="Create a graph node")
-    add.add_argument("id")
-    add.add_argument("kind", choices=["intent", "decision", "constraint", "criterion", "idea", "fact"])
-    add.add_argument("state")
-    add.add_argument("authority", choices=["user", "inferred", "external", "derived", "none"])
-    add.add_argument("subject")
-    add.add_argument("--detail")
-    add.add_argument("--value")
-
-    edge = sub.add_parser("relate", help="Create a semantic graph relation")
-    edge.add_argument("source")
-    edge.add_argument("relation", choices=sorted(RELATIONS))
-    edge.add_argument("target")
-    edge.add_argument("--note")
-    edge.add_argument("--condition", help="JSON condition object; only valid for depends_on")
-
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    root: Path = args.root
-
-    try:
-        if args.command == "init":
-            init_map(root)
-            return 0
-
-        def run(db: Any):
-            if args.command == "status":
-                counts = {"nodes": len(all_nodes(db))}
-                for relation in sorted(RELATIONS):
-                    counts[relation] = len(db.select(relation) or [])
-                counts["sessions"] = len(db.select("map_session") or [])
-                emit(counts)
-            elif args.command == "list":
-                emit(all_nodes(db))
-            elif args.command == "show":
-                emit(get_node(db, args.id))
-            elif args.command == "frontier":
-                emit(compute_frontier(db, args.focus))
-            elif args.command == "ideas":
-                emit([n for n in all_nodes(db) if n.get("kind") == "idea" and n.get("state") == "parked"])
-            elif args.command == "seed-chores":
-                seed_chores(db)
-                emit({"ok": True, "fixture": "chores", **compute_frontier(db)})
-            elif args.command == "settle":
-                value = parse_scalar(args.value)
-                settle_decision(db, args.id, value)
-                emit({"ok": True, "settled": args.id, "value": value, **compute_frontier(db)})
-            elif args.command == "revise":
-                value = parse_scalar(args.value)
-                result = revise_decision(db, args.old_id, args.new_id, value, subject=args.subject)
-                emit({"ok": True, "revision": result, **compute_frontier(db)})
-            elif args.command == "promote":
-                promoted = promote_idea(db, args.id, args.parent)
-                emit({"ok": True, "promoted": args.id, "node": promoted, **compute_frontier(db)})
-            elif args.command == "add-node":
-                value = parse_scalar(args.value) if args.value is not None else None
-                result = create_node(db, args.id, {
-                    "kind": args.kind,
-                    "state": args.state,
-                    "authority": args.authority,
-                    "subject": args.subject,
-                    "detail": args.detail,
-                    "value": value,
-                })
-                emit(result)
-            elif args.command == "relate":
-                condition = json.loads(args.condition) if args.condition else None
-                if condition is not None and args.relation != "depends_on":
-                    raise ValueError("--condition is only supported for depends_on")
-                emit(relate(db, args.source, args.relation, args.target, note=args.note, condition=condition))
-            else:
-                raise AssertionError(args.command)
-
-        command_with_db(root, run)
-        return 0
-    except Exception as exc:
-        print(f"map-state: {exc}", file=sys.stderr)
-        return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
