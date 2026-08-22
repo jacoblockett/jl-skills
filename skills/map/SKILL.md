@@ -10,12 +10,12 @@ Map is persistent external memory for structured intent. The `.map/` database is
 The installer renders the Map CLI for this installation scope into the command below. For every Map state operation, invoke:
 
 ```bash
-{{JL_MAP_CLI}} <map-state arguments...>
+{{JL_MAP_CLI}} <arguments...>
 ```
 
-Examples below use `map-state ...` as compact notation only. Translate them through the rendered command above when actually executing commands.
+Examples below use `map ...` as compact notation only. Translate them through the rendered command above when actually executing commands.
 
-Never assume `map-state` is globally on PATH. Never read or edit SurrealKV files directly.
+Never assume `map` is globally on PATH. Never read or edit SurrealKV files directly.
 
 Do not spawn subagents by default. Keep orchestration in the parent until a concrete evaluation proves a separate semantic transaction is worth agentizing.
 
@@ -53,13 +53,13 @@ On every explicit Map invocation, first determine whether `.map/` exists and whe
 If `.map/` exists, run:
 
 ```bash
-map-state session status
+map session status
 ```
 
 If an active or paused session exists, run:
 
 ```bash
-map-state session resume
+map session resume
 ```
 
 Recovery state outranks starting new work. Summarize the exact stored focus, mode, phase, presented frontier, and pending answer status, then ask whether to resume or explicitly abandon. Do not silently start another session.
@@ -75,8 +75,8 @@ For a substantive mapping request, determine whether it likely targets existing 
 If `.map/` exists, use read-only commands such as:
 
 ```bash
-map-state search "<request terms>"
-map-state context <candidate-id>
+map search "<request terms>"
+map context <candidate-id>
 ```
 
 Choose an existing focus only when the match is clear. Otherwise treat it as new scope rather than guessing.
@@ -86,7 +86,7 @@ Parse depth and stance. Defaults are `mvp + normal`.
 Start a non-authoritative session checkpoint. Existing focus:
 
 ```bash
-map-state session start \
+map session start \
   --invocation "<raw invocation>" \
   --interpreted "<concise interpretation>" \
   --focus <focus-id> \
@@ -111,7 +111,7 @@ Do not create semantic nodes before this confirmation.
 On confirmation, first persist it:
 
 ```bash
-map-state session confirm
+map session confirm
 ```
 
 Then continue according to existing versus new scope.
@@ -121,63 +121,57 @@ Then continue according to existing versus new scope.
 Load current authoritative context and frontier:
 
 ```bash
-map-state context <focus-id>
-map-state frontier --focus <focus-id>
+map context <focus-id>
+map questions --focus <focus-id>
 ```
 
-Historical decisions must not be treated as current merely because a literal edge still references them. `context` and `frontier` resolve supersession chains.
+`questions` returns the current decision frontier. Historical decisions must not be treated as current merely because a literal edge still references them. `context` and the frontier evaluator resolve supersession chains.
 
 ### New scope baseline
 
-If needed, initialize storage:
+Create one root `intent` representing the confirmed outcome/problem. Do not invent a record ID; Map generates one and returns it. Retain the returned ID for subsequent relations.
 
 ```bash
-map-state init
+map add intent "<subject>" --detail "<concise durable meaning>"
 ```
 
-Create one root `intent` representing the confirmed outcome/problem. Use a short stable lowercase kebab-case ID.
+Record only explicit, durable constraints from the confirmed request. Each constraint defaults to `active` user authority. Retain each returned ID before relating it.
 
 ```bash
-map-state add-node <intent-id> intent active user "<subject>" --detail "<concise durable meaning>"
+map add constraint "<constraint>"
+map relate <constraint-id> constrains <intent-id>
 ```
 
-Record only explicit, durable constraints from the confirmed request. For each:
+If the user explicitly introduced a non-binding possibility worth retaining, ideas default to `parked` with `none` authority:
 
 ```bash
-map-state add-node <constraint-id> constraint settled user "<constraint>"
-map-state relate <constraint-id> constrains <intent-id>
+map add idea "<idea>" --detail "<neutral durable meaning>"
+map relate <idea-id> related_to <intent-id>
 ```
 
-If the user explicitly introduced a non-binding possibility worth retaining:
+Create unresolved decisions only when ambiguity is material under the current depth/stance policy. Decisions default to `open`; discovery-created questions are inferred rather than user-authored, so state their provenance explicitly:
 
 ```bash
-map-state add-node <idea-id> idea parked none "<idea>" --detail "<neutral durable meaning>"
-map-state relate <idea-id> related_to <intent-id>
-```
-
-Create unresolved decisions only when ambiguity is material under the current depth/stance policy:
-
-```bash
-map-state add-node <decision-id> decision open user "<decision question>"
-map-state relate <intent-id> contains <decision-id>
+map add decision "<decision question>" --authority inferred
+map relate <intent-id> contains <decision-id>
 ```
 
 Use `depends_on` only for a real prerequisite. Conditional applicability must use the tiny supported condition vocabulary, for example:
 
 ```bash
-map-state relate child-decision depends_on parent-decision \
+map relate <child-decision-id> depends_on <parent-decision-id> \
   --condition '{"field":"value","op":"eq","value":"separate"}'
 ```
 
 After baseline writes:
 
 ```bash
-map-state validate
+map validate
 ```
 
 If validation fails, stop. Do not ask questions against an invalid graph.
 
-Baseline creation is not yet an atomic multi-node session operation. If any baseline command fails, stop immediately, run `map-state validate`, inspect what persisted, and repair deterministically before showing a question batch. Do not pretend the baseline committed atomically.
+Baseline creation is not yet an atomic multi-node session operation. If any baseline command fails, stop immediately, run `map validate`, inspect what persisted, and repair deterministically before showing a question batch. Do not pretend the baseline committed atomically.
 
 ## Discovery policy
 
@@ -190,7 +184,7 @@ Use these gates:
 - Concrete requests raise the threshold for additional questions.
 - Optional capabilities default out unless the user introduced them or they become material.
 - Dependent questions wait until prerequisites make them applicable.
-- Do not ask semantic duplicates or reworded versions of settled decisions.
+- Do not ask semantic duplicates or reworded versions of decided decisions.
 - If engineering or execution could reasonably postpone the choice and still implement or verify the requested outcome, reject it from MVP depth.
 - Thorough depth may retain consequential adjacent choices, but still rejects speculative branch explosion.
 - Adversarial stance changes challenge level, not breadth by itself.
@@ -198,20 +192,20 @@ Use these gates:
 
 Do not force a minimum question count. A maximum visible batch of about five is a cap, not a quota.
 
-When discovery identifies a new material decision, persist it before presenting it, attach it to the correct intent with `contains`, add real dependency edges, then recompute the focused frontier.
+When discovery identifies a new material decision, persist it before presenting it, attach it to the correct intent with `contains`, add real dependency edges, then recompute the focused frontier with `map questions`.
 
 ## Present a question batch safely
 
 Select only currently eligible decisions from:
 
 ```bash
-map-state frontier --focus <focus-id>
+map questions --focus <focus-id>
 ```
 
 Before showing the questions, checkpoint the exact IDs:
 
 ```bash
-map-state session checkpoint <id-1> <id-2> ...
+map session checkpoint <id-1> <id-2> ...
 ```
 
 Only after that succeeds, present those questions to the user.
@@ -223,27 +217,27 @@ Use concise, neutral wording. Avoid giving a recommended answer by default becau
 The first action after receiving an answer to a checkpointed batch is to persist the raw answer before asking anything new or mutating authoritative graph state:
 
 ```bash
-map-state session answer "<verbatim user answer>"
+map session answer "<verbatim user answer>"
 ```
 
 Do not require yourself to have fully interpreted the answer before persisting it. If the process dies now, `session resume` will correctly require interpretation of the pending answer first.
 
 Then interpret the answer against the exact `presented_frontier`.
 
-For one or more ordinary decision settlements, use one atomic batch operation:
+For one or more ordinary decision answers, use one atomic batch operation:
 
 ```bash
-map-state session apply-settles '{"decision-a":"value","decision-b":true}'
+map session apply-settles '{"<decision-id>":"value","<decision-id>":true}'
 ```
 
 Use actual JSON types. Do not stringify booleans/numbers merely for convenience.
 
-A partial answer may settle a subset of the presented frontier. Unanswered decisions can reappear after the answer is finalized.
+A partial answer may decide a subset of the presented frontier. Unanswered decisions can reappear after the answer is finalized.
 
-After successful atomic settlement, finalize the answer:
+After successful atomic decision application, finalize the answer:
 
 ```bash
-map-state session advance --phase discovery
+map session advance --phase discovery
 ```
 
 Then recompute context/frontier and continue discovery.
@@ -251,14 +245,14 @@ Then recompute context/frontier and continue discovery.
 If the answer truly requires no semantic graph mutation, explicitly finalize it as such:
 
 ```bash
-map-state session advance --phase discovery --no-mutation
+map session advance --phase discovery --no-mutation
 ```
 
-Never use `map-state settle ...` followed by `map-state session applied` for a pending answer. That split-write path is intentionally unsafe and `session applied` rejects pending graph operations.
+Never use `map decide ...` followed by `map session applied` for a pending answer. That split-write path is intentionally unsafe and `session applied` rejects pending graph operations.
 
 ## Unsupported pending-answer mutations
 
-The current prototype has atomic pending-answer application only for decision settlement batches.
+The current prototype has atomic pending-answer application only for decision-answer batches.
 
 If a pending raw answer requires any of these:
 
@@ -273,7 +267,7 @@ Outside a pending-answer workflow, read-only queries remain safe. Do not perform
 
 ## Resume behavior
 
-`map-state session resume` returns the next required action. Obey it literally:
+`map session resume` returns the next required action. Obey it literally:
 
 - `confirm_scope_and_setup_before_graph_mutation`: ask for setup confirmation.
 - `resume_exact_presented_frontier`: reproduce the checkpointed question batch; do not discover a different batch first.
@@ -291,12 +285,12 @@ For a query with no unfinished session, do not start an interview unless the que
 Use:
 
 ```bash
-map-state search "<terms>"
-map-state explain <id>
-map-state history <id>
-map-state context <id>
-map-state related <id>
-map-state validate
+map search "<terms>"
+map explain <id>
+map history <id>
+map context <id>
+map related <id>
+map validate
 ```
 
 `search` excludes superseded history by default. Use `--include-history` only when history is relevant.
@@ -310,14 +304,14 @@ A branch is done for the current session when there is no worthwhile eligible fr
 Before stopping:
 
 ```bash
-map-state validate
-map-state frontier --focus <focus-id>
+map validate
+map questions --focus <focus-id>
 ```
 
 If the graph is valid and there is no material frontier to ask now, summarize the current state and finish the disposable session:
 
 ```bash
-map-state session finish
+map session finish
 ```
 
 Do not delete or flatten authoritative Map history when finishing a session.
@@ -336,13 +330,13 @@ The current CLI does not yet provide a crash-safe lifecycle mutation that marks 
 
 Proven and usable:
 
-- durable graph + focused frontier;
+- durable graph + focused frontier exposed through `map questions`;
 - conditional dependencies;
 - parked ideas;
 - non-destructive history queries;
 - current context/search/explain/validate queries;
 - durable setup/question/answer recovery;
-- atomic single and multi-decision settlement with session marker.
+- atomic single and multi-decision application with session marker.
 
 Not yet safe inside a pending-answer cycle:
 
