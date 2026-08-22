@@ -61,12 +61,24 @@ DEFINE FIELD IF NOT EXISTS created_at ON related_to TYPE datetime DEFAULT time::
 
 -- Session is a disposable recovery capsule, not authoritative graph state.
 DEFINE TABLE IF NOT EXISTS map_session SCHEMAFULL TYPE NORMAL;
-DEFINE FIELD IF NOT EXISTS summary ON map_session TYPE string DEFAULT "";
-DEFINE FIELD IF NOT EXISTS exchange_depth ON map_session TYPE int DEFAULT 6 ASSERT $value >= 2;
--- Remove the first recovery-capsule prototype's nested exchange schema. The
--- runtime owns the tiny {role, message} shape; SurrealDB stores the raw objects.
+-- Remove fields from the earlier workflow-state-machine session prototype.
+REMOVE FIELD IF EXISTS status ON map_session;
+REMOVE FIELD IF EXISTS phase ON map_session;
+REMOVE FIELD IF EXISTS focus_nodes ON map_session;
+REMOVE FIELD IF EXISTS raw_invocation ON map_session;
+REMOVE FIELD IF EXISTS interpreted_request ON map_session;
+REMOVE FIELD IF EXISTS depth ON map_session;
+REMOVE FIELD IF EXISTS stance ON map_session;
+REMOVE FIELD IF EXISTS setup_confirmed ON map_session;
+REMOVE FIELD IF EXISTS presented_frontier ON map_session;
+REMOVE FIELD IF EXISTS pending_user_answer ON map_session;
+REMOVE FIELD IF EXISTS pending_operation ON map_session;
+REMOVE FIELD IF EXISTS pending_operation_applied ON map_session;
 REMOVE FIELD IF EXISTS exchange.*.role ON map_session;
 REMOVE FIELD IF EXISTS exchange.*.message ON map_session;
+
+DEFINE FIELD IF NOT EXISTS summary ON map_session TYPE string DEFAULT "";
+DEFINE FIELD IF NOT EXISTS exchange_depth ON map_session TYPE int DEFAULT 6 ASSERT $value >= 2;
 DEFINE FIELD OVERWRITE exchange ON map_session TYPE array<object> FLEXIBLE DEFAULT [];
 DEFINE FIELD IF NOT EXISTS pending ON map_session TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS created_at ON map_session TYPE datetime DEFAULT time::now();
