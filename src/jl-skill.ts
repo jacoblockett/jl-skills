@@ -1,26 +1,42 @@
 import * as prompts from '@clack/prompts'
-import { chmodSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-import coreAsset from '../build/jl-skill-core.exe' with { type: 'file' }
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { dirname, join, normalize, resolve } from 'node:path'
+import { homedir, platform } from 'node:os'
+import { Buffer } from 'node:buffer'
+import { catalog } from './catalog.generated'
 
-const VERSION = '0.2.0'
+const VERSION = '0.3.0'
 const PROMPTS_VERSION = '1.7.0'
+const isWindows = platform() === 'win32'
 
 type Manifest = {
   name: string
   version: string
   description: string
-}
-
-type AgentInfo = {
-  id: string
-  label: string
-  detected: boolean
+  skill_files: string[]
+  runtime_files: string[]
+  runtime?: string
+  runtime_dependencies?: string[]
+  runtime_entrypoint?: string
+  runtime_cli?: string
+  cli_token?: string
+  instruction_fragment?: string
+  project_init?: string[]
+  project_validate?: string[]
 }
 
 type Scope = {
-  kind: string
+  kind: 'user' | 'project'
   identity: string
   root: string
 }
@@ -30,20 +46,51 @@ type Receipt = {
   version: string
   scope: Scope
   agent: string
+  skill_path: string
+  runtime_root: string
+  updated_at: string
 }
 
 type Registry = {
-  installations?: Receipt[]
+  installations: Receipt[]
 }
+
+type AgentSpec = {
+  id: string
+  label: string
+  command: string
+}
+
+type AgentInfo = AgentSpec & { detected: boolean }
 
 type ParsedInstall = {
   skills: string[]
   scope?: string
   agents: string[]
-  invalid: boolean
 }
 
-let materializedCore: string | undefined
+type ParsedUpdate = {
+  skills: string[]
+  scope?: string
+  agents: string[]
+}
+
+type UpdateGroup = {
+  key: string
+  skill: string
+  scope: Scope
+  agents: string[]
+}
+
+type PythonExec = {
+  exe: string
+  prefix: string[]
+}
+
+const agentCatalog: AgentSpec[] = [
+  { id: 'codex', label: 'OpenAI Codex', command: 'codex' },
+  { id: 'claude', label: 'Claude Code', command: 'claude' },
+]
 
 function cancel(): never {
   prompts.cancel('Operation cancelled')
@@ -55,69 +102,421 @@ function checked<T>(value: T | symbol): T {
   return value as T
 }
 
-async function corePath(): Promise<string> {
-  if (materializedCore) return materializedCore
-  const path = join(tmpdir(), `jl-skill-core-${process.pid}-${Date.now()}.exe`)
-  await Bun.write(path, Bun.file(coreAsset))
-  chmodSync(path, 0o755)
-  materializedCore = path
-  process.on('exit', () => {
-    try {
-      rmSync(path, { force: true })
-    } catch {}
-  })
-  return path
+function userHome(): string {
+  const raw = process.env.USERPROFILE || process.env.HOME || homedir()
+  return canonicalPath(raw)
 }
 
-async function runCore(args: string[], capture = false): Promise<{ code: number; stdout: string; stderr: string }> {
-  const exe = await corePath()
-  const result = Bun.spawnSync([exe, ...args], {
+function expandPath(raw: string): string {
+  let value = raw.trim()
+  value = value.replace(/%([^%]+)%/g, (whole, name) => process.env[name] ?? whole)
+  value = value.replace(/\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, braced, plain) => {
+    const name = braced || plain
+    return process.env[name] ?? whole
+  })
+  if (value === '~') return userHome()
+  if (value.startsWith('~/') || value.startsWith('~\\')) return join(userHome(), value.slice(2))
+  return value
+}
+
+function canonicalPath(raw: string): string {
+  const absolute = resolve(expandPath(raw))
+  if (existsSync(absolute)) {
+    try {
+      return normalize(realpathSync.native(absolute))
+    } catch {}
+  }
+  return normalize(absolute)
+}
+
+function resolveScope(raw: string): Scope {
+  const value = raw.trim()
+  if (value === 'user') {
+    return { kind: 'user', identity: 'user', root: userHome() }
+  }
+  if (value === 'cwd') {
+    const root = canonicalPath(process.cwd())
+    return { kind: 'project', identity: root, root }
+  }
+  if (!value) throw new Error('empty scope')
+  const root = canonicalPath(value)
+  if (existsSync(root) && !statSync(root).isDirectory()) {
+    throw new Error(`scope path is not a directory: ${root}`)
+  }
+  return { kind: 'project', identity: root, root }
+}
+
+function normalizeAgents(raw: string[]): string[] {
+  const out = new Set<string>()
+  for (const item of raw) {
+    let id = item.trim().toLowerCase()
+    if (id === 'claude-code') id = 'claude'
+    if (!agentCatalog.some((agent) => agent.id === id)) {
+      throw new Error(`unsupported agent "${item}"`)
+    }
+    out.add(id)
+  }
+  return [...out].sort()
+}
+
+function anyPathExists(paths: string[]): boolean {
+  return paths.some((path) => existsSync(path))
+}
+
+function harnessDetected(spec: AgentSpec): boolean {
+  if (Bun.which(spec.command)) return true
+  const home = userHome()
+  if (spec.id === 'codex') {
+    return anyPathExists([
+      join(home, '.codex', 'config.toml'),
+      join(home, '.codex', 'sessions'),
+      join(home, '.codex', 'AGENTS.md'),
+    ])
+  }
+  if (spec.id === 'claude') {
+    return anyPathExists([
+      join(home, '.claude', 'settings.json'),
+      join(home, '.claude', 'projects'),
+      join(home, '.claude.json'),
+    ])
+  }
+  return false
+}
+
+function detectedAgents(): AgentInfo[] {
+  return agentCatalog.map((agent) => ({ ...agent, detected: harnessDetected(agent) }))
+}
+
+function agentPaths(agent: string, scope: Scope): { skillRoot: string; instruction: string } {
+  const home = userHome()
+  if (agent === 'codex') {
+    if (scope.kind === 'user') {
+      return {
+        skillRoot: join(home, '.agents', 'skills'),
+        instruction: join(home, '.codex', 'AGENTS.md'),
+      }
+    }
+    return {
+      skillRoot: join(scope.root, '.agents', 'skills'),
+      instruction: join(scope.root, 'AGENTS.md'),
+    }
+  }
+  if (agent === 'claude') {
+    if (scope.kind === 'user') {
+      return {
+        skillRoot: join(home, '.claude', 'skills'),
+        instruction: join(home, '.claude', 'CLAUDE.md'),
+      }
+    }
+    return {
+      skillRoot: join(scope.root, '.claude', 'skills'),
+      instruction: join(scope.root, 'CLAUDE.md'),
+    }
+  }
+  throw new Error(`unsupported agent "${agent}"`)
+}
+
+function loadManifest(name: string): Manifest {
+  const item = catalog[name]
+  if (!item) throw new Error(`unknown skill "${name}"`)
+  const manifest = item.manifest as Manifest
+  if (!manifest.name || !manifest.version || !Array.isArray(manifest.skill_files) || manifest.skill_files.length === 0) {
+    throw new Error(`invalid manifest for ${name}`)
+  }
+  return manifest
+}
+
+function catalogManifests(): Manifest[] {
+  return Object.keys(catalog).sort().map(loadManifest)
+}
+
+function decodeAsset(skill: string, rel: string): Uint8Array {
+  const item = catalog[skill]
+  const encoded = item?.files?.[rel.replaceAll('\\', '/')]
+  if (encoded === undefined) throw new Error(`missing embedded asset ${skill}/${rel}`)
+  return Uint8Array.from(Buffer.from(encoded, 'base64'))
+}
+
+function atomicWrite(path: string, data: string | Uint8Array, mode = 0o644): void {
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = join(dirname(path), `.jl-skill-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  try {
+    writeFileSync(tmp, data)
+    try { chmodSync(tmp, mode) } catch {}
+    if (isWindows && existsSync(path)) rmSync(path, { force: true })
+    renameSync(tmp, path)
+  } catch (error) {
+    try { rmSync(tmp, { force: true }) } catch {}
+    throw error
+  }
+}
+
+function render(text: string, tokens: Record<string, string>): string {
+  let result = text
+  for (const [from, to] of Object.entries(tokens)) result = result.replaceAll(from, to)
+  return result
+}
+
+function extractAsset(skill: string, rel: string, dest: string, tokens?: Record<string, string>): void {
+  const bytes = decodeAsset(skill, rel)
+  if (!tokens) {
+    atomicWrite(dest, bytes)
+    return
+  }
+  const text = new TextDecoder().decode(bytes)
+  atomicWrite(dest, render(text, tokens))
+}
+
+function managedBlock(path: string, skill: string, fragment: string): void {
+  const begin = `<!-- jl-skill:begin ${skill} -->`
+  const end = `<!-- jl-skill:end ${skill} -->`
+  const block = `${begin}\n${fragment.trim()}\n${end}`
+  let current = existsSync(path) ? readFileSync(path, 'utf8') : ''
+  const beginIndex = current.indexOf(begin)
+  const endIndex = current.indexOf(end)
+  if ((beginIndex >= 0) !== (endIndex >= 0)) throw new Error(`malformed jl-skill block in ${path}`)
+  if (beginIndex >= 0) {
+    if (current.split(begin).length !== 2 || current.split(end).length !== 2 || endIndex < beginIndex) {
+      throw new Error(`ambiguous jl-skill block in ${path}`)
+    }
+    current = current.slice(0, beginIndex) + block + current.slice(endIndex + end.length)
+  } else if (!current.trim()) {
+    current = `${block}\n`
+  } else {
+    current = `${current.replace(/[\r\n]+$/, '')}\n\n${block}\n`
+  }
+  atomicWrite(path, current)
+}
+
+function registryPath(): string {
+  return join(userHome(), '.jl-skill', 'registry.json')
+}
+
+function loadRegistry(): Registry {
+  const path = registryPath()
+  if (!existsSync(path)) return { installations: [] }
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Registry
+    if (!Array.isArray(parsed.installations)) parsed.installations = []
+    return parsed
+  } catch (error) {
+    throw new Error(`read registry: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function saveReceipt(receipt: Receipt): void {
+  const registry = loadRegistry()
+  registry.installations = registry.installations.filter((old) => !(
+    old.skill === receipt.skill &&
+    old.scope.identity === receipt.scope.identity &&
+    old.agent === receipt.agent
+  ))
+  registry.installations.push(receipt)
+  atomicWrite(registryPath(), `${JSON.stringify(registry, null, 2)}\n`)
+}
+
+function run(command: string[], label: string): void {
+  const result = Bun.spawnSync(command, {
     cwd: process.cwd(),
     env: process.env,
     stdin: 'inherit',
-    stdout: capture ? 'pipe' : 'inherit',
-    stderr: capture ? 'pipe' : 'inherit',
+    stdout: 'inherit',
+    stderr: 'inherit',
   })
-  const decoder = new TextDecoder()
-  return {
-    code: result.exitCode,
-    stdout: capture ? decoder.decode(result.stdout) : '',
-    stderr: capture ? decoder.decode(result.stderr) : '',
-  }
+  if (result.exitCode !== 0) throw new Error(`${label} failed with exit ${result.exitCode}`)
 }
 
-async function coreJSON<T>(arg: string): Promise<T> {
-  const result = await runCore([arg], true)
-  if (result.code !== 0) {
-    throw new Error(result.stderr.trim() || `installer core failed with exit ${result.code}`)
+function findPython311(): PythonExec {
+  const candidates: PythonExec[] = isWindows
+    ? [
+        { exe: 'python', prefix: [] },
+        { exe: 'py', prefix: ['-3'] },
+        { exe: 'python3', prefix: [] },
+      ]
+    : [
+        { exe: 'python3', prefix: [] },
+        { exe: 'python', prefix: [] },
+      ]
+
+  for (const candidate of candidates) {
+    const found = Bun.which(candidate.exe)
+    if (!found) continue
+    const result = Bun.spawnSync([
+      found,
+      ...candidate.prefix,
+      '-c',
+      'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)',
+    ], { stdout: 'pipe', stderr: 'pipe' })
+    if (result.exitCode === 0) return { exe: found, prefix: candidate.prefix }
   }
-  return JSON.parse(result.stdout) as T
+  throw new Error('Map currently requires Python 3.11+; no compatible interpreter was found')
+}
+
+function venvPython(venvRoot: string): string {
+  return isWindows ? join(venvRoot, 'Scripts', 'python.exe') : join(venvRoot, 'bin', 'python')
+}
+
+function cmdArg(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`
+}
+
+function shArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function provisionRuntime(manifest: Manifest, packageRoot: string, runtimeRoot: string): string {
+  if (manifest.runtime !== 'python') throw new Error(`unsupported runtime "${manifest.runtime ?? ''}"`)
+  if (!manifest.runtime_entrypoint) throw new Error(`${manifest.name} manifest is missing runtime_entrypoint`)
+  if (!manifest.runtime_cli) throw new Error(`${manifest.name} manifest is missing runtime_cli`)
+
+  const host = findPython311()
+  mkdirSync(runtimeRoot, { recursive: true })
+  const venvRoot = join(runtimeRoot, 'venv')
+  const venvPy = venvPython(venvRoot)
+  if (!existsSync(venvPy)) {
+    run([host.exe, ...host.prefix, '-m', 'venv', venvRoot], `create isolated ${manifest.name} runtime`)
+  }
+
+  const dependencies = manifest.runtime_dependencies ?? []
+  if (dependencies.length > 0) {
+    run([
+      venvPy,
+      '-m',
+      'pip',
+      'install',
+      '--disable-pip-version-check',
+      '--upgrade',
+      ...dependencies,
+    ], 'install isolated runtime dependencies')
+  }
+
+  rmSync(join(runtimeRoot, 'site-packages'), { recursive: true, force: true })
+
+  const [moduleName, functionName = 'main'] = manifest.runtime_entrypoint.split(':', 2)
+  const runner = join(runtimeRoot, 'runner.py')
+  const runnerBody = [
+    'import importlib',
+    'import sys',
+    `sys.path.insert(0, ${JSON.stringify(packageRoot)})`,
+    `module = importlib.import_module(${JSON.stringify(moduleName)})`,
+    `entry = getattr(module, ${JSON.stringify(functionName)})`,
+    'raise SystemExit(entry())',
+    '',
+  ].join('\n')
+  atomicWrite(runner, runnerBody)
+
+  if (isWindows) {
+    const cli = join(runtimeRoot, `${manifest.runtime_cli}.cmd`)
+    atomicWrite(cli, `@echo off\r\n${cmdArg(venvPy)} ${cmdArg(runner)} %*\r\n`, 0o755)
+    return cli
+  }
+
+  const cli = join(runtimeRoot, manifest.runtime_cli)
+  atomicWrite(cli, `#!/bin/sh\nexec ${shArg(venvPy)} ${shArg(runner)} "$@"\n`, 0o755)
+  return cli
+}
+
+function runDeclaredCommand(cli: string, root: string, command: string[] | undefined, label: string): void {
+  if (!command || command.length === 0) return
+  const [declaredCli, ...args] = command
+  if (!declaredCli) return
+  const base = isWindows ? cli.replace(/\.cmd$/i, '') : cli
+  const declared = isWindows ? cli.replace(/\.cmd$/i, '').endsWith(declaredCli) : base.endsWith(declaredCli)
+  if (!declared) throw new Error(`unsupported declared runtime command "${declaredCli}"`)
+  run([cli, '--root', root, ...args], label)
+}
+
+function installOne(manifest: Manifest, scope: Scope, agents: string[]): void {
+  if (scope.kind === 'project') mkdirSync(scope.root, { recursive: true })
+  const dataRoot = join(scope.root, '.jl-skill')
+  const packageRoot = join(dataRoot, 'packages', manifest.name)
+  const runtimeRoot = join(dataRoot, 'runtime', manifest.name)
+
+  for (const rel of manifest.runtime_files ?? []) {
+    extractAsset(manifest.name, rel, join(packageRoot, rel))
+  }
+
+  const cli = provisionRuntime(manifest, packageRoot, runtimeRoot)
+  const tokenName = manifest.cli_token || 'JL_SKILL_CLI'
+  const tokens = { [`{{${tokenName}}}`]: normalize(cli) }
+
+  let fragment = ''
+  if (manifest.instruction_fragment) {
+    fragment = render(new TextDecoder().decode(decodeAsset(manifest.name, manifest.instruction_fragment)), tokens)
+  }
+
+  const pendingReceipts: Receipt[] = []
+  for (const agent of agents) {
+    const paths = agentPaths(agent, scope)
+    const dest = join(paths.skillRoot, manifest.name)
+    for (const rel of manifest.skill_files) {
+      extractAsset(manifest.name, rel, join(dest, rel), tokens)
+    }
+    if (fragment) managedBlock(paths.instruction, manifest.name, fragment)
+    if (!existsSync(dest)) throw new Error(`validation failed: missing installed skill path ${dest}`)
+    if (fragment && !existsSync(paths.instruction)) throw new Error(`validation failed: missing instruction file ${paths.instruction}`)
+    pendingReceipts.push({
+      skill: manifest.name,
+      version: manifest.version,
+      scope,
+      agent,
+      skill_path: dest,
+      runtime_root: runtimeRoot,
+      updated_at: new Date().toISOString(),
+    })
+  }
+
+  if (scope.kind === 'project') {
+    runDeclaredCommand(cli, scope.root, manifest.project_init, `${manifest.name} project init`)
+    runDeclaredCommand(cli, scope.root, manifest.project_validate, `${manifest.name} project validation`)
+  }
+
+  for (const receipt of pendingReceipts) {
+    saveReceipt(receipt)
+    console.log(`Installed ${manifest.name} ${manifest.version} for ${receipt.agent} at ${receipt.skill_path}`)
+  }
 }
 
 function parseInstall(args: string[]): ParsedInstall {
-  const out: ParsedInstall = { skills: [], agents: [], invalid: false }
+  const out: ParsedInstall = { skills: [], agents: [] }
   const body = args[0] === 'install' ? args.slice(1) : args
   for (let i = 0; i < body.length; i++) {
     const arg = body[i]
     if (arg === '--scope') {
-      if (i + 1 >= body.length) {
-        out.invalid = true
-        break
-      }
+      if (i + 1 >= body.length) throw new Error('--scope requires user, cwd, or a path')
       out.scope = body[++i]
     } else if (arg.startsWith('--scope=')) {
       out.scope = arg.slice('--scope='.length)
     } else if (arg === '--agent') {
-      if (i + 1 >= body.length) {
-        out.invalid = true
-        break
-      }
+      if (i + 1 >= body.length) throw new Error('--agent requires a harness name')
       out.agents.push(body[++i])
     } else if (arg.startsWith('--agent=')) {
       out.agents.push(arg.slice('--agent='.length))
     } else if (arg.startsWith('-')) {
-      out.invalid = true
-      break
+      throw new Error(`unknown option ${arg}`)
+    } else {
+      out.skills.push(arg)
+    }
+  }
+  return out
+}
+
+function parseUpdate(args: string[]): ParsedUpdate {
+  const out: ParsedUpdate = { skills: [], agents: [] }
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === '--scope') {
+      if (i + 1 >= args.length) throw new Error('--scope requires user, cwd, or a path')
+      out.scope = args[++i]
+    } else if (arg.startsWith('--scope=')) {
+      out.scope = arg.slice('--scope='.length)
+    } else if (arg === '--agent') {
+      if (i + 1 >= args.length) throw new Error('--agent requires a harness name')
+      out.agents.push(args[++i])
+    } else if (arg.startsWith('--agent=')) {
+      out.agents.push(arg.slice('--agent='.length))
+    } else if (arg.startsWith('-')) {
+      throw new Error(`unknown update option ${arg}`)
     } else {
       out.skills.push(arg)
     }
@@ -130,12 +529,14 @@ function agentLabel(id: string, agents: AgentInfo[]): string {
 }
 
 async function chooseAgents(explicit: string[]): Promise<{ values: string[]; prompted: boolean; all: AgentInfo[] }> {
-  const all = await coreJSON<AgentInfo[]>('__agents')
-  if (explicit.length > 0) return { values: explicit, prompted: false, all }
-
+  const all = detectedAgents()
+  if (explicit.length > 0) return { values: normalizeAgents(explicit), prompted: false, all }
   const detected = all.filter((item) => item.detected).map((item) => item.id)
   if (detected.length === 1) return { values: detected, prompted: false, all }
-
+  if (!process.stdin.isTTY) {
+    if (detected.length === 0) throw new Error('no supported harness detected; specify --agent')
+    return { values: detected, prompted: false, all }
+  }
   const values = checked<string[]>(await prompts.multiselect({
     message: detected.length > 1 ? 'Select AI harnesses' : 'Select AI harnesses to target',
     options: all.map((item) => ({
@@ -146,21 +547,20 @@ async function chooseAgents(explicit: string[]): Promise<{ values: string[]; pro
     initialValues: detected,
     required: true,
   }))
-  return { values, prompted: true, all }
+  return { values: normalizeAgents(values), prompted: true, all }
 }
 
-async function installWizard(originalArgs: string[]): Promise<number> {
-  const parsed = parseInstall(originalArgs)
-  if (parsed.invalid) return (await runCore(originalArgs)).code
-  if (!process.stdin.isTTY) return (await runCore(originalArgs)).code
-
+async function installWizard(args: string[]): Promise<number> {
+  const parsed = parseInstall(args)
   let prompted = false
   let skills = parsed.skills
+
   if (skills.length === 0) {
-    const catalog = await coreJSON<Manifest[]>('__catalog')
+    if (!process.stdin.isTTY) throw new Error('no skills selected')
+    const available = catalogManifests()
     skills = checked<string[]>(await prompts.multiselect({
       message: 'Select skills to install',
-      options: catalog.map((item) => ({
+      options: available.map((item) => ({
         value: item.name,
         label: item.name,
         hint: item.description || undefined,
@@ -169,10 +569,12 @@ async function installWizard(originalArgs: string[]): Promise<number> {
     }))
     prompted = true
   }
+  skills.forEach(loadManifest)
 
-  let scope = parsed.scope
-  if (!scope) {
-    const scopeChoice = checked<string>(await prompts.select({
+  let scopeRaw = parsed.scope
+  if (!scopeRaw) {
+    if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
+    const choice = checked<string>(await prompts.select({
       message: 'Where should the selected skills be installed?',
       options: [
         { value: 'cwd', label: 'Current directory', hint: process.cwd() },
@@ -181,102 +583,104 @@ async function installWizard(originalArgs: string[]): Promise<number> {
       ],
       initialValue: 'cwd',
     }))
-    if (scopeChoice === 'custom') {
-      scope = checked<string>(await prompts.text({
+    if (choice === 'custom') {
+      scopeRaw = checked<string>(await prompts.text({
         message: 'Custom path:',
         placeholder: process.cwd(),
         validate: (value) => value.trim() ? undefined : 'Path is required',
       })).trim()
     } else {
-      scope = scopeChoice
+      scopeRaw = choice
     }
     prompted = true
   }
 
+  const scope = resolveScope(scopeRaw)
   const agentChoice = await chooseAgents(parsed.agents)
   const agents = agentChoice.values
   prompted = prompted || agentChoice.prompted
 
   if (prompted) {
-    const scopeDisplay = scope === 'cwd' ? process.cwd() : scope
     prompts.note(
-      `Skills: ${skills.join(', ')}\nHarnesses: ${agents.map((id) => agentLabel(id, agentChoice.all)).join(', ')}\nScope: ${scopeDisplay}`,
+      `Skills: ${skills.join(', ')}\nHarnesses: ${agents.map((id) => agentLabel(id, agentChoice.all)).join(', ')}\nScope: ${scope.identity}`,
       'Planned installation',
     )
-    const proceed = checked<boolean>(await prompts.confirm({
-      message: 'Continue?',
-      initialValue: true,
-    }))
+    const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
     if (!proceed) cancel()
+  } else {
+    console.log(`Scope: ${scope.identity}`)
+    console.log(`Agents: ${agents.join(', ')}`)
+    console.log(`Skills: ${skills.join(', ')}`)
   }
 
-  const args = [...skills, '--scope', scope]
-  for (const agent of agents) args.push('--agent', agent)
-  const result = await runCore(args)
-  if (prompted && result.code === 0) prompts.outro('Installation complete')
-  return result.code
-}
-
-type UpdateGroup = {
-  key: string
-  skill: string
-  scope: Scope
-  agents: string[]
+  for (const skill of skills) installOne(loadManifest(skill), scope, agents)
+  if (prompted) prompts.outro('Installation complete')
+  return 0
 }
 
 function groupInstallations(registry: Registry): UpdateGroup[] {
   const groups = new Map<string, UpdateGroup>()
-  for (const rec of registry.installations ?? []) {
-    const key = `${rec.skill}\u0000${rec.scope.kind}\u0000${rec.scope.identity}`
-    const group = groups.get(key) ?? { key, skill: rec.skill, scope: rec.scope, agents: [] }
-    if (!group.agents.includes(rec.agent)) group.agents.push(rec.agent)
+  for (const receipt of registry.installations) {
+    const key = `${receipt.skill}\u0000${receipt.scope.kind}\u0000${receipt.scope.identity}`
+    const group = groups.get(key) ?? {
+      key,
+      skill: receipt.skill,
+      scope: receipt.scope,
+      agents: [],
+    }
+    if (!group.agents.includes(receipt.agent)) group.agents.push(receipt.agent)
     groups.set(key, group)
   }
   return [...groups.values()].sort((a, b) => a.key.localeCompare(b.key))
 }
 
-async function updateWizard(originalArgs: string[]): Promise<number> {
-  const filters = originalArgs.slice(1)
-  if (filters.length > 0) return (await runCore(originalArgs)).code
-  if (!process.stdin.isTTY) {
-    console.error('jl-skill: update requires filters in non-interactive mode')
-    return 1
+function matchingUpdateGroups(parsed: ParsedUpdate): UpdateGroup[] {
+  const requestedAgents = normalizeAgents(parsed.agents)
+  const scope = parsed.scope ? resolveScope(parsed.scope) : undefined
+  return groupInstallations(loadRegistry()).map((group) => ({
+    ...group,
+    agents: requestedAgents.length > 0 ? group.agents.filter((agent) => requestedAgents.includes(agent)) : group.agents,
+  })).filter((group) => {
+    if (parsed.skills.length > 0 && !parsed.skills.includes(group.skill)) return false
+    if (scope && group.scope.identity !== scope.identity) return false
+    if (group.agents.length === 0) return false
+    return true
+  })
+}
+
+async function updateWizard(args: string[]): Promise<number> {
+  const parsed = parseUpdate(args)
+  let groups = matchingUpdateGroups(parsed)
+  if (groups.length === 0) throw new Error('no installations match update filters')
+  const hasFilters = parsed.skills.length > 0 || !!parsed.scope || parsed.agents.length > 0
+  const agents = detectedAgents()
+
+  if (!hasFilters) {
+    if (!process.stdin.isTTY) throw new Error('update requires filters in non-interactive mode')
+    const selected = checked<string[]>(await prompts.multiselect({
+      message: 'Select installations to update',
+      options: groups.map((group) => ({
+        value: group.key,
+        label: group.skill,
+        hint: `${group.scope.identity} • ${group.agents.map((id) => agentLabel(id, agents)).join(', ')}`,
+      })),
+      initialValues: groups.map((group) => group.key),
+      required: true,
+    }))
+    groups = groups.filter((group) => selected.includes(group.key))
+    prompts.note(
+      groups.map((group) => `${group.skill} at ${group.scope.identity} [${group.agents.map((id) => agentLabel(id, agents)).join(', ')}]`).join('\n'),
+      'Planned updates',
+    )
+    const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
+    if (!proceed) cancel()
   }
 
-  const registry = await coreJSON<Registry>('__registry')
-  const groups = groupInstallations(registry)
-  if (groups.length === 0) {
-    console.error('jl-skill: no installer-managed skill installations found')
-    return 1
+  for (const group of groups) {
+    console.log(`Updating ${group.skill} at ${group.scope.identity} for ${group.agents.join(', ')}`)
+    installOne(loadManifest(group.skill), group.scope, normalizeAgents(group.agents))
   }
-  const agentInfo = await coreJSON<AgentInfo[]>('__agents')
-
-  const selected = checked<string[]>(await prompts.multiselect({
-    message: 'Select installations to update',
-    options: groups.map((group) => ({
-      value: group.key,
-      label: group.skill,
-      hint: `${group.scope.identity} • ${group.agents.map((id) => agentLabel(id, agentInfo)).join(', ')}`,
-    })),
-    initialValues: groups.map((group) => group.key),
-    required: true,
-  }))
-
-  const chosen = groups.filter((group) => selected.includes(group.key))
-  prompts.note(
-    chosen.map((group) => `${group.skill} at ${group.scope.identity} [${group.agents.map((id) => agentLabel(id, agentInfo)).join(', ')}]`).join('\n'),
-    'Planned updates',
-  )
-  const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
-  if (!proceed) cancel()
-
-  for (const group of chosen) {
-    const args = ['update', group.skill, '--scope', group.scope.identity]
-    for (const agent of group.agents) args.push('--agent', agent)
-    const result = await runCore(args)
-    if (result.code !== 0) return result.code
-  }
-  prompts.outro('Update complete')
+  if (!hasFilters) prompts.outro('Update complete')
   return 0
 }
 
@@ -287,8 +691,8 @@ Usage:
   jl-skill [skills...] --scope user|cwd|PATH [--agent AGENT]...
   jl-skill update [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
 
-Bare or incomplete interactive invocations use the same prompt package as Vite:
-  @clack/prompts ${PROMPTS_VERSION}
+Bare or incomplete interactive invocations use @clack/prompts ${PROMPTS_VERSION},
+the same prompt package used by create-vite.
 `)
 }
 
