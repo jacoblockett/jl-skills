@@ -1,20 +1,10 @@
-"""Read/query surface for the /map prototype.
-
-These commands are intentionally non-mutating. They are the first primitives meant
-for ordinary agents to consult Map without invoking the future /map workflow.
-"""
+"""Read/query primitives for Map state."""
 
 from __future__ import annotations
 
-import argparse
-import sys
-from pathlib import Path
 from typing import Any
 
 import map_state
-
-
-QUERY_COMMANDS = {"history", "context", "related", "validate"}
 
 
 def rows(db: Any, relation: str) -> list[dict[str, Any]]:
@@ -22,7 +12,6 @@ def rows(db: Any, relation: str) -> list[dict[str, Any]]:
 
 
 def summary(node: dict[str, Any]) -> dict[str, Any]:
-    """Compact semantic node representation for agent-facing queries."""
     keys = (
         "id",
         "kind",
@@ -52,7 +41,6 @@ def predecessors(db: Any) -> dict[str, str]:
 
 
 def history_for(db: Any, node_id: str) -> dict[str, Any]:
-    """Return the complete linear supersession lineage containing a node."""
     queried = map_state.get_node(db, node_id)
     if not queried:
         raise ValueError(f"No node {node_id!r}")
@@ -96,7 +84,6 @@ def history_for(db: Any, node_id: str) -> dict[str, Any]:
 
 
 def related_for(db: Any, node_id: str) -> dict[str, Any]:
-    """Return all directly adjacent semantic relations for one node."""
     node = map_state.get_node(db, node_id)
     if not node:
         raise ValueError(f"No node {node_id!r}")
@@ -140,7 +127,6 @@ def related_for(db: Any, node_id: str) -> dict[str, Any]:
 
 
 def ancestors(db: Any, focus_id: str) -> set[str]:
-    """Containment ancestors, without pulling sibling subtrees into context."""
     focus = map_state.get_node(db, focus_id)
     if not focus:
         raise ValueError(f"No focus node {focus_id!r}")
@@ -180,7 +166,6 @@ def current_scope_nodes(
 
 
 def context_for(db: Any, node_id: str) -> dict[str, Any]:
-    """Return compact current-state context for a focus node and its branch."""
     requested = map_state.get_node(db, node_id)
     if not requested:
         raise ValueError(f"No node {node_id!r}")
@@ -319,7 +304,6 @@ def context_for(db: Any, node_id: str) -> dict[str, Any]:
 
 
 def contains_cycle(edges: list[dict[str, Any]]) -> bool:
-    """Detect a directed containment cycle with Kahn's algorithm."""
     adjacency: dict[str, set[str]] = {}
     nodes: set[str] = set()
     for edge in edges:
@@ -348,10 +332,9 @@ def contains_cycle(edges: list[dict[str, Any]]) -> bool:
 
 
 def validate_graph(db: Any) -> dict[str, Any]:
-    """Check structural invariants without mutating graph state."""
     nodes = map_state.all_nodes(db)
     by_id = {map_state.node_key(node["id"]): node for node in nodes}
-    errors: list[str] = []
+    errors: list[str] = list(map_state.semantic_state_errors(nodes))
     warnings: list[str] = []
     relation_counts: dict[str, int] = {}
 
@@ -456,45 +439,3 @@ def validate_graph(db: Any) -> dict[str, Any]:
         "errors": sorted(set(errors)),
         "warnings": sorted(set(warnings)),
     }
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="map-state", description="Read/query Map state")
-    parser.add_argument("--root", type=Path, default=Path.cwd(), help="Directory whose .map/ state should be used")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    history = sub.add_parser("history", help="Show the supersession lineage containing a node")
-    history.add_argument("id")
-
-    context = sub.add_parser("context", help="Show compact current-state context for a node or intent")
-    context.add_argument("id")
-
-    related = sub.add_parser("related", help="Show all directly related semantic graph neighbors")
-    related.add_argument("id")
-
-    sub.add_parser("validate", help="Check graph structural invariants without mutating state")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    root: Path = args.root
-
-    try:
-        def run(db: Any):
-            if args.command == "history":
-                map_state.emit(history_for(db, args.id))
-            elif args.command == "context":
-                map_state.emit(context_for(db, args.id))
-            elif args.command == "related":
-                map_state.emit(related_for(db, args.id))
-            elif args.command == "validate":
-                map_state.emit(validate_graph(db))
-            else:
-                raise AssertionError(args.command)
-
-        map_state.command_with_db(root, run)
-        return 0
-    except Exception as exc:
-        print(f"map-state: {exc}", file=sys.stderr)
-        return 1
