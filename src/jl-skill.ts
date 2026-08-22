@@ -87,6 +87,11 @@ type PythonExec = {
   prefix: string[]
 }
 
+type ProvisionedRuntime = {
+  cli: string
+  command: string[]
+}
+
 const agentCatalog: AgentSpec[] = [
   { id: 'codex', label: 'OpenAI Codex', command: 'codex' },
   { id: 'claude', label: 'Claude Code', command: 'claude' },
@@ -102,9 +107,8 @@ function checked<T>(value: T | symbol): T {
   return value as T
 }
 
-function userHome(): string {
-  const raw = process.env.USERPROFILE || process.env.HOME || homedir()
-  return canonicalPath(raw)
+function rawUserHome(): string {
+  return process.env.USERPROFILE || process.env.HOME || homedir()
 }
 
 function expandPath(raw: string): string {
@@ -114,8 +118,8 @@ function expandPath(raw: string): string {
     const name = braced || plain
     return process.env[name] ?? whole
   })
-  if (value === '~') return userHome()
-  if (value.startsWith('~/') || value.startsWith('~\\')) return join(userHome(), value.slice(2))
+  if (value === '~') return rawUserHome()
+  if (value.startsWith('~/') || value.startsWith('~\\')) return join(rawUserHome(), value.slice(2))
   return value
 }
 
@@ -129,20 +133,20 @@ function canonicalPath(raw: string): string {
   return normalize(absolute)
 }
 
+function userHome(): string {
+  return canonicalPath(rawUserHome())
+}
+
 function resolveScope(raw: string): Scope {
   const value = raw.trim()
-  if (value === 'user') {
-    return { kind: 'user', identity: 'user', root: userHome() }
-  }
+  if (value === 'user') return { kind: 'user', identity: 'user', root: userHome() }
   if (value === 'cwd') {
     const root = canonicalPath(process.cwd())
     return { kind: 'project', identity: root, root }
   }
   if (!value) throw new Error('empty scope')
   const root = canonicalPath(value)
-  if (existsSync(root) && !statSync(root).isDirectory()) {
-    throw new Error(`scope path is not a directory: ${root}`)
-  }
+  if (existsSync(root) && !statSync(root).isDirectory()) throw new Error(`scope path is not a directory: ${root}`)
   return { kind: 'project', identity: root, root }
 }
 
@@ -151,9 +155,7 @@ function normalizeAgents(raw: string[]): string[] {
   for (const item of raw) {
     let id = item.trim().toLowerCase()
     if (id === 'claude-code') id = 'claude'
-    if (!agentCatalog.some((agent) => agent.id === id)) {
-      throw new Error(`unsupported agent "${item}"`)
-    }
+    if (!agentCatalog.some((agent) => agent.id === id)) throw new Error(`unsupported agent "${item}"`)
     out.add(id)
   }
   return [...out].sort()
@@ -191,27 +193,15 @@ function agentPaths(agent: string, scope: Scope): { skillRoot: string; instructi
   const home = userHome()
   if (agent === 'codex') {
     if (scope.kind === 'user') {
-      return {
-        skillRoot: join(home, '.agents', 'skills'),
-        instruction: join(home, '.codex', 'AGENTS.md'),
-      }
+      return { skillRoot: join(home, '.agents', 'skills'), instruction: join(home, '.codex', 'AGENTS.md') }
     }
-    return {
-      skillRoot: join(scope.root, '.agents', 'skills'),
-      instruction: join(scope.root, 'AGENTS.md'),
-    }
+    return { skillRoot: join(scope.root, '.agents', 'skills'), instruction: join(scope.root, 'AGENTS.md') }
   }
   if (agent === 'claude') {
     if (scope.kind === 'user') {
-      return {
-        skillRoot: join(home, '.claude', 'skills'),
-        instruction: join(home, '.claude', 'CLAUDE.md'),
-      }
+      return { skillRoot: join(home, '.claude', 'skills'), instruction: join(home, '.claude', 'CLAUDE.md') }
     }
-    return {
-      skillRoot: join(scope.root, '.claude', 'skills'),
-      instruction: join(scope.root, 'CLAUDE.md'),
-    }
+    return { skillRoot: join(scope.root, '.claude', 'skills'), instruction: join(scope.root, 'CLAUDE.md') }
   }
   throw new Error(`unsupported agent "${agent}"`)
 }
@@ -259,12 +249,8 @@ function render(text: string, tokens: Record<string, string>): string {
 
 function extractAsset(skill: string, rel: string, dest: string, tokens?: Record<string, string>): void {
   const bytes = decodeAsset(skill, rel)
-  if (!tokens) {
-    atomicWrite(dest, bytes)
-    return
-  }
-  const text = new TextDecoder().decode(bytes)
-  atomicWrite(dest, render(text, tokens))
+  if (!tokens) return atomicWrite(dest, bytes)
+  atomicWrite(dest, render(new TextDecoder().decode(bytes), tokens))
 }
 
 function managedBlock(path: string, skill: string, fragment: string): void {
@@ -307,9 +293,7 @@ function loadRegistry(): Registry {
 function saveReceipt(receipt: Receipt): void {
   const registry = loadRegistry()
   registry.installations = registry.installations.filter((old) => !(
-    old.skill === receipt.skill &&
-    old.scope.identity === receipt.scope.identity &&
-    old.agent === receipt.agent
+    old.skill === receipt.skill && old.scope.identity === receipt.scope.identity && old.agent === receipt.agent
   ))
   registry.installations.push(receipt)
   atomicWrite(registryPath(), `${JSON.stringify(registry, null, 2)}\n`)
@@ -337,7 +321,6 @@ function findPython311(): PythonExec {
         { exe: 'python3', prefix: [] },
         { exe: 'python', prefix: [] },
       ]
-
   for (const candidate of candidates) {
     const found = Bun.which(candidate.exe)
     if (!found) continue
@@ -364,7 +347,7 @@ function shArg(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`
 }
 
-function provisionRuntime(manifest: Manifest, packageRoot: string, runtimeRoot: string): string {
+function provisionRuntime(manifest: Manifest, packageRoot: string, runtimeRoot: string): ProvisionedRuntime {
   if (manifest.runtime !== 'python') throw new Error(`unsupported runtime "${manifest.runtime ?? ''}"`)
   if (!manifest.runtime_entrypoint) throw new Error(`${manifest.name} manifest is missing runtime_entrypoint`)
   if (!manifest.runtime_cli) throw new Error(`${manifest.name} manifest is missing runtime_cli`)
@@ -373,9 +356,7 @@ function provisionRuntime(manifest: Manifest, packageRoot: string, runtimeRoot: 
   mkdirSync(runtimeRoot, { recursive: true })
   const venvRoot = join(runtimeRoot, 'venv')
   const venvPy = venvPython(venvRoot)
-  if (!existsSync(venvPy)) {
-    run([host.exe, ...host.prefix, '-m', 'venv', venvRoot], `create isolated ${manifest.name} runtime`)
-  }
+  if (!existsSync(venvPy)) run([host.exe, ...host.prefix, '-m', 'venv', venvRoot], `create isolated ${manifest.name} runtime`)
 
   const dependencies = manifest.runtime_dependencies ?? []
   if (dependencies.length > 0) {
@@ -394,7 +375,7 @@ function provisionRuntime(manifest: Manifest, packageRoot: string, runtimeRoot: 
 
   const [moduleName, functionName = 'main'] = manifest.runtime_entrypoint.split(':', 2)
   const runner = join(runtimeRoot, 'runner.py')
-  const runnerBody = [
+  atomicWrite(runner, [
     'import importlib',
     'import sys',
     `sys.path.insert(0, ${JSON.stringify(packageRoot)})`,
@@ -402,28 +383,24 @@ function provisionRuntime(manifest: Manifest, packageRoot: string, runtimeRoot: 
     `entry = getattr(module, ${JSON.stringify(functionName)})`,
     'raise SystemExit(entry())',
     '',
-  ].join('\n')
-  atomicWrite(runner, runnerBody)
+  ].join('\n'))
 
   if (isWindows) {
     const cli = join(runtimeRoot, `${manifest.runtime_cli}.cmd`)
     atomicWrite(cli, `@echo off\r\n${cmdArg(venvPy)} ${cmdArg(runner)} %*\r\n`, 0o755)
-    return cli
+    return { cli, command: [venvPy, runner] }
   }
 
   const cli = join(runtimeRoot, manifest.runtime_cli)
   atomicWrite(cli, `#!/bin/sh\nexec ${shArg(venvPy)} ${shArg(runner)} "$@"\n`, 0o755)
-  return cli
+  return { cli, command: [venvPy, runner] }
 }
 
-function runDeclaredCommand(cli: string, root: string, command: string[] | undefined, label: string): void {
+function runDeclaredCommand(runtime: ProvisionedRuntime, manifest: Manifest, root: string, command: string[] | undefined, label: string): void {
   if (!command || command.length === 0) return
   const [declaredCli, ...args] = command
-  if (!declaredCli) return
-  const base = isWindows ? cli.replace(/\.cmd$/i, '') : cli
-  const declared = isWindows ? cli.replace(/\.cmd$/i, '').endsWith(declaredCli) : base.endsWith(declaredCli)
-  if (!declared) throw new Error(`unsupported declared runtime command "${declaredCli}"`)
-  run([cli, '--root', root, ...args], label)
+  if (declaredCli !== manifest.runtime_cli) throw new Error(`unsupported declared runtime command "${declaredCli}"`)
+  run([...runtime.command, '--root', root, ...args], label)
 }
 
 function installOne(manifest: Manifest, scope: Scope, agents: string[]): void {
@@ -432,13 +409,11 @@ function installOne(manifest: Manifest, scope: Scope, agents: string[]): void {
   const packageRoot = join(dataRoot, 'packages', manifest.name)
   const runtimeRoot = join(dataRoot, 'runtime', manifest.name)
 
-  for (const rel of manifest.runtime_files ?? []) {
-    extractAsset(manifest.name, rel, join(packageRoot, rel))
-  }
+  for (const rel of manifest.runtime_files ?? []) extractAsset(manifest.name, rel, join(packageRoot, rel))
 
-  const cli = provisionRuntime(manifest, packageRoot, runtimeRoot)
+  const runtime = provisionRuntime(manifest, packageRoot, runtimeRoot)
   const tokenName = manifest.cli_token || 'JL_SKILL_CLI'
-  const tokens = { [`{{${tokenName}}}`]: normalize(cli) }
+  const tokens = { [`{{${tokenName}}}`]: normalize(runtime.cli) }
 
   let fragment = ''
   if (manifest.instruction_fragment) {
@@ -449,9 +424,7 @@ function installOne(manifest: Manifest, scope: Scope, agents: string[]): void {
   for (const agent of agents) {
     const paths = agentPaths(agent, scope)
     const dest = join(paths.skillRoot, manifest.name)
-    for (const rel of manifest.skill_files) {
-      extractAsset(manifest.name, rel, join(dest, rel), tokens)
-    }
+    for (const rel of manifest.skill_files) extractAsset(manifest.name, rel, join(dest, rel), tokens)
     if (fragment) managedBlock(paths.instruction, manifest.name, fragment)
     if (!existsSync(dest)) throw new Error(`validation failed: missing installed skill path ${dest}`)
     if (fragment && !existsSync(paths.instruction)) throw new Error(`validation failed: missing instruction file ${paths.instruction}`)
@@ -467,8 +440,8 @@ function installOne(manifest: Manifest, scope: Scope, agents: string[]): void {
   }
 
   if (scope.kind === 'project') {
-    runDeclaredCommand(cli, scope.root, manifest.project_init, `${manifest.name} project init`)
-    runDeclaredCommand(cli, scope.root, manifest.project_validate, `${manifest.name} project validation`)
+    runDeclaredCommand(runtime, manifest, scope.root, manifest.project_init, `${manifest.name} project init`)
+    runDeclaredCommand(runtime, manifest, scope.root, manifest.project_validate, `${manifest.name} project validation`)
   }
 
   for (const receipt of pendingReceipts) {
@@ -539,11 +512,7 @@ async function chooseAgents(explicit: string[]): Promise<{ values: string[]; pro
   }
   const values = checked<string[]>(await prompts.multiselect({
     message: detected.length > 1 ? 'Select AI harnesses' : 'Select AI harnesses to target',
-    options: all.map((item) => ({
-      value: item.id,
-      label: item.label,
-      hint: item.detected ? 'detected' : undefined,
-    })),
+    options: all.map((item) => ({ value: item.id, label: item.label, hint: item.detected ? 'detected' : undefined })),
     initialValues: detected,
     required: true,
   }))
@@ -560,11 +529,7 @@ async function installWizard(args: string[]): Promise<number> {
     const available = catalogManifests()
     skills = checked<string[]>(await prompts.multiselect({
       message: 'Select skills to install',
-      options: available.map((item) => ({
-        value: item.name,
-        label: item.name,
-        hint: item.description || undefined,
-      })),
+      options: available.map((item) => ({ value: item.name, label: item.name, hint: item.description || undefined })),
       required: true,
     }))
     prompted = true
@@ -622,12 +587,7 @@ function groupInstallations(registry: Registry): UpdateGroup[] {
   const groups = new Map<string, UpdateGroup>()
   for (const receipt of registry.installations) {
     const key = `${receipt.skill}\u0000${receipt.scope.kind}\u0000${receipt.scope.identity}`
-    const group = groups.get(key) ?? {
-      key,
-      skill: receipt.skill,
-      scope: receipt.scope,
-      agents: [],
-    }
+    const group = groups.get(key) ?? { key, skill: receipt.skill, scope: receipt.scope, agents: [] }
     if (!group.agents.includes(receipt.agent)) group.agents.push(receipt.agent)
     groups.set(key, group)
   }
@@ -643,8 +603,7 @@ function matchingUpdateGroups(parsed: ParsedUpdate): UpdateGroup[] {
   })).filter((group) => {
     if (parsed.skills.length > 0 && !parsed.skills.includes(group.skill)) return false
     if (scope && group.scope.identity !== scope.identity) return false
-    if (group.agents.length === 0) return false
-    return true
+    return group.agents.length > 0
   })
 }
 
@@ -713,7 +672,6 @@ async function main(): Promise<number> {
 try {
   process.exitCode = await main()
 } catch (error) {
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(`jl-skill: ${message}`)
+  console.error(`jl-skill: ${error instanceof Error ? error.message : String(error)}`)
   process.exitCode = 1
 }
