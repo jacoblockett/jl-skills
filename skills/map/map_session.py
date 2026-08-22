@@ -99,8 +99,8 @@ def set_summary(db: Any, text: str) -> dict[str, Any]:
             f"({len(normalized)}/{MAX_SUMMARY_CHARS}); consolidate and retry"
         )
     db.query(
-        "UPDATE $session MERGE { summary: $summary, updated_at: time::now() };",
-        {"session": SESSION_ID, "summary": normalized},
+        "UPDATE $session_id MERGE { summary: $summary, updated_at: time::now() };",
+        {"session_id": SESSION_ID, "summary": normalized},
     )
     return summary_payload(require_session(db))
 
@@ -130,12 +130,12 @@ def update_exchange(
 
     if depth is not None or role is not None:
         db.query(
-            """UPDATE $session MERGE {
+            """UPDATE $session_id MERGE {
                 exchange_depth: $depth,
                 exchange: $exchange,
                 updated_at: time::now()
             };""",
-            {"session": SESSION_ID, "depth": current_depth, "exchange": exchange},
+            {"session_id": SESSION_ID, "depth": current_depth, "exchange": exchange},
         )
         session = require_session(db)
 
@@ -147,8 +147,8 @@ def set_pending(db: Any, text: str) -> dict[str, Any]:
     if not text.strip():
         raise ValueError("Pending content must not be empty; use --clear to remove it")
     db.query(
-        "UPDATE $session MERGE { pending: $pending, updated_at: time::now() };",
-        {"session": SESSION_ID, "pending": text},
+        "UPDATE $session_id MERGE { pending: $pending, updated_at: time::now() };",
+        {"session_id": SESSION_ID, "pending": text},
     )
     return pending_payload(require_session(db))
 
@@ -156,8 +156,8 @@ def set_pending(db: Any, text: str) -> dict[str, Any]:
 def clear_pending(db: Any) -> dict[str, Any]:
     require_session(db)
     db.query(
-        "UPDATE $session MERGE { pending: NONE, updated_at: time::now() };",
-        {"session": SESSION_ID},
+        "UPDATE $session_id MERGE { pending: NONE, updated_at: time::now() };",
+        {"session_id": SESSION_ID},
     )
     return pending_payload(require_session(db))
 
