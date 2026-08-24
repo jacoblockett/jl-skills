@@ -26,6 +26,11 @@ jobs:
         with:
           toolchain: 1.89.0
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: skills/map -> build/cargo/map
+
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -34,8 +39,8 @@ jobs:
       - name: Install installer dependencies
         run: bun install --no-save
 
-      - name: Test Map runtime
-        run: cargo test --manifest-path skills/map/Cargo.toml
+      - name: Test Map runtime in release profile
+        run: cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map
 
       - name: Build standalone installer
         run: bun run build
