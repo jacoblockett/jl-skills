@@ -16,20 +16,12 @@ impl Store {
 
     async fn query_vec<T: DeserializeOwned>(&self, sql: &str) -> Result<Vec<T>> {
         let mut response = self.db.query(sql).await?;
-        let values: Vec<SurrealDbValue> = response.take(0)?;
-        values
-            .into_iter()
-            .map(|value| serde_json::from_value(value.into_json_value()).map_err(Into::into))
-            .collect()
+        Ok(response.take(0)?)
     }
 
     async fn query_one<T: DeserializeOwned>(&self, sql: &str) -> Result<Option<T>> {
         let mut response = self.db.query(sql).await?;
-        let value: Option<SurrealDbValue> = response.take(0)?;
-        value
-            .map(|value| serde_json::from_value(value.into_json_value()))
-            .transpose()
-            .map_err(Into::into)
+        Ok(response.take(0)?)
     }
 
     async fn graph(&self) -> Result<Graph> {
