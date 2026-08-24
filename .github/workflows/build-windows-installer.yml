@@ -2,9 +2,6 @@ name: Build Windows installer
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - map-rust-v2
   pull_request:
     branches:
       - main
@@ -13,11 +10,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-installer-${{ github.workflow }}-${{ github.ref }}
+  group: windows-installer-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  runtime-tests:
+  map-runtime:
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -30,31 +27,33 @@ jobs:
         with:
           toolchain: 1.89.0
 
-      - name: Cache Rust test build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: skills/map -> build/test-cargo/map
-
-      - name: Test Map runtime
-        run: cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/test-cargo/map
-
-  installer:
-    runs-on: windows-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust 1.89
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.89.0
-
-      - name: Cache Rust release build
+      - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: skills/map -> build/cargo/map
+
+      - name: Test Map runtime
+        run: cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map
+
+      - name: Build Map runtime
+        run: cargo build --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map
+
+      - name: Upload Map runtime for installer job
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-runtime-windows-x64
+          path: build/cargo/map/release/map.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  installer:
+    needs: map-runtime
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -64,7 +63,15 @@ jobs:
       - name: Install installer dependencies
         run: bun install --no-save
 
+      - name: Download tested Map runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: map-runtime-windows-x64
+          path: build/prebuilt-map
+
       - name: Build standalone installer
+        env:
+          JL_SKILL_MAP_EXE: ${{ github.workspace }}\build\prebuilt-map\map.exe
         run: bun run build
 
       - name: Smoke test compiled installer
