@@ -1,0 +1,94 @@
+name: Build Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - map-rust-v2
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install installer dependencies
+        run: bun install --no-save
+
+      - name: Test Map runtime
+        run: cargo test --manifest-path skills/map/Cargo.toml
+
+      - name: Build standalone installer
+        run: bun run build
+
+      - name: Smoke test compiled installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Resolve-Path 'build/jl-skill.exe').Path
+          & $installer --version
+          if ($LASTEXITCODE -ne 0) { throw "jl-skill --version failed: $LASTEXITCODE" }
+
+          $project = Join-Path $PWD 'build/smoke-project'
+          Remove-Item $project -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $project | Out-Null
+
+          & $installer map --scope $project --agent codex
+          if ($LASTEXITCODE -ne 0) { throw "jl-skill install failed: $LASTEXITCODE" }
+
+          if (Test-Path (Join-Path $project '.map')) {
+            throw 'installer created .map before Map was initialized'
+          }
+
+          $skill = Join-Path $project '.agents/skills/map/SKILL.md'
+          $runtime = Join-Path $project '.jl-skill/runtime/map/0.2.0/map.exe'
+          $instructions = Join-Path $project 'AGENTS.md'
+          $schema = Join-Path $HOME '.jl-skills/map/schema.surql'
+          foreach ($required in @($skill, $runtime, $instructions, $schema)) {
+            if (-not (Test-Path $required -PathType Leaf)) { throw "missing installed file: $required" }
+          }
+
+          & $runtime --path $project init
+          if ($LASTEXITCODE -ne 0) { throw "installed map init failed: $LASTEXITCODE" }
+          & $runtime --path $project status
+          if ($LASTEXITCODE -ne 0) { throw "installed map status failed: $LASTEXITCODE" }
+
+      - name: Upload standalone installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: jl-skill-windows-x64
+          path: build/jl-skill.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Map package payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-0.2.0-windows-x64
+          path: |
+            skills/map/jl-skill.json
+            skills/map/SKILL.md
+            skills/map/AGENTS.fragment.md
+            skills/map/schema.surql
+            build/runtime-assets/map/runtime/windows-x64/map.exe
+          if-no-files-found: error
+          retention-days: 14
