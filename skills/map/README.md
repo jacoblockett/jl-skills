@@ -2,44 +2,39 @@
 
 Map is a local durable intent graph used by agents and humans through the `map` CLI.
 
-V2 is the canonical Rust runtime. The previous Python runtime/ontology is obsolete and intentionally unsupported for compatibility.
+V2 is a clean Rust rewrite. The previous Python runtime/ontology is obsolete and intentionally unsupported for compatibility.
 
-## Build
+## Build and test
 
-Requires Rust 1.89+ for development builds.
+Requires Rust 1.89+.
 
 ```bash
+cargo test --manifest-path skills/map/Cargo.toml
 cargo build --manifest-path skills/map/Cargo.toml --release
 ```
 
-Development binary:
+The runtime embeds SurrealDB/SurrealKV and requires no daemon or listening port.
 
-```text
-skills/map/target/release/map
-skills/map/target/release/map.exe   # Windows
+The consumer installer is built separately from repository root with the Vite-compatible Clack prompt stack:
+
+```bash
+npm install
+npm run build
 ```
 
-The runtime embeds SurrealDB/SurrealKV. It does not require a SurrealDB daemon or listening port.
+That build produces a self-contained `build/jl-skill.exe` and embeds the release `map.exe`. Consumers do not need Rust or Node to run the released installer.
 
-The consumer installer builds and embeds the release binary ahead of time; consumers do not need Rust.
+## Initialization
 
-## Initialize a Map
-
-A released installer places the default schema at the runtime-supported shared location. Normal consumer initialization is therefore:
+Installing Map does not create project `.map` state. The first explicit runtime initialization does:
 
 ```bash
 map --path /path/to/project init
 ```
 
-During source-tree development, an explicit schema remains available:
+The installed runtime resolves its packaged default schema automatically. During direct source development, `--schema skills/map/schema.surql` may be supplied explicitly when needed.
 
-```bash
-cargo run --manifest-path skills/map/Cargo.toml -- --path /path/to/project init --schema skills/map/schema.surql
-```
-
-Installing the Map skill does **not** create `.map`. `map init` creates project state only when Map is actually started for that target and rejects when `.map` already exists.
-
-Normal commands reject when the resolved target has no `.map`.
+Normal commands reject when the selected target has no `.map`.
 
 ## V2 model
 
@@ -53,9 +48,9 @@ idea
 fact
 ```
 
-Questions are unresolved questions. Decisions are actual answers/choices. Answers are represented by a typed question-to-decision relationship; they are not values stored on question nodes.
+Questions are unresolved questions. Decisions are actual answers/choices. Answers are typed question-to-decision relationships rather than values stored on question nodes.
 
-Internal relation tables are typed even though callers do not name relations:
+Internal typed relation tables:
 
 ```text
 contains
@@ -71,30 +66,21 @@ idea_context
 
 ```text
 map [--path PATH] [--config PATH] init [--schema PATH]
-
 map create intent <intent> [--context CONTEXT] [--depth DEPTH] [--stance STANCE]
 map create question <question> --intent <intent-id> [--reason REASON]
 map create decision <decision> [--question ID] [--source user|assistant]
     [--assistant-reasoning REASONING] [--notes NOTES] [--soft]
 map create idea <idea>
 map create fact <fact> [--made-by user|assistant]
-
 map relate <source> <target...> [--dependent]
 map unrelate <source> <target...> [--dependent]
-
 map set depth <mvp|thorough>
 map set stance <normal|adversarial>
 map set <id> <property> <value>
-
 map replace <old> <new> --reason REASON [--in-place]
 map abandon <id> --by user|assistant --reason REASON
 map delete <id...> [--force]
-
-map get intents ...
-map get questions ...
-map get decisions ...
-map get ideas ...
-map get facts ...
+map get intents|questions|decisions|ideas|facts ...
 map show <id...>
 map context <id>
 map status
@@ -108,14 +94,14 @@ Run `map <command> --help` for exact flags.
 
 ## Discovery state
 
-Each Map stores `depth` and `stance`. An intent may optionally store fields with the same names; when present they override the Map values.
+Each Map stores `depth` and `stance`. An intent may optionally override either field.
 
 `explored` and `closed` are separate:
 
 - `explored=true`: an LLM has examined/reasoned about the intent at least once.
 - `closed=true`: the intent is finalized enough for the effective depth/stance and closure invariants currently hold.
 
-The runtime never infers `explored` from question count. New unresolved structure can reopen a closed intent without changing `explored`.
+New unresolved structure can reopen a closed intent without changing `explored`.
 
 ## Question retrieval
 
@@ -131,23 +117,13 @@ Use:
 
 ## Replacement, abandonment, deletion
 
-Normal replacement preserves history:
+Normal replacement preserves history. `--in-place` is destructive: the replacement assumes the old node's graph position and the old node is removed.
 
-```bash
-map replace OLD NEW --reason "..."
-```
-
-`--in-place` is destructive: NEW assumes OLD's graph position and OLD is removed.
-
-Abandonment preserves the node as discarded semantic history. Physical delete removes records. Delete rejects when relationships would be affected unless `--force` is explicitly supplied; force removes selected nodes and incident edges only, never recursive neighbors.
+Abandonment preserves discarded semantic history. Physical delete removes records and rejects when relationships would be affected unless `--force` is explicit; force removes selected nodes and incident edges only.
 
 ## Validation
 
-```bash
-map validate
-```
-
-Validation is read-only and non-repairing. It checks node shape, legal relation combinations, cycles, answer cardinality, replacement history, closure invariants, and other graph consistency rules.
+`map validate` is read-only and non-repairing. It checks node shape, legal relation combinations, cycles, answer cardinality, replacement history, closure invariants, and other graph consistency rules.
 
 ## Recovery session
 
@@ -160,15 +136,5 @@ map session end [--force]
 ```
 
 Session state is crash/context-loss recovery only. Semantic graph state remains authoritative.
-
-## Tests
-
-The v2 suite exercises the public executable across separate processes against real embedded SurrealKV state.
-
-```bash
-cargo test --manifest-path skills/map/Cargo.toml
-```
-
-The Windows integration suite currently has 18 tests and has passed against the real embedded database stack used by the runtime.
 
 The durable product contract is maintained separately in `jacoblockett/persist/map/SPEC.md`.
