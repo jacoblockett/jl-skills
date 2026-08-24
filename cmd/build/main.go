@@ -111,7 +111,7 @@ func run() error {
 	}
 
 	out := filepath.Join(buildDir, "jl-skill.exe")
-	cmd := exec.Command("go", "build", "-trimpath", "-o", out, "./cmd/jl-skill")
+	cmd := exec.Command("go", "build", "-buildvcs=false", "-trimpath", "-o", out, "./cmd/jl-skill")
 	cmd.Dir = repo
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
