@@ -275,8 +275,8 @@ impl Graph {
                 return false;
             }
         }
-        for owner in owners {
-            if !self.intent_dependencies_satisfied(&owner) {
+        for intent in self.intent_ancestors(&owners) {
+            if !self.intent_dependencies_satisfied(&intent) {
                 return false;
             }
         }
