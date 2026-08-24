@@ -11,11 +11,11 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, join, normalize, resolve } from 'node:path'
-import { homedir, platform } from 'node:os'
+import { arch, homedir, platform } from 'node:os'
 import { Buffer } from 'node:buffer'
 import { catalog } from './catalog.generated'
 
-const VERSION = '0.3.0'
+const VERSION = '0.4.0'
 const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
 
@@ -24,15 +24,13 @@ type Manifest = {
   version: string
   description: string
   skill_files: string[]
-  runtime_files: string[]
+  runtime_files?: string[]
   runtime?: string
-  runtime_dependencies?: string[]
-  runtime_entrypoint?: string
+  runtime_artifacts?: Record<string, string>
+  runtime_shared_files?: Record<string, string>
   runtime_cli?: string
   cli_token?: string
   instruction_fragment?: string
-  project_init?: string[]
-  project_validate?: string[]
 }
 
 type Scope = {
@@ -82,14 +80,10 @@ type UpdateGroup = {
   agents: string[]
 }
 
-type PythonExec = {
-  exe: string
-  prefix: string[]
-}
-
 type ProvisionedRuntime = {
   cli: string
   command: string[]
+  root: string
 }
 
 const agentCatalog: AgentSpec[] = [
@@ -135,6 +129,15 @@ function canonicalPath(raw: string): string {
 
 function userHome(): string {
   return canonicalPath(rawUserHome())
+}
+
+function installerDataRoot(): string {
+  if (isWindows) {
+    const local = process.env.LOCALAPPDATA || join(userHome(), 'AppData', 'Local')
+    return canonicalPath(join(local, 'JL-Skills'))
+  }
+  const data = process.env.XDG_DATA_HOME || join(userHome(), '.local', 'share')
+  return canonicalPath(join(data, 'JL-Skills'))
 }
 
 function resolveScope(raw: string): Scope {
@@ -247,10 +250,10 @@ function render(text: string, tokens: Record<string, string>): string {
   return result
 }
 
-function extractAsset(skill: string, rel: string, dest: string, tokens?: Record<string, string>): void {
+function extractAsset(skill: string, rel: string, dest: string, tokens?: Record<string, string>, mode = 0o644): void {
   const bytes = decodeAsset(skill, rel)
-  if (!tokens) return atomicWrite(dest, bytes)
-  atomicWrite(dest, render(new TextDecoder().decode(bytes), tokens))
+  if (!tokens) return atomicWrite(dest, bytes, mode)
+  atomicWrite(dest, render(new TextDecoder().decode(bytes), tokens), mode)
 }
 
 function managedBlock(path: string, skill: string, fragment: string): void {
@@ -275,7 +278,7 @@ function managedBlock(path: string, skill: string, fragment: string): void {
 }
 
 function registryPath(): string {
-  return join(userHome(), '.jl-skill', 'registry.json')
+  return join(installerDataRoot(), 'registry.json')
 }
 
 function loadRegistry(): Registry {
@@ -299,119 +302,48 @@ function saveReceipt(receipt: Receipt): void {
   atomicWrite(registryPath(), `${JSON.stringify(registry, null, 2)}\n`)
 }
 
-function run(command: string[], label: string): void {
-  const result = Bun.spawnSync(command, {
-    cwd: process.cwd(),
-    env: process.env,
-    stdin: 'inherit',
-    stdout: 'inherit',
-    stderr: 'inherit',
-  })
-  if (result.exitCode !== 0) throw new Error(`${label} failed with exit ${result.exitCode}`)
+function runtimePlatformKey(): string {
+  if (platform() === 'win32' && arch() === 'x64') return 'windows-x64'
+  if (platform() === 'linux' && arch() === 'x64') return 'linux-x64'
+  if (platform() === 'darwin' && arch() === 'arm64') return 'macos-arm64'
+  return `${platform()}-${arch()}`
 }
 
-function findPython311(): PythonExec {
-  const candidates: PythonExec[] = isWindows
-    ? [
-        { exe: 'python', prefix: [] },
-        { exe: 'py', prefix: ['-3'] },
-        { exe: 'python3', prefix: [] },
-      ]
-    : [
-        { exe: 'python3', prefix: [] },
-        { exe: 'python', prefix: [] },
-      ]
-  for (const candidate of candidates) {
-    const found = Bun.which(candidate.exe)
-    if (!found) continue
-    const result = Bun.spawnSync([
-      found,
-      ...candidate.prefix,
-      '-c',
-      'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)',
-    ], { stdout: 'pipe', stderr: 'pipe' })
-    if (result.exitCode === 0) return { exe: found, prefix: candidate.prefix }
+function runtimeRoot(manifest: Manifest, scope: Scope): string {
+  if (scope.kind === 'user') {
+    return join(installerDataRoot(), manifest.name, 'runtime', manifest.version)
   }
-  throw new Error('Map currently requires Python 3.11+; no compatible interpreter was found')
+  return join(scope.root, '.jl-skill', 'runtime', manifest.name, manifest.version)
 }
 
-function venvPython(venvRoot: string): string {
-  return isWindows ? join(venvRoot, 'Scripts', 'python.exe') : join(venvRoot, 'bin', 'python')
-}
-
-function cmdArg(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`
-}
-
-function shArg(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`
-}
-
-function provisionRuntime(manifest: Manifest, packageRoot: string, runtimeRoot: string): ProvisionedRuntime {
-  if (manifest.runtime !== 'python') throw new Error(`unsupported runtime "${manifest.runtime ?? ''}"`)
-  if (!manifest.runtime_entrypoint) throw new Error(`${manifest.name} manifest is missing runtime_entrypoint`)
+function provisionRuntime(manifest: Manifest, scope: Scope): ProvisionedRuntime {
+  if (manifest.runtime !== 'rust') throw new Error(`unsupported runtime "${manifest.runtime ?? ''}"`)
   if (!manifest.runtime_cli) throw new Error(`${manifest.name} manifest is missing runtime_cli`)
 
-  const host = findPython311()
-  mkdirSync(runtimeRoot, { recursive: true })
-  const venvRoot = join(runtimeRoot, 'venv')
-  const venvPy = venvPython(venvRoot)
-  if (!existsSync(venvPy)) run([host.exe, ...host.prefix, '-m', 'venv', venvRoot], `create isolated ${manifest.name} runtime`)
+  const key = runtimePlatformKey()
+  const artifact = manifest.runtime_artifacts?.[key]
+  if (!artifact) throw new Error(`${manifest.name} has no bundled runtime for ${key}`)
 
-  const dependencies = manifest.runtime_dependencies ?? []
-  if (dependencies.length > 0) {
-    run([
-      venvPy,
-      '-m',
-      'pip',
-      'install',
-      '--disable-pip-version-check',
-      '--upgrade',
-      ...dependencies,
-    ], 'install isolated runtime dependencies')
+  const root = runtimeRoot(manifest, scope)
+  mkdirSync(root, { recursive: true })
+  const cli = join(root, isWindows ? `${manifest.runtime_cli}.exe` : manifest.runtime_cli)
+  extractAsset(manifest.name, artifact, cli, undefined, 0o755)
+
+  for (const rel of manifest.runtime_files ?? []) {
+    extractAsset(manifest.name, rel, join(root, rel))
+  }
+  for (const [rel, destination] of Object.entries(manifest.runtime_shared_files ?? {})) {
+    extractAsset(manifest.name, rel, canonicalPath(destination))
   }
 
-  rmSync(join(runtimeRoot, 'site-packages'), { recursive: true, force: true })
-
-  const [moduleName, functionName = 'main'] = manifest.runtime_entrypoint.split(':', 2)
-  const runner = join(runtimeRoot, 'runner.py')
-  atomicWrite(runner, [
-    'import importlib',
-    'import sys',
-    `sys.path.insert(0, ${JSON.stringify(packageRoot)})`,
-    `module = importlib.import_module(${JSON.stringify(moduleName)})`,
-    `entry = getattr(module, ${JSON.stringify(functionName)})`,
-    'raise SystemExit(entry())',
-    '',
-  ].join('\n'))
-
-  if (isWindows) {
-    const cli = join(runtimeRoot, `${manifest.runtime_cli}.cmd`)
-    atomicWrite(cli, `@echo off\r\n${cmdArg(venvPy)} ${cmdArg(runner)} %*\r\n`, 0o755)
-    return { cli, command: [venvPy, runner] }
-  }
-
-  const cli = join(runtimeRoot, manifest.runtime_cli)
-  atomicWrite(cli, `#!/bin/sh\nexec ${shArg(venvPy)} ${shArg(runner)} "$@"\n`, 0o755)
-  return { cli, command: [venvPy, runner] }
-}
-
-function runDeclaredCommand(runtime: ProvisionedRuntime, manifest: Manifest, root: string, command: string[] | undefined, label: string): void {
-  if (!command || command.length === 0) return
-  const [declaredCli, ...args] = command
-  if (declaredCli !== manifest.runtime_cli) throw new Error(`unsupported declared runtime command "${declaredCli}"`)
-  run([...runtime.command, '--root', root, ...args], label)
+  if (!existsSync(cli)) throw new Error(`validation failed: missing runtime executable ${cli}`)
+  return { cli, command: [cli], root }
 }
 
 function installOne(manifest: Manifest, scope: Scope, agents: string[]): void {
   if (scope.kind === 'project') mkdirSync(scope.root, { recursive: true })
-  const dataRoot = join(scope.root, '.jl-skill')
-  const packageRoot = join(dataRoot, 'packages', manifest.name)
-  const runtimeRoot = join(dataRoot, 'runtime', manifest.name)
 
-  for (const rel of manifest.runtime_files ?? []) extractAsset(manifest.name, rel, join(packageRoot, rel))
-
-  const runtime = provisionRuntime(manifest, packageRoot, runtimeRoot)
+  const runtime = provisionRuntime(manifest, scope)
   const tokenName = manifest.cli_token || 'JL_SKILL_CLI'
   const tokens = { [`{{${tokenName}}}`]: normalize(runtime.cli) }
 
@@ -434,14 +366,9 @@ function installOne(manifest: Manifest, scope: Scope, agents: string[]): void {
       scope,
       agent,
       skill_path: dest,
-      runtime_root: runtimeRoot,
+      runtime_root: runtime.root,
       updated_at: new Date().toISOString(),
     })
-  }
-
-  if (scope.kind === 'project') {
-    runDeclaredCommand(runtime, manifest, scope.root, manifest.project_init, `${manifest.name} project init`)
-    runDeclaredCommand(runtime, manifest, scope.root, manifest.project_validate, `${manifest.name} project validation`)
   }
 
   for (const receipt of pendingReceipts) {
