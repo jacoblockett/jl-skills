@@ -1,137 +1,145 @@
-# Map
+# Map runtime
 
-Python prototype of `/map`, a durable, queryable graph of user intent for agents and humans.
+Map is a local durable intent graph used by agents and humans through the `map` CLI.
 
-The graph is authoritative. `/map` and ordinary agents interact with it through the Map CLI rather than reading SurrealKV files directly. Authoritative graph state and disposable conversational recovery state are separate.
+V2 is a clean Rust rewrite. The previous Python runtime/ontology is obsolete and intentionally not supported for compatibility.
 
-## Installation boundary
+## Build
 
-Installing the Map skill makes the capability available. It does **not** create a Map database for the installation scope.
-
-A complete Map skill installation includes:
-
-- the harness-discoverable `SKILL.md`;
-- the Map runtime/tool used by that skill;
-- Map-specific harness agent/subagent helpers where applicable;
-- installer-managed ordinary-agent instructions (`AGENTS.md`, `CLAUDE.md`, or harness equivalent).
-
-`.map/` state is created later, when Map is actually used against a working root.
-
-For a user-scope installation, the intended installer-owned runtime layout is:
-
-```text
-%LOCALAPPDATA%\JL-Skills\
-├─ registry.json
-└─ map\
-   └─ runtime\
-      └─ <semver>\
-         └─ ...Map runtime...
-```
-
-The installed skill receives the exact runtime path from `jl-skill`; the runtime does not need to sit next to `SKILL.md` or be globally on PATH.
-
-The current prototype runtime is Python. Public-distribution packaging is intentionally deferred until the Python behavior and interface are settled.
-
-## Package manifest
-
-`jl-skill.json` declares Map's skill entry, Python runtime files/dependency, runtime entrypoint, CLI token, and ordinary-agent instruction fragment.
-
-It intentionally does **not** declare an installer-time Map initializer or validator. Installing the skill must not create `.map/` state merely because the user chose an installation scope.
-
-Harness-specific filesystem placement belongs to `jl-skill` adapters rather than the Map manifest.
-
-## Current CLI
-
-Direct prototype development from `skills/map/`:
+Requires Rust 1.89+.
 
 ```bash
-pip install -e .
+cargo build --manifest-path skills/map/Cargo.toml --release
 ```
 
-This exposes `map`. The prototype pins the validated Python SDK/runtime dependency at `surrealdb==2.0.0`.
-
-The normal command surface is:
+Binary:
 
 ```text
-map init
-map status
-map list
-map show <id>
-map questions [--focus <id>]
-map ideas
-map decide <id> <value>
-map revise <id> <value>
-map promote <id> [--parent <id>]
-map add <kind> <subject> [options]
-map relate <source> <relation> <target> [options]
-map history <id>
+skills/map/target/release/map
+skills/map/target/release/map.exe   # Windows
+```
+
+The runtime embeds SurrealDB/SurrealKV. It does not require a SurrealDB daemon or listening port.
+
+## Initialize a test Map
+
+`init` intentionally does not silently locate the repository schema. Until installer/runtime packaging places the schema at its installed location, pass it explicitly during development:
+
+```bash
+./target/release/map --path /path/to/project init --schema schema.surql
+```
+
+Normal commands reject when the resolved target has no `.map`.
+
+## V2 model
+
+Node kinds:
+
+```text
+intent
+question
+decision
+idea
+fact
+```
+
+Questions are unresolved questions. Decisions are actual answers/choices. Answers are represented by a typed question-to-decision relationship; they are not values stored on question nodes.
+
+Internal relation tables are typed even though callers do not name relations:
+
+```text
+contains
+answers
+depends_on
+fact_context
+idea_context
+```
+
+`map relate` and `map unrelate` infer the legal relation from endpoint kinds and `--dependent`.
+
+## Main CLI
+
+```text
+map [--path PATH] [--config PATH] init [--schema PATH]
+
+map create intent <intent> [--context CONTEXT] [--depth DEPTH] [--stance STANCE]
+map create question <question> --intent <intent-id> [--reason REASON]
+map create decision <decision> [--question ID] [--source user|assistant]
+    [--assistant-reasoning REASONING] [--notes NOTES] [--soft]
+map create idea <idea>
+map create fact <fact> [--made-by user|assistant]
+
+map relate <source> <target...> [--dependent]
+map unrelate <source> <target...> [--dependent]
+
+map set depth <mvp|thorough>
+map set stance <normal|adversarial>
+map set <id> <property> <value>
+
+map replace <old> <new> --reason REASON [--in-place]
+map abandon <id> --by user|assistant --reason REASON
+map delete <id...> [--force]
+
+map get intents ...
+map get questions ...
+map get decisions ...
+map get ideas ...
+map get facts ...
+map show <id...>
 map context <id>
-map related <id>
+map status
 map validate
-map search <query>
-map explain <id>
+map search <query> [--limit N] [--include-history]
+map history <id> [--limit N]
 map session ...
 ```
 
-`questions` is the human-facing command for the decision frontier. The returned structure distinguishes `frontier`, `blocked`, and `inapplicable` decisions.
+Run `map <command> --help` for exact flags.
 
-### Node creation
+## Discovery state
 
-Normal callers do not invent database record IDs:
+Each Map stores `depth` and `stance`. An intent may optionally store fields with the same names; when present they override the Map values.
 
-```bash
-map add intent "Build authentication"
-map add constraint "No cloud service"
-map add decision "What is the minimum password length?" --authority inferred
-map add fact "Provider documents feature X" --authority external --source-note "provider documentation"
-map add idea "Support passkeys later"
-```
+`explored` and `closed` are separate:
 
-Map generates a collision-safe record ID and returns it. `--id` remains available only as an explicit override for import/testing.
+- `explored=true`: an LLM has examined/reasoned about the intent at least once.
+- `closed=true`: the intent is finalized enough for the effective depth/stance and closure invariants currently hold.
 
-Kinds have semantic initial states:
+The runtime never infers `explored` from question count. New unresolved structure can reopen a closed intent without changing `explored`.
+
+## Question retrieval
+
+`map get questions` returns current non-abandoned unanswered dependency-ready questions by default.
+
+Use:
 
 ```text
-intent      active
-decision    open
-constraint  active
-criterion   active
-idea        parked
-fact        active
+--include-blocked   also include unanswered dependency-blocked questions
+--answered          also include answered questions
+--abandoned         also include abandoned questions
 ```
 
-State validity is constrained by kind. In particular, a decision is `open`, `decided`, `needs_review`, `inapplicable`, `invalidated`, or `superseded`. `satisfied` is not a decision state.
+## Replacement, abandonment, deletion
 
-Authority/provenance remains independent from kind/state. Direct CLI additions default to user provenance except parked ideas, which default to `none`; agents must specify `--authority inferred`, `external`, or `derived` when that is the actual provenance. `--source-note` carries concise human-readable source/provenance detail when useful.
-
-### Relations
-
-`map relate` rejects missing endpoints and known-invalid semantic edges before writing them. `depends_on` must connect decisions, `constrains` must originate from a constraint, `supports` must originate from a fact, and `contains` cannot create a cycle. Conditional dependencies support the small deterministic `eq`, `neq`, and `in` operator set.
-
-### Decision changes
-
-`map decide <id> <value>` moves an actionable decision to `decided`. Calling `decide` again on an already-decided node is rejected so authoritative history cannot be silently overwritten.
-
-`map revise <id> <new-value>` atomically creates a replacement decision, preserves containment and prerequisite dependency edges, marks the previous decision `superseded`, records lineage, and marks directly affected decided dependents `needs_review`. A deeper descendant remains decided until its own direct prerequisite changes; this avoids invalidating downstream decisions when an intermediate decision is merely reconfirmed. `--new-id` is an explicit import/testing override rather than normal grammar.
-
-Idea promotion plus optional parent containment is also committed as one transaction.
-
-## Read/query surface
+Normal replacement preserves history:
 
 ```bash
-map history <id>
-map context <id>
-map related <id>
-map validate
-map search <text>
-map explain <id>
+map replace OLD NEW --reason "..."
 ```
 
-`history` reconstructs supersession lineage. `context` returns compact current authoritative state for a branch. `related` exposes literal direct graph edges. `validate` checks graph structure and kind/state/relation semantics without repair. `search` performs deterministic lexical retrieval and excludes superseded history unless `--include-history` is supplied. Exact subject matches dominate weaker token overlap. `explain` gathers graph-supported lineage, ancestors, constraints, prerequisites, dependents, supports, and direct relations without inventing rationale. Node/frontier output is deterministically ordered by record ID where order is otherwise semantic-neutral.
+`--in-place` is destructive: NEW assumes OLD's graph position and OLD is removed.
 
-## Durable recovery session
+Abandonment preserves the node as discarded semantic history. Physical delete removes records. Delete rejects when relationships would be affected unless `--force` is explicitly supplied; force removes selected nodes and incident edges only, never recursive neighbors.
 
-`map_session` is not another mutation API. It is a disposable recovery capsule for conversational state that may be lost during a crash or context switch.
+## Validation
+
+```bash
+map validate
+```
+
+Validation is read-only and non-repairing. It checks node shape, legal relation combinations, cycles, answer cardinality, replacement history, closure invariants, and other graph consistency rules.
+
+## Recovery session
 
 ```text
 map session init
@@ -141,43 +149,14 @@ map session pending [new_pending | --clear]
 map session end [--force]
 ```
 
-The recovery capsule contains:
+Session state is crash/context-loss recovery only. Semantic graph state remains authoritative.
 
-- a normalized summary capped at 2200 characters;
-- a rolling verbatim assistant/user exchange, default depth 6 and minimum 2;
-- exact pending conversational work that may not yet be safely represented in the graph.
+## Tests
 
-The summary is intentionally compact and is updated after a user response completes an assistant/user exchange, not merely when the assistant speaks. The skill writes it in concise Classical Chinese while preserving technical terms, names, identifiers, quotations, and anything that cannot be translated without semantic loss.
+The v2 test suite is intended to exercise the built public binary across separate processes against real embedded SurrealKV state.
 
-The core ordering invariant is:
+```bash
+cargo test --manifest-path skills/map/Cargo.toml
+```
 
-1. persist conversational state to `map_session` as completely as possible;
-2. persist and verify semantic consequences through ordinary `map` commands;
-3. clear `session pending` only after those consequences are verified durable.
-
-This also makes a separate atomic “baseline creation” API unnecessary. If ordinary baseline writes are interrupted, `pending` remains and recovery reconciles the partially persisted graph before continuing.
-
-If a crash happens after step 2 but before step 3, recovery sees the pending work, inspects the authoritative graph, and can determine that the mutation already landed rather than blindly applying it twice.
-
-`map session end` refuses while pending work exists. `--force` explicitly discards potentially unpersisted recovery state and is intended only when the user chooses to abandon it.
-
-## Current milestone
-
-The prototype uses embedded SurrealDB/SurrealKV and persists graph state under `<working-root>/.map/db/`. No SurrealDB daemon is required.
-
-Implemented:
-
-- intents, decisions, constraints, criteria, ideas, and facts;
-- semantic relations and conditional dependencies with early mutation guards;
-- global and focused decision frontiers;
-- parked idea promotion;
-- atomic non-destructive decision revision and supersession history;
-- direct dependent `needs_review` reopening;
-- read-only history/context/related/validate/search/explain queries;
-- generated collision-safe node IDs and deterministic neutral ordering;
-- kind-specific state validation and migration away from the old `settled` decision state;
-- durable recovery summary, rolling raw exchange, pending-work recovery, and session-first A → B → C ordering.
-
-Remaining product-level behaviors are intentionally not invented here; they should be decided from actual Map usage rather than added speculatively.
-
-`seed_chores()` remains an internal development fixture in `map_state.py` for prototype evaluation but is not part of the public CLI.
+The durable product contract is maintained separately in `jacoblockett/persist/map/SPEC.md`.
