@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use serde_json::Value;
-use tempfile::TempDir;
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_map")
@@ -11,6 +10,22 @@ fn bin() -> &'static str {
 
 fn schema() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("schema.surql")
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("skills directory")
+        .parent()
+        .expect("repository root")
+        .to_path_buf()
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let path = repo_root().join("test").join("map-rust-v2").join(name);
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).expect("create repo-local test scratch");
+    path
 }
 
 fn run(root: &Path, args: &[&str]) -> Output {
@@ -59,10 +74,10 @@ fn sorted(mut ids: Vec<String>) -> Vec<String> {
     ids
 }
 
-fn new_map() -> TempDir {
-    let root = tempfile::tempdir().expect("tempdir");
+fn new_map(name: &str) -> PathBuf {
+    let root = scratch(name);
     let schema = schema().to_string_lossy().into_owned();
-    ok(root.path(), &["init", "--schema", &schema]);
+    ok(&root, &["init", "--schema", &schema]);
     root
 }
 
@@ -72,77 +87,77 @@ fn toml_path(path: &Path) -> String {
 
 #[test]
 fn explicit_config_path_resolves_and_invalid_selection_does_not_fallback() {
-    let root = new_map();
-    let config_dir = tempfile::tempdir().expect("config tempdir");
+    let root = new_map("contract-explicit-config-map");
+    let config_dir = scratch("contract-explicit-config-dir");
     fs::write(
-        config_dir.path().join(".maprc"),
-        format!("path = \"{}\"\n", toml_path(root.path())),
+        config_dir.join(".maprc"),
+        format!("path = \"{}\"\n", toml_path(&root)),
     )
     .unwrap();
-    let config = config_dir.path().to_string_lossy().into_owned();
+    let config = config_dir.to_string_lossy().into_owned();
 
-    let status = parse_ok(run_from(config_dir.path(), &["--config", &config, "status"]));
+    let status = parse_ok(run_from(&config_dir, &["--config", &config, "status"]));
     assert_eq!(status["depth"], "mvp");
 
-    let missing = config_dir.path().join("missing-project");
+    let missing = config_dir.join("missing-project");
     fs::write(
-        config_dir.path().join(".maprc"),
+        config_dir.join(".maprc"),
         format!("path = \"{}\"\n", toml_path(&missing)),
     )
     .unwrap();
 
     // cwd has a valid Map, but the explicitly selected config path must win and fail.
-    let output = run_from(root.path(), &["--config", &config, "status"]);
+    let output = run_from(&root, &["--config", &config, "status"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("no .map exists"));
 }
 
 #[test]
 fn adding_dependency_reopens_closed_source_even_when_target_is_closed() {
-    let root = new_map();
-    let source = id(&ok(root.path(), &["create", "intent", "Source"]));
-    let target = id(&ok(root.path(), &["create", "intent", "Target"]));
+    let root = new_map("contract-dependency-reopens");
+    let source = id(&ok(&root, &["create", "intent", "Source"]));
+    let target = id(&ok(&root, &["create", "intent", "Target"]));
 
     for intent in [&source, &target] {
-        ok(root.path(), &["set", intent, "explored", "true"]);
-        ok(root.path(), &["set", intent, "close", "true"]);
+        ok(&root, &["set", intent, "explored", "true"]);
+        ok(&root, &["set", intent, "close", "true"]);
     }
 
-    ok(root.path(), &["relate", &source, &target, "--dependent"]);
-    assert_eq!(ok(root.path(), &["show", &source])["closed"], false);
-    assert_eq!(ok(root.path(), &["show", &target])["closed"], true);
-    assert_eq!(ok(root.path(), &["show", &source])["explored"], true);
+    ok(&root, &["relate", &source, &target, "--dependent"]);
+    assert_eq!(ok(&root, &["show", &source])["closed"], false);
+    assert_eq!(ok(&root, &["show", &target])["closed"], true);
+    assert_eq!(ok(&root, &["show", &source])["explored"], true);
 }
 
 #[test]
 fn adding_question_reopens_closed_intent_without_resetting_explored() {
-    let root = new_map();
-    let intent = id(&ok(root.path(), &["create", "intent", "Government"]));
-    ok(root.path(), &["set", &intent, "explored", "true"]);
-    ok(root.path(), &["set", &intent, "close", "true"]);
+    let root = new_map("contract-question-reopens");
+    let intent = id(&ok(&root, &["create", "intent", "Government"]));
+    ok(&root, &["set", &intent, "explored", "true"]);
+    ok(&root, &["set", &intent, "close", "true"]);
 
     id(&ok(
-        root.path(),
+        &root,
         &["create", "question", "What system?", "--intent", &intent],
     ));
 
-    let shown = ok(root.path(), &["show", &intent]);
+    let shown = ok(&root, &["show", &intent]);
     assert_eq!(shown["closed"], false);
     assert_eq!(shown["explored"], true);
 }
 
 #[test]
 fn decision_provenance_rules_are_enforced() {
-    let root = new_map();
+    let root = new_map("contract-decision-provenance");
 
     let message = err(
-        root.path(),
+        &root,
         &["create", "decision", "Assistant choice", "--source", "assistant"],
     );
     assert!(message.contains("assistant-reasoning"));
 
     let assistant = ok(
-        root.path(),
+        &root,
         &[
             "create",
             "decision",
@@ -156,7 +171,7 @@ fn decision_provenance_rules_are_enforced() {
     assert!(assistant["id"].is_string());
 
     let message = err(
-        root.path(),
+        &root,
         &[
             "create",
             "decision",
@@ -172,76 +187,76 @@ fn decision_provenance_rules_are_enforced() {
 
 #[test]
 fn unrelate_removes_only_the_inferred_dependency() {
-    let root = new_map();
-    let intent = id(&ok(root.path(), &["create", "intent", "Government"]));
-    let q1 = id(&ok(root.path(), &["create", "question", "Q1", "--intent", &intent]));
-    let q2 = id(&ok(root.path(), &["create", "question", "Q2", "--intent", &intent]));
+    let root = new_map("contract-unrelate");
+    let intent = id(&ok(&root, &["create", "intent", "Government"]));
+    let q1 = id(&ok(&root, &["create", "question", "Q1", "--intent", &intent]));
+    let q2 = id(&ok(&root, &["create", "question", "Q2", "--intent", &intent]));
 
-    ok(root.path(), &["relate", &q2, &q1, "--dependent"]);
-    assert_eq!(ok(root.path(), &["get", "questions"]), serde_json::json!([q1.clone()]));
+    ok(&root, &["relate", &q2, &q1, "--dependent"]);
+    assert_eq!(ok(&root, &["get", "questions"]), serde_json::json!([q1.clone()]));
 
-    ok(root.path(), &["unrelate", &q2, &q1, "--dependent"]);
+    ok(&root, &["unrelate", &q2, &q1, "--dependent"]);
     assert_eq!(
-        ok(root.path(), &["get", "questions"]),
+        ok(&root, &["get", "questions"]),
         serde_json::json!(sorted(vec![q1, q2.clone()]))
     );
 
-    let message = err(root.path(), &["unrelate", &q2, &q2, "--dependent"]);
+    let message = err(&root, &["unrelate", &q2, &q2, "--dependent"]);
     assert!(message.contains("does not exist") || message.contains("relationship"));
 }
 
 #[test]
 fn answer_cardinality_and_illegal_relation_shapes_reject() {
-    let root = new_map();
-    let intent = id(&ok(root.path(), &["create", "intent", "Government"]));
+    let root = new_map("contract-relation-cardinality");
+    let intent = id(&ok(&root, &["create", "intent", "Government"]));
     let question = id(&ok(
-        root.path(),
+        &root,
         &["create", "question", "What system?", "--intent", &intent],
     ));
     let d1 = id(&ok(
-        root.path(),
+        &root,
         &["create", "decision", "Parliamentary", "--question", &question],
     ));
-    let d2 = id(&ok(root.path(), &["create", "decision", "Presidential"]));
+    let d2 = id(&ok(&root, &["create", "decision", "Presidential"]));
 
-    let message = err(root.path(), &["relate", &question, &d2]);
+    let message = err(&root, &["relate", &question, &d2]);
     assert!(message.contains("current answers") || message.contains("invariants"));
 
-    let message = err(root.path(), &["relate", &d1, &question]);
+    let message = err(&root, &["relate", &d1, &question]);
     assert!(message.contains("no legal v2 relationship"));
 
-    let q2 = id(&ok(root.path(), &["create", "question", "Q2", "--intent", &intent]));
-    let message = err(root.path(), &["relate", &question, &q2]);
+    let q2 = id(&ok(&root, &["create", "question", "Q2", "--intent", &intent]));
+    let message = err(&root, &["relate", &question, &q2]);
     assert!(message.contains("requires --dependent"));
 }
 
 #[test]
 fn keywords_and_unicode_are_searchable_and_round_trip() {
-    let root = new_map();
+    let root = new_map("contract-keywords-unicode");
     let fact = id(&ok(
-        root.path(),
+        &root,
         &["create", "fact", "헌법은 최고 법규다", "--made-by", "assistant"],
     ));
     ok(
-        root.path(),
+        &root,
         &["set", &fact, "keywords", "[\"constitution\",\"헌법\"]"],
     );
 
-    let results = ok(root.path(), &["search", "헌법"]);
+    let results = ok(&root, &["search", "헌법"]);
     assert_eq!(results[0], fact);
-    let shown = ok(root.path(), &["show", &fact]);
+    let shown = ok(&root, &["show", &fact]);
     assert_eq!(shown["text"], "헌법은 최고 법규다");
     assert_eq!(shown["keywords"], serde_json::json!(["constitution", "헌법"]));
 }
 
 #[test]
 fn in_place_replacement_removes_old_node_but_retains_replacement_metadata() {
-    let root = new_map();
-    let old = id(&ok(root.path(), &["create", "idea", "Old idea"]));
-    let new = id(&ok(root.path(), &["create", "idea", "New idea"]));
+    let root = new_map("contract-in-place-replacement");
+    let old = id(&ok(&root, &["create", "idea", "Old idea"]));
+    let new = id(&ok(&root, &["create", "idea", "New idea"]));
 
     ok(
-        root.path(),
+        &root,
         &[
             "replace",
             &old,
@@ -252,40 +267,40 @@ fn in_place_replacement_removes_old_node_but_retains_replacement_metadata() {
         ],
     );
 
-    let shown = ok(root.path(), &["show", &old]);
+    let shown = ok(&root, &["show", &old]);
     assert_eq!(shown["id"], new);
     assert_eq!(shown["text"], "New idea");
 
-    let history = ok(root.path(), &["history", &old]);
+    let history = ok(&root, &["history", &old]);
     assert_eq!(history["events"][0]["mode"], "in_place");
     assert!(history["nodes"][0]["node"].is_null());
-    assert_eq!(ok(root.path(), &["validate"])["ok"], true);
+    assert_eq!(ok(&root, &["validate"])["ok"], true);
 }
 
 #[test]
 fn invalid_set_property_rejects_instead_of_becoming_generic_editing() {
-    let root = new_map();
-    let idea = id(&ok(root.path(), &["create", "idea", "Maybe bicameral"]));
-    let message = err(root.path(), &["set", &idea, "soft", "true"]);
+    let root = new_map("contract-invalid-set");
+    let idea = id(&ok(&root, &["create", "idea", "Maybe bicameral"]));
+    let message = err(&root, &["set", &idea, "soft", "true"]);
     assert!(message.contains("does not exist on idea"));
 }
 
 #[test]
 fn every_node_kind_supports_abandonment() {
-    let root = new_map();
-    let owner = id(&ok(root.path(), &["create", "intent", "Owner"]));
-    let question = id(&ok(root.path(), &["create", "question", "Question", "--intent", &owner]));
-    let decision = id(&ok(root.path(), &["create", "decision", "Decision"]));
-    let idea = id(&ok(root.path(), &["create", "idea", "Idea"]));
-    let fact = id(&ok(root.path(), &["create", "fact", "Fact"]));
-    let standalone_intent = id(&ok(root.path(), &["create", "intent", "Standalone"]));
+    let root = new_map("contract-abandonment");
+    let owner = id(&ok(&root, &["create", "intent", "Owner"]));
+    let question = id(&ok(&root, &["create", "question", "Question", "--intent", &owner]));
+    let decision = id(&ok(&root, &["create", "decision", "Decision"]));
+    let idea = id(&ok(&root, &["create", "idea", "Idea"]));
+    let fact = id(&ok(&root, &["create", "fact", "Fact"]));
+    let standalone_intent = id(&ok(&root, &["create", "intent", "Standalone"]));
 
     for node in [&question, &decision, &idea, &fact, &standalone_intent] {
         ok(
-            root.path(),
+            &root,
             &["abandon", node, "--by", "user", "--reason", "No longer relevant"],
         );
-        let shown = ok(root.path(), &["show", node]);
+        let shown = ok(&root, &["show", node]);
         assert_eq!(shown["abandoned"], true);
         assert_eq!(shown["abandonedBy"], "user");
         assert_eq!(shown["abandonedReason"], "No longer relevant");
