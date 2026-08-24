@@ -2,17 +2,17 @@
 
 Map is a local durable intent graph used by agents and humans through the `map` CLI.
 
-V2 is a clean Rust rewrite. The previous Python runtime/ontology is obsolete and intentionally not supported for compatibility.
+V2 is the canonical Rust runtime. The previous Python runtime/ontology is obsolete and intentionally unsupported for compatibility.
 
 ## Build
 
-Requires Rust 1.89+.
+Requires Rust 1.89+ for development builds.
 
 ```bash
 cargo build --manifest-path skills/map/Cargo.toml --release
 ```
 
-Binary:
+Development binary:
 
 ```text
 skills/map/target/release/map
@@ -21,13 +21,23 @@ skills/map/target/release/map.exe   # Windows
 
 The runtime embeds SurrealDB/SurrealKV. It does not require a SurrealDB daemon or listening port.
 
-## Initialize a test Map
+The consumer installer builds and embeds the release binary ahead of time; consumers do not need Rust.
 
-`init` intentionally does not silently locate the repository schema. Until installer/runtime packaging places the schema at its installed location, pass it explicitly during development:
+## Initialize a Map
+
+A released installer places the default schema at the runtime-supported shared location. Normal consumer initialization is therefore:
 
 ```bash
-./target/release/map --path /path/to/project init --schema schema.surql
+map --path /path/to/project init
 ```
+
+During source-tree development, an explicit schema remains available:
+
+```bash
+cargo run --manifest-path skills/map/Cargo.toml -- --path /path/to/project init --schema skills/map/schema.surql
+```
+
+Installing the Map skill does **not** create `.map`. `map init` creates project state only when Map is actually started for that target and rejects when `.map` already exists.
 
 Normal commands reject when the resolved target has no `.map`.
 
@@ -153,10 +163,12 @@ Session state is crash/context-loss recovery only. Semantic graph state remains 
 
 ## Tests
 
-The v2 test suite is intended to exercise the built public binary across separate processes against real embedded SurrealKV state.
+The v2 suite exercises the public executable across separate processes against real embedded SurrealKV state.
 
 ```bash
 cargo test --manifest-path skills/map/Cargo.toml
 ```
+
+The Windows integration suite currently has 18 tests and has passed against the real embedded database stack used by the runtime.
 
 The durable product contract is maintained separately in `jacoblockett/persist/map/SPEC.md`.
