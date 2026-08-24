@@ -1,15 +1,3 @@
-async fn reopen_closed(store: &Store, ids: &[String]) -> Result<()> {
-    if ids.is_empty() {
-        return Ok(());
-    }
-    let mut sql = String::from("BEGIN TRANSACTION;\n");
-    for id in ids {
-        sql.push_str(&format!("UPDATE node:{id} SET closed = false;\n"));
-    }
-    sql.push_str("COMMIT TRANSACTION;");
-    store.checked(sql).await
-}
-
 fn generate_id(graph: &Graph) -> String {
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::thread_rng();
@@ -26,12 +14,6 @@ fn generate_id(graph: &Graph) -> String {
             return id;
         }
     }
-}
-
-fn record_key(id: &str) -> String {
-    id.split_once(':')
-        .map(|(_, key)| key.to_string())
-        .unwrap_or_else(|| id.to_string())
 }
 
 fn normalize_input_id(id: &str) -> String {
