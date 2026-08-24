@@ -54,6 +54,11 @@ fn id(value: &Value) -> String {
     value["id"].as_str().expect("id").to_string()
 }
 
+fn sorted(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids
+}
+
 fn new_map() -> TempDir {
     let root = tempfile::tempdir().expect("tempdir");
     let schema = schema().to_string_lossy().into_owned();
@@ -74,11 +79,9 @@ fn explicit_config_path_resolves_and_invalid_selection_does_not_fallback() {
         format!("path = \"{}\"\n", toml_path(root.path())),
     )
     .unwrap();
+    let config = config_dir.path().to_string_lossy().into_owned();
 
-    let status = parse_ok(run_from(
-        config_dir.path(),
-        &["--config", config_dir.path().to_string_lossy().as_ref(), "status"],
-    ));
+    let status = parse_ok(run_from(config_dir.path(), &["--config", &config, "status"]));
     assert_eq!(status["depth"], "mvp");
 
     let missing = config_dir.path().join("missing-project");
@@ -89,10 +92,7 @@ fn explicit_config_path_resolves_and_invalid_selection_does_not_fallback() {
     .unwrap();
 
     // cwd has a valid Map, but the explicitly selected config path must win and fail.
-    let output = run_from(
-        root.path(),
-        &["--config", config_dir.path().to_string_lossy().as_ref(), "status"],
-    );
+    let output = run_from(root.path(), &["--config", &config, "status"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("no .map exists"));
 }
@@ -183,7 +183,7 @@ fn unrelate_removes_only_the_inferred_dependency() {
     ok(root.path(), &["unrelate", &q2, &q1, "--dependent"]);
     assert_eq!(
         ok(root.path(), &["get", "questions"]),
-        serde_json::json!([q1, q2])
+        serde_json::json!(sorted(vec![q1, q2.clone()]))
     );
 
     let message = err(root.path(), &["unrelate", &q2, &q2, "--dependent"]);
@@ -268,4 +268,26 @@ fn invalid_set_property_rejects_instead_of_becoming_generic_editing() {
     let idea = id(&ok(root.path(), &["create", "idea", "Maybe bicameral"]));
     let message = err(root.path(), &["set", &idea, "soft", "true"]);
     assert!(message.contains("does not exist on idea"));
+}
+
+#[test]
+fn every_node_kind_supports_abandonment() {
+    let root = new_map();
+    let owner = id(&ok(root.path(), &["create", "intent", "Owner"]));
+    let question = id(&ok(root.path(), &["create", "question", "Question", "--intent", &owner]));
+    let decision = id(&ok(root.path(), &["create", "decision", "Decision"]));
+    let idea = id(&ok(root.path(), &["create", "idea", "Idea"]));
+    let fact = id(&ok(root.path(), &["create", "fact", "Fact"]));
+    let standalone_intent = id(&ok(root.path(), &["create", "intent", "Standalone"]));
+
+    for node in [&question, &decision, &idea, &fact, &standalone_intent] {
+        ok(
+            root.path(),
+            &["abandon", node, "--by", "user", "--reason", "No longer relevant"],
+        );
+        let shown = ok(root.path(), &["show", node]);
+        assert_eq!(shown["abandoned"], true);
+        assert_eq!(shown["abandonedBy"], "user");
+        assert_eq!(shown["abandonedReason"], "No longer relevant");
+    }
 }
