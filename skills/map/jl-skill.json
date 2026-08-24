@@ -1,24 +1,16 @@
 {
   "name": "map",
-  "version": "0.1.0",
-  "description": "Durable, queryable graph of user intent, decisions, constraints, ideas, facts, and rationale.",
+  "version": "0.2.0",
+  "description": "Durable local graph of user intent, questions, decisions, ideas, facts, dependencies, and recovery state.",
   "skill_files": [
     "SKILL.md"
   ],
   "runtime_files": [
-    "map_agent_query.py",
-    "map_cli.py",
-    "map_entry.py",
-    "map_query.py",
-    "map_session.py",
-    "map_state.py",
+    "Cargo.toml",
+    "src",
     "schema.surql"
   ],
-  "runtime": "python",
-  "runtime_dependencies": [
-    "surrealdb==2.0.0"
-  ],
-  "runtime_entrypoint": "map_cli:main",
+  "runtime": "rust",
   "runtime_cli": "map",
   "cli_token": "JL_MAP_CLI",
   "instruction_fragment": "AGENTS.fragment.md"
