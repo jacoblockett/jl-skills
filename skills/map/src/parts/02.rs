@@ -7,7 +7,7 @@ impl Store {
     async fn open(map_dir: PathBuf) -> Result<Self> {
         let db_path = map_dir.join("db");
         let db_path_string = db_path.to_string_lossy().to_string();
-        let db = Surreal::new::<SurrealKv>(db_path_string)
+        let db = Surreal::new::<SurrealKv>(db_path_string.as_str())
             .await
             .context("opening embedded SurrealKV")?;
         db.use_ns(NAMESPACE).use_db(DATABASE).await?;
@@ -16,18 +16,18 @@ impl Store {
 
     async fn query_vec<T: DeserializeOwned>(&self, sql: &str) -> Result<Vec<T>> {
         let mut response = self.db.query(sql).await?;
-        let values: Vec<Value> = response.take(0)?;
+        let values: Vec<SurrealDbValue> = response.take(0)?;
         values
             .into_iter()
-            .map(|value| serde_json::from_value(value).map_err(Into::into))
+            .map(|value| serde_json::from_value(value.into_json_value()).map_err(Into::into))
             .collect()
     }
 
     async fn query_one<T: DeserializeOwned>(&self, sql: &str) -> Result<Option<T>> {
         let mut response = self.db.query(sql).await?;
-        let value: Option<Value> = response.take(0)?;
+        let value: Option<SurrealDbValue> = response.take(0)?;
         value
-            .map(serde_json::from_value)
+            .map(|value| serde_json::from_value(value.into_json_value()))
             .transpose()
             .map_err(Into::into)
     }
