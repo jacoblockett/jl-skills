@@ -6,8 +6,7 @@ struct Store {
 impl Store {
     async fn open(map_dir: PathBuf) -> Result<Self> {
         let db_path = map_dir.join("db");
-        let db_path_string = db_path.to_string_lossy().to_string();
-        let db = Surreal::new::<SurrealKv>(db_path_string.as_str())
+        let db = Surreal::new::<SurrealKv>(db_path)
             .await
             .context("opening embedded SurrealKV")?;
         db.use_ns(NAMESPACE).use_db(DATABASE).await?;
