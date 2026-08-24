@@ -5,19 +5,16 @@ const repo = join(import.meta.dir, '..')
 const skillsRoot = join(repo, 'skills')
 const stagedRuntimeRoot = join(repo, 'build', 'runtime-assets')
 const output = join(repo, 'src', 'catalog.generated.ts')
-const ignoredDirectories = new Set(['target', 'node_modules', '.git'])
 
-function walk(root: string): string[] {
-  const out: string[] = []
-  for (const entry of readdirSync(root)) {
-    const full = join(root, entry)
-    if (statSync(full).isDirectory()) {
-      if (!ignoredDirectories.has(entry)) out.push(...walk(full))
-    } else {
-      out.push(full)
-    }
+function addDeclared(files: Record<string, string>, skillRoot: string, rel: string): void {
+  const full = join(skillRoot, rel)
+  if (!existsSync(full)) throw new Error(`missing declared asset ${relative(repo, full)}`)
+  if (statSync(full).isDirectory()) {
+    for (const entry of readdirSync(full)) addDeclared(files, skillRoot, join(rel, entry))
+    return
   }
-  return out
+  const key = relative(skillRoot, full).split(sep).join('/')
+  files[key] = readFileSync(full).toString('base64')
 }
 
 const catalog: Record<string, { manifest: unknown; files: Record<string, string> }> = {}
@@ -26,26 +23,25 @@ for (const entry of readdirSync(skillsRoot)) {
   const skillRoot = join(skillsRoot, entry)
   if (!statSync(skillRoot).isDirectory()) continue
   const manifestPath = join(skillRoot, 'jl-skill.json')
-  try {
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-    const files: Record<string, string> = {}
-    for (const path of walk(skillRoot)) {
-      const rel = relative(skillRoot, path).split(sep).join('/')
-      files[rel] = readFileSync(path).toString('base64')
-    }
+  if (!existsSync(manifestPath)) continue
 
-    const runtimeArtifacts = manifest.runtime_artifacts as Record<string, string> | undefined
-    for (const rel of Object.values(runtimeArtifacts ?? {})) {
-      const staged = join(stagedRuntimeRoot, entry, rel)
-      if (!existsSync(staged)) throw new Error(`missing staged runtime artifact ${entry}/${rel}`)
-      files[rel.replaceAll('\\', '/')] = readFileSync(staged).toString('base64')
-    }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const files: Record<string, string> = {}
+  const declared = new Set<string>([
+    ...(manifest.skill_files ?? []),
+    ...(manifest.runtime_files ?? []),
+    ...(manifest.instruction_fragment ? [manifest.instruction_fragment] : []),
+  ])
+  for (const rel of declared) addDeclared(files, skillRoot, rel)
 
-    catalog[entry] = { manifest, files }
-  } catch (error) {
-    if (existsSync(manifestPath)) throw error
-    // Directories without a jl-skill manifest are not installable catalog entries.
+  const runtimeArtifacts = manifest.runtime_artifacts as Record<string, string> | undefined
+  for (const rel of Object.values(runtimeArtifacts ?? {})) {
+    const staged = join(stagedRuntimeRoot, entry, rel)
+    if (!existsSync(staged)) throw new Error(`missing staged runtime artifact ${entry}/${rel}`)
+    files[rel.replaceAll('\\', '/')] = readFileSync(staged).toString('base64')
   }
+
+  catalog[entry] = { manifest, files }
 }
 
 mkdirSync(join(repo, 'src'), { recursive: true })
