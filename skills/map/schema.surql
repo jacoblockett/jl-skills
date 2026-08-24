@@ -1,85 +1,53 @@
--- /map prototype schema.
--- Keep the ontology deliberately small and enforce state semantics by node kind.
+-- Map v2 schema. The Rust runtime owns semantic invariants beyond field shape.
 
-DEFINE TABLE IF NOT EXISTS node SCHEMAFULL TYPE NORMAL;
-DEFINE FIELD OVERWRITE kind ON node TYPE
-    "intent" | "decision" | "constraint" | "criterion" | "idea" | "fact";
+DEFINE TABLE OVERWRITE node TYPE NORMAL SCHEMAFULL;
+DEFINE FIELD OVERWRITE kind ON TABLE node TYPE string ASSERT $value IN ['intent', 'question', 'decision', 'idea', 'fact'];
+DEFINE FIELD OVERWRITE text ON TABLE node TYPE string;
+DEFINE FIELD OVERWRITE keywords ON TABLE node TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE abandoned ON TABLE node TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE abandonedReason ON TABLE node TYPE option<string>;
+DEFINE FIELD OVERWRITE abandonedBy ON TABLE node TYPE option<string> ASSERT $value = NONE OR $value IN ['user', 'assistant'];
 
--- Compatibility migration from the earlier prototype vocabulary. Broaden the
--- field temporarily so existing prototype Maps can move away from `settled`.
-DEFINE FIELD OVERWRITE state ON node TYPE string;
-UPDATE node SET state = "decided" WHERE kind = "decision" AND state = "settled";
-UPDATE node SET state = "active" WHERE kind IN ["constraint", "criterion", "fact"] AND state = "settled";
-UPDATE node SET state = "satisfied" WHERE kind = "intent" AND state = "settled";
+-- Intent-only fields.
+DEFINE FIELD OVERWRITE context ON TABLE node TYPE option<string>;
+DEFINE FIELD OVERWRITE explored ON TABLE node TYPE option<bool>;
+DEFINE FIELD OVERWRITE closed ON TABLE node TYPE option<bool>;
+DEFINE FIELD OVERWRITE depth ON TABLE node TYPE option<string> ASSERT $value = NONE OR $value IN ['mvp', 'thorough'];
+DEFINE FIELD OVERWRITE stance ON TABLE node TYPE option<string> ASSERT $value = NONE OR $value IN ['normal', 'adversarial'];
 
-DEFINE FIELD OVERWRITE state ON node TYPE string ASSERT
-    (kind = "intent" AND $value IN ["active", "satisfied", "dormant", "superseded", "abandoned"]) OR
-    (kind = "decision" AND $value IN ["open", "decided", "inapplicable", "superseded", "needs_review", "invalidated"]) OR
-    (kind = "constraint" AND $value IN ["active", "superseded", "abandoned"]) OR
-    (kind = "criterion" AND $value IN ["active", "satisfied", "superseded", "abandoned"]) OR
-    (kind = "idea" AND $value IN ["parked", "superseded", "abandoned"]) OR
-    (kind = "fact" AND $value IN ["active", "superseded", "invalidated"]);
+-- Question-only fields.
+DEFINE FIELD OVERWRITE reason ON TABLE node TYPE option<string>;
+DEFINE FIELD OVERWRITE asked ON TABLE node TYPE option<bool>;
 
-DEFINE FIELD OVERWRITE authority ON node TYPE
-    "user" | "inferred" | "external" | "derived" | "none";
-DEFINE FIELD IF NOT EXISTS subject ON node TYPE string;
-DEFINE FIELD IF NOT EXISTS detail ON node TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS value ON node TYPE any;
-DEFINE FIELD IF NOT EXISTS source_note ON node TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS tags ON node TYPE array<string> DEFAULT [];
-DEFINE FIELD IF NOT EXISTS created_at ON node TYPE datetime DEFAULT time::now();
-DEFINE FIELD IF NOT EXISTS updated_at ON node TYPE datetime DEFAULT time::now();
+-- Decision-only fields.
+DEFINE FIELD OVERWRITE source ON TABLE node TYPE option<string> ASSERT $value = NONE OR $value IN ['user', 'assistant'];
+DEFINE FIELD OVERWRITE assistantReasoning ON TABLE node TYPE option<string>;
+DEFINE FIELD OVERWRITE notes ON TABLE node TYPE option<string>;
+DEFINE FIELD OVERWRITE soft ON TABLE node TYPE option<bool>;
 
-DEFINE INDEX IF NOT EXISTS node_kind ON node FIELDS kind;
-DEFINE INDEX IF NOT EXISTS node_state ON node FIELDS state;
-DEFINE INDEX IF NOT EXISTS node_authority ON node FIELDS authority;
+-- Fact-only field.
+DEFINE FIELD OVERWRITE madeBy ON TABLE node TYPE option<string> ASSERT $value = NONE OR $value IN ['user', 'assistant'];
 
-DEFINE TABLE IF NOT EXISTS contains SCHEMAFULL TYPE RELATION IN node OUT node ENFORCED;
-DEFINE FIELD IF NOT EXISTS note ON contains TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS created_at ON contains TYPE datetime DEFAULT time::now();
+DEFINE TABLE OVERWRITE contains TYPE RELATION IN node OUT node ENFORCED SCHEMAFULL;
+DEFINE TABLE OVERWRITE answers TYPE RELATION IN node OUT node ENFORCED SCHEMAFULL;
+DEFINE TABLE OVERWRITE depends_on TYPE RELATION IN node OUT node ENFORCED SCHEMAFULL;
+DEFINE TABLE OVERWRITE fact_context TYPE RELATION IN node OUT node ENFORCED SCHEMAFULL;
+DEFINE TABLE OVERWRITE idea_context TYPE RELATION IN node OUT node ENFORCED SCHEMAFULL;
 
-DEFINE TABLE IF NOT EXISTS depends_on SCHEMAFULL TYPE RELATION IN node OUT node ENFORCED;
-DEFINE FIELD IF NOT EXISTS note ON depends_on TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS condition ON depends_on TYPE option<object> FLEXIBLE;
-DEFINE FIELD IF NOT EXISTS created_at ON depends_on TYPE datetime DEFAULT time::now();
+DEFINE TABLE OVERWRITE replacement TYPE NORMAL SCHEMAFULL;
+DEFINE FIELD OVERWRITE oldId ON TABLE replacement TYPE string;
+DEFINE FIELD OVERWRITE newId ON TABLE replacement TYPE string;
+DEFINE FIELD OVERWRITE reason ON TABLE replacement TYPE string;
+DEFINE FIELD OVERWRITE mode ON TABLE replacement TYPE string ASSERT $value IN ['normal', 'in_place'];
+DEFINE FIELD OVERWRITE createdAtMs ON TABLE replacement TYPE int;
 
-DEFINE TABLE IF NOT EXISTS constrains SCHEMAFULL TYPE RELATION IN node OUT node ENFORCED;
-DEFINE FIELD IF NOT EXISTS note ON constrains TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS created_at ON constrains TYPE datetime DEFAULT time::now();
+DEFINE TABLE OVERWRITE map_meta TYPE NORMAL SCHEMAFULL;
+DEFINE FIELD OVERWRITE depth ON TABLE map_meta TYPE string ASSERT $value IN ['mvp', 'thorough'];
+DEFINE FIELD OVERWRITE stance ON TABLE map_meta TYPE string ASSERT $value IN ['normal', 'adversarial'];
+DEFINE FIELD OVERWRITE schemaVersion ON TABLE map_meta TYPE string;
 
-DEFINE TABLE IF NOT EXISTS supports SCHEMAFULL TYPE RELATION IN node OUT node ENFORCED;
-DEFINE FIELD IF NOT EXISTS note ON supports TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS created_at ON supports TYPE datetime DEFAULT time::now();
-
-DEFINE TABLE IF NOT EXISTS supersedes SCHEMAFULL TYPE RELATION IN node OUT node ENFORCED;
-DEFINE FIELD IF NOT EXISTS note ON supersedes TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS created_at ON supersedes TYPE datetime DEFAULT time::now();
-
-DEFINE TABLE IF NOT EXISTS related_to SCHEMAFULL TYPE RELATION IN node OUT node ENFORCED;
-DEFINE FIELD IF NOT EXISTS note ON related_to TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS created_at ON related_to TYPE datetime DEFAULT time::now();
-
--- Session is a disposable recovery capsule, not authoritative graph state.
-DEFINE TABLE IF NOT EXISTS map_session SCHEMAFULL TYPE NORMAL;
--- Remove fields from the earlier workflow-state-machine session prototype.
-REMOVE FIELD IF EXISTS status ON map_session;
-REMOVE FIELD IF EXISTS phase ON map_session;
-REMOVE FIELD IF EXISTS focus_nodes ON map_session;
-REMOVE FIELD IF EXISTS raw_invocation ON map_session;
-REMOVE FIELD IF EXISTS interpreted_request ON map_session;
-REMOVE FIELD IF EXISTS depth ON map_session;
-REMOVE FIELD IF EXISTS stance ON map_session;
-REMOVE FIELD IF EXISTS setup_confirmed ON map_session;
-REMOVE FIELD IF EXISTS presented_frontier ON map_session;
-REMOVE FIELD IF EXISTS pending_user_answer ON map_session;
-REMOVE FIELD IF EXISTS pending_operation ON map_session;
-REMOVE FIELD IF EXISTS pending_operation_applied ON map_session;
-REMOVE FIELD IF EXISTS exchange.*.role ON map_session;
-REMOVE FIELD IF EXISTS exchange.*.message ON map_session;
-
-DEFINE FIELD IF NOT EXISTS summary ON map_session TYPE string DEFAULT "";
-DEFINE FIELD IF NOT EXISTS exchange_depth ON map_session TYPE int DEFAULT 6 ASSERT $value >= 2;
-DEFINE FIELD OVERWRITE exchange ON map_session TYPE array<object> FLEXIBLE DEFAULT [];
-DEFINE FIELD IF NOT EXISTS pending ON map_session TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS created_at ON map_session TYPE datetime DEFAULT time::now();
-DEFINE FIELD IF NOT EXISTS updated_at ON map_session TYPE datetime DEFAULT time::now();
+DEFINE TABLE OVERWRITE map_session TYPE NORMAL SCHEMAFULL;
+DEFINE FIELD OVERWRITE summary ON TABLE map_session TYPE string DEFAULT '';
+DEFINE FIELD OVERWRITE exchanges ON TABLE map_session TYPE array<object> FLEXIBLE DEFAULT [];
+DEFINE FIELD OVERWRITE pending ON TABLE map_session TYPE option<string>;
+DEFINE FIELD OVERWRITE depth ON TABLE map_session TYPE int ASSERT $value >= 2;
