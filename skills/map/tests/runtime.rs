@@ -51,6 +51,11 @@ fn id(value: &Value) -> String {
     value["id"].as_str().expect("id").to_string()
 }
 
+fn sorted(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids
+}
+
 fn new_map() -> TempDir {
     let root = tempfile::tempdir().expect("tempdir");
     let schema = schema();
@@ -89,7 +94,7 @@ fn question_readiness_soft_decision_and_closure_are_enforced() {
     assert_eq!(ready, serde_json::json!([q1]));
 
     let all_open = ok(root.path(), &["get", "questions", "--include-blocked"]);
-    assert_eq!(all_open, serde_json::json!([q1.clone(), q2.clone()]));
+    assert_eq!(all_open, serde_json::json!(sorted(vec![q1.clone(), q2.clone()])));
 
     let d1 = id(&ok(
         root.path(),
