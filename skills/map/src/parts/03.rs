@@ -65,6 +65,11 @@ async fn init_map(cli: &Cli, schema_arg: Option<PathBuf>) -> Result<()> {
 
     fs::create_dir(&selection)
         .with_context(|| format!("creating {}", selection.display()))?;
+    let db_dir = selection.join("db");
+    if let Err(error) = fs::create_dir(&db_dir) {
+        let _ = fs::remove_dir_all(&selection);
+        return Err(error).with_context(|| format!("creating {}", db_dir.display()));
+    }
     let store = match Store::open(selection.clone()).await {
         Ok(store) => store,
         Err(error) => {
