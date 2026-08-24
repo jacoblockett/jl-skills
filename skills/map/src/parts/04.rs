@@ -130,10 +130,9 @@ async fn relate_command(store: &Store, args: RelationArgs, remove: bool) -> Resu
                 }
                 RelationKind::DependsOn => {
                     if graph.nodes.get(source).map(|node| node.data.kind) == Some(NodeKind::Intent) {
-                        let target_node = graph.nodes.get(target).expect("validated target");
-                        if target_node.data.closed != Some(true) || target_node.data.abandoned {
-                            reopen.extend(graph.intent_ancestors(std::slice::from_ref(source)));
-                        }
+                        // Adding a dependency after closure makes the prior closure claim stale,
+                        // even when the prerequisite is already closed.
+                        reopen.extend(graph.intent_ancestors(std::slice::from_ref(source)));
                     }
                 }
                 _ => {}
