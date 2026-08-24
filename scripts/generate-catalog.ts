@@ -1,16 +1,21 @@
-import { readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
 const repo = join(import.meta.dir, '..')
 const skillsRoot = join(repo, 'skills')
+const stagedRuntimeRoot = join(repo, 'build', 'runtime-assets')
 const output = join(repo, 'src', 'catalog.generated.ts')
+const ignoredDirectories = new Set(['target', 'node_modules', '.git'])
 
 function walk(root: string): string[] {
   const out: string[] = []
   for (const entry of readdirSync(root)) {
     const full = join(root, entry)
-    if (statSync(full).isDirectory()) out.push(...walk(full))
-    else out.push(full)
+    if (statSync(full).isDirectory()) {
+      if (!ignoredDirectories.has(entry)) out.push(...walk(full))
+    } else {
+      out.push(full)
+    }
   }
   return out
 }
@@ -28,8 +33,17 @@ for (const entry of readdirSync(skillsRoot)) {
       const rel = relative(skillRoot, path).split(sep).join('/')
       files[rel] = readFileSync(path).toString('base64')
     }
+
+    const runtimeArtifacts = manifest.runtime_artifacts as Record<string, string> | undefined
+    for (const rel of Object.values(runtimeArtifacts ?? {})) {
+      const staged = join(stagedRuntimeRoot, entry, rel)
+      if (!existsSync(staged)) throw new Error(`missing staged runtime artifact ${entry}/${rel}`)
+      files[rel.replaceAll('\\', '/')] = readFileSync(staged).toString('base64')
+    }
+
     catalog[entry] = { manifest, files }
-  } catch {
+  } catch (error) {
+    if (existsSync(manifestPath)) throw error
     // Directories without a jl-skill manifest are not installable catalog entries.
   }
 }
