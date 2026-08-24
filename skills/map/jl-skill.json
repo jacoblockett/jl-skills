@@ -6,11 +6,12 @@
     "SKILL.md"
   ],
   "runtime_files": [
-    "Cargo.toml",
-    "src",
     "schema.surql"
   ],
   "runtime": "rust",
+  "runtime_artifacts": {
+    "windows-x64": "runtime/windows-x64/map.exe"
+  },
   "runtime_cli": "map",
   "cli_token": "JL_MAP_CLI",
   "instruction_fragment": "AGENTS.fragment.md"
