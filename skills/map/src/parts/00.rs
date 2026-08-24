@@ -10,7 +10,6 @@ use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use surrealdb::engine::local::{Db, SurrealKv};
-use surrealdb::types::{SurrealValue, Value as SurrealDbValue};
 use surrealdb::Surreal;
 
 const NAMESPACE: &str = "map";
