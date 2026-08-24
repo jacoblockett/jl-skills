@@ -15,9 +15,7 @@ cargo build --manifest-path skills/map/Cargo.toml --release
 
 The runtime embeds SurrealDB/SurrealKV and requires no daemon or listening port.
 
-The **consumer installer is built by GitHub Actions**, not on the consumer machine. The Windows build pipeline tests Map, builds release `map.exe`, compiles the TypeScript + `@clack/prompts` installer with Bun into a standalone `jl-skill.exe`, smoke-tests that executable, and publishes the downloadable artifact.
-
-Local `bun run build` is available only for release-build diagnostics when the required build toolchains are already installed. It is not part of the consumer installation contract.
+The current Windows release/smoke path is local on the development/release machine. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the installer catalog, and compiles the TypeScript + `@clack/prompts` installer with Bun into standalone `build/jl-skill.exe`.
 
 Consumers need only the downloaded standalone installer and the AI harness(es) they intend to target. They do not need Rust, Cargo, Bun, Node, npm, Go, Python, or a SurrealDB server.
 
@@ -156,4 +154,4 @@ The v2 suite exercises the public binary across separate processes against real 
 cargo test --manifest-path skills/map/Cargo.toml
 ```
 
-The durable Map contract is maintained separately in `jacoblockett/persist/map/SPEC.md`; installer/distribution behavior is maintained in `jacoblockett/persist/installer/`.
+The durable Map contract now lives beside the implementation in `skills/map/SPEC.md`. The repo-wide installer contract lives at `INSTALLER_SPEC.md`.
