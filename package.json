@@ -1,0 +1,14 @@
+{
+  "name": "jl-skills-installer",
+  "private": true,
+  "version": "0.5.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "@clack/prompts": "1.7.0",
+    "postject": "1.0.0-alpha.6",
+    "tsdown": "0.22.14"
+  }
+}
