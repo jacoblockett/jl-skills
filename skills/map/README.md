@@ -6,7 +6,7 @@ V2 is a clean Rust rewrite. The previous Python runtime/ontology is obsolete and
 
 ## Build and test
 
-Requires Rust 1.89+.
+Map source development requires Rust 1.89+:
 
 ```bash
 cargo test --manifest-path skills/map/Cargo.toml
@@ -15,14 +15,11 @@ cargo build --manifest-path skills/map/Cargo.toml --release
 
 The runtime embeds SurrealDB/SurrealKV and requires no daemon or listening port.
 
-The consumer installer is built separately from repository root with the Vite-compatible Clack prompt stack:
+The **consumer installer is built by GitHub Actions**, not on the consumer machine. The Windows build pipeline tests Map, builds release `map.exe`, compiles the TypeScript + `@clack/prompts` installer with Bun into a standalone `jl-skill.exe`, smoke-tests that executable, and publishes the downloadable artifact.
 
-```bash
-npm install
-npm run build
-```
+Local `bun run build` is available only for release-build diagnostics when the required build toolchains are already installed. It is not part of the consumer installation contract.
 
-That build produces a self-contained `build/jl-skill.exe` and embeds the release `map.exe`. Consumers do not need Rust or Node to run the released installer.
+Consumers need only the downloaded standalone installer and the AI harness(es) they intend to target. They do not need Rust, Cargo, Bun, Node, npm, Go, Python, or a SurrealDB server.
 
 ## Initialization
 
@@ -80,7 +77,11 @@ map set <id> <property> <value>
 map replace <old> <new> --reason REASON [--in-place]
 map abandon <id> --by user|assistant --reason REASON
 map delete <id...> [--force]
-map get intents|questions|decisions|ideas|facts ...
+map get intents ...
+map get questions ...
+map get decisions ...
+map get ideas ...
+map get facts ...
 map show <id...>
 map context <id>
 map status
@@ -94,14 +95,14 @@ Run `map <command> --help` for exact flags.
 
 ## Discovery state
 
-Each Map stores `depth` and `stance`. An intent may optionally override either field.
+Each Map stores `depth` and `stance`. An intent may optionally store fields with the same names; when present they override the Map values.
 
 `explored` and `closed` are separate:
 
 - `explored=true`: an LLM has examined/reasoned about the intent at least once.
 - `closed=true`: the intent is finalized enough for the effective depth/stance and closure invariants currently hold.
 
-New unresolved structure can reopen a closed intent without changing `explored`.
+The runtime never infers `explored` from question count. New unresolved structure can reopen a closed intent without changing `explored`.
 
 ## Question retrieval
 
@@ -117,13 +118,23 @@ Use:
 
 ## Replacement, abandonment, deletion
 
-Normal replacement preserves history. `--in-place` is destructive: the replacement assumes the old node's graph position and the old node is removed.
+Normal replacement preserves history:
 
-Abandonment preserves discarded semantic history. Physical delete removes records and rejects when relationships would be affected unless `--force` is explicit; force removes selected nodes and incident edges only.
+```bash
+map replace OLD NEW --reason "..."
+```
+
+`--in-place` is destructive: NEW assumes OLD's graph position and OLD is removed.
+
+Abandonment preserves the node as discarded semantic history. Physical delete removes records. Delete rejects when relationships would be affected unless `--force` is explicitly supplied; force removes selected nodes and incident edges only, never recursive neighbors.
 
 ## Validation
 
-`map validate` is read-only and non-repairing. It checks node shape, legal relation combinations, cycles, answer cardinality, replacement history, closure invariants, and other graph consistency rules.
+```bash
+map validate
+```
+
+Validation is read-only and non-repairing. It checks node shape, legal relation combinations, cycles, answer cardinality, replacement history, closure invariants, and other graph consistency rules.
 
 ## Recovery session
 
@@ -137,4 +148,12 @@ map session end [--force]
 
 Session state is crash/context-loss recovery only. Semantic graph state remains authoritative.
 
-The durable product contract is maintained separately in `jacoblockett/persist/map/SPEC.md`.
+## Tests
+
+The v2 suite exercises the public binary across separate processes against real embedded SurrealKV state.
+
+```bash
+cargo test --manifest-path skills/map/Cargo.toml
+```
+
+The durable Map contract is maintained separately in `jacoblockett/persist/map/SPEC.md`; installer/distribution behavior is maintained in `jacoblockett/persist/installer/`.
