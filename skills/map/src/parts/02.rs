@@ -39,8 +39,8 @@ impl Store {
                 let _ = row.id;
                 edges.push(EdgeView {
                     kind,
-                    source: record_key(&row.source),
-                    target: record_key(&row.target),
+                    source: record_id_key(&row.source),
+                    target: record_id_key(&row.target),
                 });
             }
         }
