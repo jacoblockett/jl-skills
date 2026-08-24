@@ -249,8 +249,8 @@ async fn session_command(store: &Store, command: SessionCommand) -> Result<()> {
             };
             store
                 .db
-                .query("CREATE ONLY map_session:main CONTENT $session;")
-                .bind(("session", serde_json::to_value(session)?))
+                .query("CREATE ONLY map_session:main CONTENT $capsule;")
+                .bind(("capsule", serde_json::to_value(session)?))
                 .await?
                 .check()?;
             emit(json!({ "ok": true, "session": true }))
