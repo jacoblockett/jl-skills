@@ -10,7 +10,7 @@ use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use surrealdb::engine::local::{Db, SurrealKv};
-use surrealdb::Surreal;
+use surrealdb::{RecordId, Surreal};
 
 const NAMESPACE: &str = "map";
 const DATABASE: &str = "state";
@@ -387,26 +387,30 @@ impl NodeData {
     }
 }
 
+fn record_id_key(id: &RecordId) -> String {
+    String::try_from(id.key().clone()).expect("Map record IDs must use string keys")
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct DbNode {
-    id: String,
+    id: RecordId,
     #[serde(flatten)]
     data: NodeData,
 }
 
 impl DbNode {
     fn key(&self) -> String {
-        record_key(&self.id)
+        record_id_key(&self.id)
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct DbEdge {
-    id: String,
+    id: RecordId,
     #[serde(rename = "in")]
-    source: String,
+    source: RecordId,
     #[serde(rename = "out")]
-    target: String,
+    target: RecordId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -428,7 +432,7 @@ struct ReplacementData {
 
 #[derive(Debug, Clone, Deserialize)]
 struct DbReplacement {
-    id: String,
+    id: RecordId,
     #[serde(flatten)]
     data: ReplacementData,
 }
@@ -443,7 +447,7 @@ struct MapMetaData {
 
 #[derive(Debug, Clone, Deserialize)]
 struct DbMapMeta {
-    id: String,
+    id: RecordId,
     #[serde(flatten)]
     data: MapMetaData,
 }
@@ -465,7 +469,7 @@ struct SessionData {
 
 #[derive(Debug, Clone, Deserialize)]
 struct DbSession {
-    id: String,
+    id: RecordId,
     #[serde(flatten)]
     data: SessionData,
 }
