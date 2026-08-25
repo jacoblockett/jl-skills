@@ -15,7 +15,7 @@ cargo build --manifest-path skills/map/Cargo.toml --release
 
 The runtime embeds SurrealDB/SurrealKV and requires no daemon or listening port.
 
-The current Windows release/smoke path is local on the development/release machine. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the installer catalog, and compiles the TypeScript + `@clack/prompts` installer with Bun into standalone `build/jl-skill.exe`.
+The current Windows release/smoke path is local on the development/release machine. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the installer catalog, and compiles the TypeScript + `@clack/prompts` installer with Bun into standalone `build/jl-skills.exe`.
 
 Run the full Map + installer regression smoke with:
 
