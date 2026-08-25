@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const repo = resolve(import.meta.dir, '..')
-const installer = join(repo, 'build', 'jl-skill.exe')
+const installer = join(repo, 'build', 'jl-skills.exe')
 const sourceMap = join(repo, 'build', 'cargo', 'map', 'release', 'map.exe')
 const schema = join(repo, 'skills', 'map', 'schema.surql')
 const scratch = join(repo, 'build', 'installer-tests')
@@ -117,12 +117,12 @@ function installerRegistry(s: Sandbox): any {
 
 beforeAll(() => {
   if (process.platform !== 'win32') throw new Error('installer regression suite currently targets Windows x64')
-  if (!existsSync(installer)) throw new Error('build/jl-skill.exe is missing; run bun run build first')
+  if (!existsSync(installer)) throw new Error('build/jl-skills.exe is missing; run bun run build first')
   if (!existsSync(sourceMap)) throw new Error('built Map runtime is missing; run bun run build first')
   mkdirSync(scratch, { recursive: true })
 })
 
-describe('jl-skill installer scope regressions', () => {
+describe('jl-skills installer scope regressions', () => {
   test('cwd scope installs only project discovery/instructions and shared Map support', () => {
     const s = sandbox('cwd-scope')
     ok(install('cwd', s))
