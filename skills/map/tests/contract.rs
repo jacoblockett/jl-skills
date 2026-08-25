@@ -21,6 +21,22 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn test_home() -> PathBuf {
+    let name = std::thread::current()
+        .name()
+        .unwrap_or("contract")
+        .replace("::", "-");
+    let path = repo_root().join("test").join("map-rust-v2-homes").join(name);
+    fs::create_dir_all(&path).expect("create test home");
+    path
+}
+
+fn reset_test_home() {
+    let path = test_home();
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).expect("reset test home");
+}
+
 fn scratch(name: &str) -> PathBuf {
     let path = repo_root().join("test").join("map-rust-v2").join(name);
     let _ = fs::remove_dir_all(&path);
@@ -29,7 +45,10 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn run(root: &Path, args: &[&str]) -> Output {
+    let home = test_home();
     Command::new(bin())
+        .env("USERPROFILE", &home)
+        .env("HOME", &home)
         .arg("--path")
         .arg(root)
         .args(args)
@@ -38,7 +57,10 @@ fn run(root: &Path, args: &[&str]) -> Output {
 }
 
 fn run_from(cwd: &Path, args: &[&str]) -> Output {
+    let home = test_home();
     Command::new(bin())
+        .env("USERPROFILE", &home)
+        .env("HOME", &home)
         .current_dir(cwd)
         .args(args)
         .output()
@@ -75,6 +97,7 @@ fn sorted(mut ids: Vec<String>) -> Vec<String> {
 }
 
 fn new_map(name: &str) -> PathBuf {
+    reset_test_home();
     let root = scratch(name);
     let schema = schema().to_string_lossy().into_owned();
     ok(&root, &["init", "--schema", &schema]);
@@ -106,7 +129,6 @@ fn explicit_config_path_resolves_and_invalid_selection_does_not_fallback() {
     )
     .unwrap();
 
-    // cwd has a valid Map, but the explicitly selected config path must win and fail.
     let output = run_from(&root, &["--config", &config, "status"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("no .map exists"));
