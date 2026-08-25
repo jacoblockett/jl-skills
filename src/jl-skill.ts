@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { arch, homedir, platform } from 'node:os'
-import { dirname, join, normalize, resolve } from 'node:path'
+import { basename, dirname, join, normalize, resolve } from 'node:path'
 import { Buffer } from 'node:buffer'
 import { catalog } from './catalog.generated'
 
@@ -21,6 +21,7 @@ const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
 const CANCEL = '__jl_cancel__'
 const BACK = '__jl_back__'
+const ALL = '__jl_all__'
 
 type Manifest = {
   name: string
@@ -62,6 +63,7 @@ type ParsedAction = { skills: string[]; scope?: string; agents: string[]; instru
 type InstallGroup = { key: string; skill: string; scope: Scope; receipts: Receipt[] }
 type Intro = { shown: boolean }
 type NavResult<T> = T | typeof BACK
+type ChoiceItem = { value: string; label: string; hint?: string; disabled?: boolean }
 
 type MapProjectRegistry = {
   projects?: Array<{ projectId?: string; path?: string }>
@@ -73,7 +75,7 @@ const agentCatalog: AgentSpec[] = [
 ]
 
 function cancel(): never {
-  prompts.cancel('Operation cancelled')
+  prompts.cancel('Cancelled & exited')
   process.exit(0)
 }
 
@@ -82,7 +84,7 @@ function checked<T>(value: T | symbol): T {
   return value as T
 }
 
-function ensureIntro(state: Intro, title = 'jl-skill'): void {
+function ensureIntro(state: Intro, title = 'jl-skills'): void {
   if (!state.shown) {
     prompts.intro(title)
     state.shown = true
@@ -460,10 +462,6 @@ function groupInstallations(registry: Registry): InstallGroup[] {
     .sort((a, b) => a.key.localeCompare(b.key))
 }
 
-function groupAgents(group: InstallGroup): string[] {
-  return group.receipts.map((receipt) => receipt.agent)
-}
-
 function groupsAtScope(scope: Scope): InstallGroup[] {
   return groupInstallations(loadRegistry()).filter((group) => group.scope.identity === scope.identity)
 }
@@ -501,19 +499,131 @@ function updateSummary(groups: InstallGroup[]): string {
   return groups.map((group) => `${group.skill}: ${updateHint(group)}`).join('\n')
 }
 
-async function chooseScope(state: Intro, message = 'Where would you like to manage skills?', allowBack = false): Promise<NavResult<Scope>> {
-  ensureIntro(state)
-  const options = [
-    { value: 'cwd', label: 'Current directory', hint: process.cwd() },
-    { value: 'user', label: 'User' },
-    { value: 'custom', label: 'Custom path' },
+function navOptions(allowBack: boolean): ChoiceItem[] {
+  return [
     ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
-    { value: CANCEL, label: 'Cancel' },
+    { value: CANCEL, label: 'Cancel & Exit' },
   ]
-  const choice = checked<string>(await prompts.select({ message, options, initialValue: 'cwd' }))
+}
+
+async function clarifySpecialSelection(
+  state: Intro,
+  message: string,
+  selected: string[],
+  allowAll: boolean,
+  allowBack: boolean,
+): Promise<'all' | 'back' | 'cancel'> {
+  ensureIntro(state)
+  const choices: ChoiceItem[] = []
+  if (allowAll && selected.includes(ALL)) choices.push({ value: ALL, label: 'All of the above' })
+  if (allowBack && selected.includes(BACK)) choices.push({ value: BACK, label: 'Go back' })
+  if (selected.includes(CANCEL)) choices.push({ value: CANCEL, label: 'Cancel & Exit' })
+  const choice = checked<string>(await prompts.select({
+    message,
+    options: choices,
+  }))
+  if (choice === CANCEL) cancel()
+  if (choice === BACK) return 'back'
+  return 'all'
+}
+
+async function chooseMany(
+  state: Intro,
+  message: string,
+  items: ChoiceItem[],
+  {
+    allowAll = true,
+    allowBack = true,
+    initialValues = [],
+    required = true,
+  }: {
+    allowAll?: boolean
+    allowBack?: boolean
+    initialValues?: string[]
+    required?: boolean
+  } = {},
+): Promise<NavResult<string[]>> {
+  ensureIntro(state)
+  const selectable = items.filter((item) => !item.disabled).map((item) => item.value)
+  const options: ChoiceItem[] = [
+    ...items,
+    ...(allowAll && selectable.length > 0 ? [{ value: ALL, label: 'All of the above' }] : []),
+    ...navOptions(allowBack),
+  ]
+  while (true) {
+    const selected = checked<string[]>(await prompts.multiselect({
+      message,
+      options,
+      initialValues,
+      required,
+    }))
+
+    const specials = [ALL, BACK, CANCEL].filter((value) => selected.includes(value))
+    const normal = selected.filter((value) => !specials.includes(value))
+
+    if (specials.length > 1) {
+      const resolved = await clarifySpecialSelection(
+        state,
+        'Choose one navigation option',
+        specials,
+        allowAll,
+        allowBack,
+      )
+      if (resolved === 'back') return BACK
+      return selectable
+    }
+
+    if (selected.includes(CANCEL)) {
+      if (normal.length === 0) cancel()
+      const choice = checked<string>(await prompts.select({
+        message: 'Cancel & Exit was selected with other choices. What would you like to do?',
+        options: [
+          { value: 'choices', label: 'Use my selected choices' },
+          { value: CANCEL, label: 'Cancel & Exit' },
+        ],
+      }))
+      if (choice === CANCEL) cancel()
+      return normal
+    }
+
+    if (selected.includes(BACK)) {
+      if (normal.length === 0) return BACK
+      const choice = checked<string>(await prompts.select({
+        message: 'Go back was selected with other choices. What would you like to do?',
+        options: [
+          { value: 'choices', label: 'Use my selected choices' },
+          { value: BACK, label: 'Go back' },
+        ],
+      }))
+      if (choice === BACK) return BACK
+      return normal
+    }
+
+    if (selected.includes(ALL)) return selectable
+    return normal
+  }
+}
+
+async function chooseScope(
+  state: Intro,
+  message = 'Where would you like to manage skills?',
+  allowBack = false,
+): Promise<NavResult<Scope>> {
+  ensureIntro(state)
+  const choice = checked<string>(await prompts.select({
+    message,
+    options: [
+      { value: 'cwd', label: 'Current directory' },
+      { value: 'user', label: 'User' },
+      { value: 'custom', label: 'Custom path' },
+      ...navOptions(allowBack),
+    ],
+    initialValue: 'cwd',
+  }))
   if (choice === CANCEL) cancel()
   if (choice === BACK) return BACK
   if (choice !== 'custom') return resolveScope(choice)
+
   const path = checked<string>(await prompts.text({
     message: 'Custom path',
     placeholder: process.cwd(),
@@ -522,103 +632,89 @@ async function chooseScope(state: Intro, message = 'Where would you like to mana
   return resolveScope(path)
 }
 
-async function chooseSpecificOrAll(
+async function chooseInstallSkills(
+  scope: Scope,
   state: Intro,
-  message: string,
-  specificLabel: string,
-  allLabel: string,
-  allowBack: boolean,
-): Promise<'specific' | 'all' | typeof BACK> {
-  ensureIntro(state)
-  const choice = checked<string>(await prompts.select({
-    message,
-    options: [
-      { value: 'specific', label: specificLabel },
-      { value: 'all', label: allLabel },
-      ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
-      { value: CANCEL, label: 'Cancel' },
-    ],
-    initialValue: 'specific',
-  }))
-  if (choice === CANCEL) cancel()
-  if (choice === BACK) return BACK
-  return choice as 'specific' | 'all'
+  allowBack = true,
+): Promise<NavResult<string[]>> {
+  const installed = new Set(groupsAtScope(scope).map((group) => group.skill))
+  return chooseMany(
+    state,
+    'Select skills to install',
+    catalogManifests().map((item) => ({
+      value: item.name,
+      label: item.name,
+      hint: installed.has(item.name) ? 'already installed' : undefined,
+      disabled: installed.has(item.name),
+    })),
+    { allowAll: true, allowBack },
+  )
 }
 
-async function chooseAgents(explicit: string[], state: Intro, allowBack = true): Promise<NavResult<{ values: string[]; prompted: boolean; all: AgentInfo[] }>> {
+async function chooseAgents(
+  explicit: string[],
+  state: Intro,
+  allowBack = true,
+): Promise<NavResult<{ values: string[]; prompted: boolean; all: AgentInfo[] }>> {
   const all = detectedAgents()
   if (explicit.length > 0) return { values: normalizeAgents(explicit), prompted: false, all }
+
   if (!process.stdin.isTTY) {
     const detected = all.filter((item) => item.detected).map((item) => item.id)
     if (detected.length === 0) throw new Error('no supported harness detected; specify --agent')
     return { values: detected, prompted: false, all }
   }
 
-  const mode = await chooseSpecificOrAll(
+  const values = await chooseMany(
     state,
     'Which AI harnesses should receive these skills?',
-    'Choose specific harnesses',
-    'Select all supported harnesses',
-    allowBack,
-  )
-  if (mode === BACK) return BACK
-  if (mode === 'all') return { values: all.map((item) => item.id), prompted: true, all }
-
-  const values = checked<string[]>(await prompts.multiselect({
-    message: 'Select AI harnesses',
-    options: all.map((item) => ({
+    all.map((item) => ({
       value: item.id,
       label: item.label,
       hint: item.detected ? 'detected' : 'not detected on this computer',
     })),
-    required: true,
-  }))
+    { allowAll: true, allowBack },
+  )
+  if (values === BACK) return BACK
   return { values: normalizeAgents(values), prompted: true, all }
 }
 
-async function chooseInstructionInjection(state: Intro, allowBack = true): Promise<NavResult<boolean>> {
+function instructionFiles(agents: string[], scope: Scope): string[] {
+  return [...new Set(agents.map((agent) => basename(agentPaths(agent, scope).instruction)))]
+}
+
+async function chooseInstructionInjection(
+  state: Intro,
+  agents: string[],
+  scope: Scope,
+  skills: string[],
+  allowBack = true,
+): Promise<NavResult<boolean>> {
   ensureIntro(state)
+  const files = instructionFiles(agents, scope)
+  const fileText = files.length === 1
+    ? files[0]
+    : files.length === 2
+      ? `${files[0]} and ${files[1]}`
+      : files.join(', ')
+
+  prompts.note(
+    `${fileText} ${files.length === 1 ? 'is a file your AI checks for general instructions before it starts working in this location' : 'are files your AI tools check for general instructions before they start working in this location'}. JL-Skills can add a small section explaining how to use ${skills.join(', ')} without changing the rest of ${files.length === 1 ? 'the file' : 'those files'}.`,
+    `About ${fileText}`,
+  )
+
   const choice = checked<string>(await prompts.select({
-    message: 'Add skill guidance to your AI instruction files?',
+    message: `Add guidance for ${skills.join(', ')} to ${fileText}?`,
     options: [
-      { value: 'yes', label: 'Yes', hint: 'recommended' },
-      { value: 'no', label: 'No', hint: 'leave instruction files unchanged' },
-      ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
-      { value: CANCEL, label: 'Cancel' },
+      { value: 'yes', label: 'Yes' },
+      { value: 'no', label: 'No' },
+      ...navOptions(allowBack),
     ],
     initialValue: 'yes',
   }))
   if (choice === CANCEL) cancel()
   if (choice === BACK) return BACK
   return choice === 'yes'
-}
-
-async function chooseInstallSkills(scope: Scope, state: Intro, allowBack = true): Promise<NavResult<string[]>> {
-  const mode = checked<string>(await prompts.select({
-    message: 'What would you like to install?',
-    options: [
-      { value: 'choose', label: 'Choose skills' },
-      ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
-      { value: CANCEL, label: 'Cancel' },
-    ],
-    initialValue: 'choose',
-  }))
-  if (mode === CANCEL) cancel()
-  if (mode === BACK) return BACK
-
-  ensureIntro(state)
-  const installed = new Set(groupsAtScope(scope).map((group) => group.skill))
-  const selected = checked<string[]>(await prompts.multiselect({
-    message: 'Select skills to install',
-    options: catalogManifests().map((item) => ({
-      value: item.name,
-      label: item.name,
-      hint: installed.has(item.name) ? 'already installed' : item.description || undefined,
-      disabled: installed.has(item.name),
-    })),
-    required: true,
-  }))
-  return selected
 }
 
 async function chooseGroupSkills(
@@ -629,25 +725,18 @@ async function chooseGroupSkills(
   const available = groupsAtScope(scope)
   if (available.length === 0) throw new Error(`no installed skills at ${scope.identity}`)
   const verb = action === 'update' ? 'update' : 'uninstall'
-  const mode = await chooseSpecificOrAll(
-    state,
-    `Which skills would you like to ${verb}?`,
-    'Choose specific skills',
-    action === 'update' ? 'Update all installed skills' : 'Uninstall all installed skills',
-    true,
-  )
-  if (mode === BACK) return BACK
-  if (mode === 'all') return available
 
-  const selected = checked<string[]>(await prompts.multiselect({
-    message: `Select skills to ${verb}`,
-    options: available.map((group) => ({
+  const selected = await chooseMany(
+    state,
+    `Select skills to ${verb}`,
+    available.map((group) => ({
       value: group.skill,
       label: group.skill,
       hint: action === 'update' ? updateHint(group) : undefined,
     })),
-    required: true,
-  }))
+    { allowAll: true, allowBack: true },
+  )
+  if (selected === BACK) return BACK
   return available.filter((group) => selected.includes(group.skill))
 }
 
@@ -673,6 +762,7 @@ async function installAtScope(
 ): Promise<NavResult<number>> {
   let selectedSkills = skills
 
+  skillStep:
   while (true) {
     if (selectedSkills.length === 0) {
       const chosen = await chooseInstallSkills(scope, state, allowBack)
@@ -681,31 +771,44 @@ async function installAtScope(
     }
     selectedSkills.forEach(loadManifest)
 
+    agentStep:
     while (true) {
       const agentChoice = await chooseAgents(explicitAgents, state, allowBack)
       if (agentChoice === BACK) {
         if (skills.length > 0) return BACK
         selectedSkills = []
-        break
+        continue skillStep
       }
 
+      instructionStep:
       while (true) {
         let instructions = instructionOverride
         if (instructions === undefined && askInstructions && process.stdin.isTTY) {
-          const choice = await chooseInstructionInjection(state, true)
-          if (choice === BACK) break
+          const choice = await chooseInstructionInjection(
+            state,
+            agentChoice.values,
+            scope,
+            selectedSkills,
+            true,
+          )
+          if (choice === BACK) continue agentStep
           instructions = choice
         }
         if (instructions === undefined) instructions = true
 
-        const prompted = process.stdin.isTTY && (skills.length === 0 || explicitAgents.length === 0 || (askInstructions && instructionOverride === undefined))
+        const prompted = process.stdin.isTTY && (
+          skills.length === 0
+          || explicitAgents.length === 0
+          || (askInstructions && instructionOverride === undefined)
+        )
+
         if (prompted) {
           prompts.note(
-            `Skills: ${selectedSkills.join(', ')}\nHarnesses: ${agentChoice.values.map((id) => agentLabel(id, agentChoice.all)).join(', ')}\nScope: ${scope.identity}\nAI instruction files: ${instructions ? 'add managed guidance' : 'leave unchanged'}`,
+            `Skills: ${selectedSkills.join(', ')}\nAI harnesses: ${agentChoice.values.map((id) => agentLabel(id, agentChoice.all)).join(', ')}\nLocation: ${scope.identity}\nStanding instructions: ${instructions ? 'add skill guidance' : 'leave unchanged'}`,
             'Planned installation',
           )
           const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
-          if (!proceed) continue
+          if (!proceed) continue instructionStep
         } else {
           console.log(`Scope: ${scope.identity}`)
           console.log(`Agents: ${agentChoice.values.join(', ')}`)
@@ -725,20 +828,33 @@ async function installAtScope(
 async function installWizard(args: string[]): Promise<number> {
   const parsed = parseAction(args, 'install')
   const state: Intro = { shown: false }
-  let scope: Scope
-  if (parsed.scope) scope = resolveScope(parsed.scope)
-  else {
-    if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
-    const chosen = await chooseScope(state, 'Where should the selected skills be installed?')
-    if (chosen === BACK) throw new Error('unexpected back navigation')
-    scope = chosen
+
+  if (parsed.scope) {
+    const scope = resolveScope(parsed.scope)
+    if (parsed.skills.length === 0 && !process.stdin.isTTY) throw new Error('no skills selected')
+    const askInstructions = parsed.skills.length === 0 || parsed.agents.length === 0
+    const instructionMode = parsed.instructions ?? (askInstructions ? undefined : true)
+    const result = await installAtScope(scope, parsed.skills, parsed.agents, instructionMode, state, false, askInstructions)
+    if (result === BACK) cancel()
+    return result
   }
-  if (parsed.skills.length === 0 && !process.stdin.isTTY) throw new Error('no skills selected')
-  const askInstructions = parsed.skills.length === 0 || parsed.agents.length === 0 || !parsed.scope
-  const instructionMode = parsed.instructions ?? (askInstructions ? undefined : true)
-  const result = await installAtScope(scope, parsed.skills, parsed.agents, instructionMode, state, false, askInstructions)
-  if (result === BACK) cancel()
-  return result
+
+  if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
+  while (true) {
+    const chosenScope = await chooseScope(state, 'Where should the selected skills be installed?', false)
+    if (chosenScope === BACK) cancel()
+    const result = await installAtScope(
+      chosenScope,
+      parsed.skills,
+      parsed.agents,
+      parsed.instructions,
+      state,
+      true,
+      true,
+    )
+    if (result === BACK) continue
+    return result
+  }
 }
 
 async function updateAtScope(
@@ -780,17 +896,22 @@ async function updateAtScope(
 async function updateWizard(args: string[]): Promise<number> {
   const parsed = parseAction(args, 'update')
   const state: Intro = { shown: false }
-  let scope: Scope
-  if (parsed.scope) scope = resolveScope(parsed.scope)
-  else {
-    if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
-    const chosen = await chooseScope(state, 'Where would you like to update skills?')
-    if (chosen === BACK) throw new Error('unexpected back navigation')
-    scope = chosen
+
+  if (parsed.scope) {
+    const scope = resolveScope(parsed.scope)
+    const result = await updateAtScope(scope, parsed.skills, parsed.agents, parsed.instructions, state)
+    if (result === BACK) cancel()
+    return result
   }
-  const result = await updateAtScope(scope, parsed.skills, parsed.agents, parsed.instructions, state)
-  if (result === BACK) cancel()
-  return result
+
+  if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
+  while (true) {
+    const chosenScope = await chooseScope(state, 'Where would you like to update skills?', false)
+    if (chosenScope === BACK) cancel()
+    const result = await updateAtScope(chosenScope, parsed.skills, parsed.agents, parsed.instructions, state)
+    if (result === BACK) continue
+    return result
+  }
 }
 
 async function uninstallAtScope(
@@ -812,7 +933,7 @@ async function uninstallAtScope(
 
     if (process.stdin.isTTY) {
       prompts.note(
-        `${groups.map((group) => group.skill).join('\n')}\n\nKeeps Map project data and shared JL-Skills program files.`,
+        `${groups.map((group) => group.skill).join('\n')}\n\nMap project data and shared JL-Skills program files will be kept.`,
         'Planned uninstall',
       )
       const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
@@ -834,18 +955,23 @@ async function uninstallWizard(args: string[]): Promise<number> {
     if (!process.stdin.isTTY) throw new Error('uninstall requires a skill/scope in non-interactive mode')
     return uninstallEntryWizard()
   }
+
   const state: Intro = { shown: false }
-  let scope: Scope
-  if (parsed.scope) scope = resolveScope(parsed.scope)
-  else {
-    if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
-    const chosen = await chooseScope(state, 'Where would you like to uninstall skills?')
-    if (chosen === BACK) throw new Error('unexpected back navigation')
-    scope = chosen
+  if (parsed.scope) {
+    const scope = resolveScope(parsed.scope)
+    const result = await uninstallAtScope(scope, parsed.skills, parsed.agents, state)
+    if (result === BACK) cancel()
+    return result
   }
-  const result = await uninstallAtScope(scope, parsed.skills, parsed.agents, state)
-  if (result === BACK) cancel()
-  return result
+
+  if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
+  while (true) {
+    const chosenScope = await chooseScope(state, 'Where would you like to uninstall skills?', false)
+    if (chosenScope === BACK) cancel()
+    const result = await uninstallAtScope(chosenScope, parsed.skills, parsed.agents, state)
+    if (result === BACK) continue
+    return result
+  }
 }
 
 function mapRegistryPath(): string {
@@ -866,27 +992,23 @@ function knownMapProjectPaths(): string[] {
 async function chooseMapDataRemoval(state: Intro): Promise<NavResult<string[]>> {
   const paths = knownMapProjectPaths()
   if (paths.length === 0) return []
+
   while (true) {
-    ensureIntro(state)
-    const selected = checked<string[]>(await prompts.multiselect({
-      message: 'Select Map project data to delete',
-      options: paths.map((path) => ({ value: path, label: path })),
-      initialValues: paths,
-      required: false,
-    }))
+    const selected = await chooseMany(
+      state,
+      'Select Map project data to delete',
+      paths.map((path) => ({ value: path, label: path })),
+      {
+        allowAll: true,
+        allowBack: true,
+        initialValues: paths,
+        required: false,
+      },
+    )
+    if (selected === BACK) return BACK
     if (selected.length === 0) return []
+
     prompts.note(selected.map((path) => `• ${path}`).join('\n'), 'Selected Map project data')
-    const next = checked<string>(await prompts.select({
-      message: 'What would you like to do with this selection?',
-      options: [
-        { value: 'continue', label: 'Continue' },
-        { value: BACK, label: 'Go back' },
-        { value: CANCEL, label: 'Cancel' },
-      ],
-      initialValue: 'continue',
-    }))
-    if (next === CANCEL) cancel()
-    if (next === BACK) continue
     const confirmed = checked<boolean>(await prompts.confirm({
       message: 'Permanently delete the selected Map project data?',
       initialValue: false,
@@ -921,52 +1043,42 @@ function removeProgramFiles(): void {
 async function executeMachineRemoval(
   removeIntegrations: boolean,
   removePrograms: boolean,
-  removeMapData: boolean,
+  projectPaths: string[],
   state: Intro,
 ): Promise<NavResult<number>> {
   if (removePrograms) removeIntegrations = true
-  const projectPaths = removeMapData ? await chooseMapDataRemoval(state) : []
-  if (projectPaths === BACK) return BACK
+  prompts.note(
+    [
+      removeIntegrations ? 'Skills added to my AI tools' : null,
+      removePrograms ? 'JL-Skills program files' : null,
+      projectPaths.length > 0 ? `Map project data (${projectPaths.length} selected)` : null,
+    ].filter(Boolean).join('\n'),
+    'Planned removal',
+  )
+  const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
+  if (!proceed) return BACK
 
-  while (true) {
-    prompts.note(
-      [
-        removeIntegrations ? 'Skills added to my AI tools' : null,
-        removePrograms ? 'JL-Skills program files' : null,
-        removeMapData ? `Map project data (${projectPaths.length} selected)` : null,
-      ].filter(Boolean).join('\n'),
-      'Planned removal',
-    )
-    const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
-    if (!proceed) return BACK
-    if (removeMapData) removeMapProjectData(projectPaths)
-    if (removeIntegrations) removeAllIntegrations()
-    if (removePrograms) removeProgramFiles()
-    prompts.outro('Removal complete')
-    return 0
-  }
+  if (projectPaths.length > 0) removeMapProjectData(projectPaths)
+  if (removeIntegrations) removeAllIntegrations()
+  if (removePrograms) removeProgramFiles()
+  prompts.outro('Removal complete')
+  return 0
 }
 
-async function chooseMachineParts(state: Intro): Promise<NavResult<{ integrations: boolean; programs: boolean; mapData: boolean }>> {
-  const mode = await chooseSpecificOrAll(
+async function chooseMachineParts(
+  state: Intro,
+): Promise<NavResult<{ integrations: boolean; programs: boolean; mapData: boolean }>> {
+  const selected = await chooseMany(
     state,
-    'What would you like to remove?',
-    'Choose specific items',
-    'Remove everything',
-    true,
-  )
-  if (mode === BACK) return BACK
-  if (mode === 'all') return { integrations: true, programs: true, mapData: true }
-
-  const selected = checked<string[]>(await prompts.multiselect({
-    message: 'Select what to remove',
-    options: [
+    'Select what to remove',
+    [
       { value: 'integrations', label: 'Skills added to my AI tools' },
       { value: 'programs', label: 'JL-Skills program files' },
       { value: 'map-data', label: 'Map project data' },
     ],
-    required: true,
-  }))
+    { allowAll: true, allowBack: true },
+  )
+  if (selected === BACK) return BACK
   return {
     integrations: selected.includes('integrations'),
     programs: selected.includes('programs'),
@@ -976,6 +1088,7 @@ async function chooseMachineParts(state: Intro): Promise<NavResult<{ integration
 
 async function machineRemovalWizard(state: Intro = { shown: false }): Promise<NavResult<number>> {
   ensureIntro(state)
+
   while (true) {
     const choice = checked<string>(await prompts.select({
       message: 'How would you like to remove JL-Skills?',
@@ -983,59 +1096,83 @@ async function machineRemovalWizard(state: Intro = { shown: false }): Promise<Na
         { value: 'keep-data', label: 'Remove JL-Skills but keep my Map project data' },
         { value: 'with-data', label: 'Remove JL-Skills and my Map project data' },
         { value: 'choose', label: 'Choose what to remove' },
-        { value: BACK, label: 'Go back' },
-        { value: CANCEL, label: 'Cancel' },
+        ...navOptions(true),
       ],
       initialValue: 'keep-data',
     }))
     if (choice === CANCEL) cancel()
     if (choice === BACK) return BACK
 
-    let result: NavResult<number>
-    if (choice === 'keep-data') result = await executeMachineRemoval(true, true, false, state)
-    else if (choice === 'with-data') result = await executeMachineRemoval(true, true, true, state)
-    else {
-      const parts = await chooseMachineParts(state)
-      if (parts === BACK) continue
-      result = await executeMachineRemoval(parts.integrations, parts.programs, parts.mapData, state)
+    if (choice === 'keep-data') {
+      const result = await executeMachineRemoval(true, true, [], state)
+      if (result === BACK) continue
+      return result
     }
-    if (result === BACK) continue
-    return result
+
+    if (choice === 'with-data') {
+      const projectPaths = await chooseMapDataRemoval(state)
+      if (projectPaths === BACK) continue
+      const result = await executeMachineRemoval(true, true, projectPaths, state)
+      if (result === BACK) continue
+      return result
+    }
+
+    while (true) {
+      const parts = await chooseMachineParts(state)
+      if (parts === BACK) break
+
+      let projectPaths: string[] = []
+      if (parts.mapData) {
+        const selected = await chooseMapDataRemoval(state)
+        if (selected === BACK) continue
+        projectPaths = selected
+      }
+
+      const result = await executeMachineRemoval(parts.integrations, parts.programs, projectPaths, state)
+      if (result === BACK) continue
+      return result
+    }
   }
 }
 
 async function uninstallEntryWizard(): Promise<number> {
   const state: Intro = { shown: false }
-  ensureIntro(state, 'jl-skill uninstall')
+  ensureIntro(state, 'jl-skills uninstall')
+
   while (true) {
     const choice = checked<string>(await prompts.select({
       message: 'What would you like to uninstall?',
       options: [
         { value: 'skills', label: 'Skills from a project or user installation' },
         { value: 'machine', label: 'JL-Skills from this computer' },
-        { value: CANCEL, label: 'Cancel' },
+        { value: CANCEL, label: 'Cancel & Exit' },
       ],
       initialValue: 'skills',
     }))
     if (choice === CANCEL) cancel()
+
     if (choice === 'machine') {
       const result = await machineRemovalWizard(state)
       if (result === BACK) continue
       return result
     }
 
-    const scope = await chooseScope(state, 'Where would you like to uninstall skills?', true)
-    if (scope === BACK) continue
-    const result = await uninstallAtScope(scope, [], [], state)
-    if (result === BACK) continue
-    return result
+    while (true) {
+      const scope = await chooseScope(state, 'Where would you like to uninstall skills?', true)
+      if (scope === BACK) break
+      const result = await uninstallAtScope(scope, [], [], state)
+      if (result === BACK) continue
+      return result
+    }
   }
 }
 
 async function manageScopeWizard(scope: Scope, state: Intro): Promise<NavResult<number>> {
   while (true) {
     const installed = groupsAtScope(scope)
-    if (installed.length === 0) return installAtScope(scope, [], [], undefined, state, true, true)
+    if (installed.length === 0) {
+      return installAtScope(scope, [], [], undefined, state, true, true)
+    }
 
     prompts.note(installedSummary(installed), `Installed at ${scope.identity}`)
     const action = checked<string>(await prompts.select({
@@ -1044,8 +1181,7 @@ async function manageScopeWizard(scope: Scope, state: Intro): Promise<NavResult<
         { value: 'install', label: 'Install new skills' },
         { value: 'update', label: 'Update installed skills' },
         { value: 'uninstall', label: 'Uninstall installed skills' },
-        { value: BACK, label: 'Go back' },
-        { value: CANCEL, label: 'Cancel' },
+        ...navOptions(true),
       ],
       initialValue: 'install',
     }))
@@ -1057,6 +1193,7 @@ async function manageScopeWizard(scope: Scope, state: Intro): Promise<NavResult<
       : action === 'update'
         ? await updateAtScope(scope, [], [], undefined, state)
         : await uninstallAtScope(scope, [], [], state)
+
     if (result === BACK) continue
     return result
   }
@@ -1066,40 +1203,45 @@ async function bareWizard(): Promise<number> {
   if (!process.stdin.isTTY) throw new Error('no command supplied')
   const state: Intro = { shown: false }
   ensureIntro(state)
+
   while (true) {
     const choice = checked<string>(await prompts.select({
       message: 'What would you like to do?',
       options: [
         { value: 'manage', label: 'Manage skills' },
         { value: 'remove', label: 'Remove JL-Skills from this computer' },
-        { value: CANCEL, label: 'Cancel' },
+        { value: CANCEL, label: 'Cancel & Exit' },
       ],
       initialValue: 'manage',
     }))
     if (choice === CANCEL) cancel()
+
     if (choice === 'remove') {
       const result = await machineRemovalWizard(state)
       if (result === BACK) continue
       return result
     }
 
-    const scope = await chooseScope(state, 'Where would you like to manage skills?', true)
-    if (scope === BACK) continue
-    const result = await manageScopeWizard(scope, state)
-    if (result === BACK) continue
-    return result
+    while (true) {
+      const scope = await chooseScope(state, 'Where would you like to manage skills?', true)
+      if (scope === BACK) break
+
+      const result = await manageScopeWizard(scope, state)
+      if (result === BACK) continue
+      return result
+    }
   }
 }
 
 function printHelp(): void {
-  console.log(`jl-skill\n\nUsage:\n  jl-skill install [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jl-skill update [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jl-skill uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...\n\nSkill-first invocations continue to mean install. Interactive prompts use @clack/prompts ${PROMPTS_VERSION}.\n`)
+  console.log(`jl-skills\n\nUsage:\n  jl-skills install [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jl-skills update [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jl-skills uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...\n\nSkill-first invocations continue to mean install. Interactive prompts use @clack/prompts ${PROMPTS_VERSION}.\n`)
 }
 
 async function main(): Promise<number> {
   const args = process.argv.slice(2)
   if (args.length === 0) return bareWizard()
   if (args.length === 1 && (args[0] === '--version' || args[0] === '-v')) {
-    console.log(`jl-skill ${VERSION}`)
+    console.log(`jl-skills ${VERSION}`)
     return 0
   }
   if (args.some((arg: string) => arg === '--help' || arg === '-h') || args[0] === 'help') {
@@ -1112,8 +1254,8 @@ async function main(): Promise<number> {
 }
 
 main()
-  .then((code) => { process.exitCode = code })
+  .then((exitCode) => { process.exitCode = exitCode })
   .catch((error) => {
-    console.error(`jl-skill: ${error instanceof Error ? error.message : String(error)}`)
+    console.error(`jl-skills: ${error instanceof Error ? error.message : String(error)}`)
     process.exitCode = 1
   })
