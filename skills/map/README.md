@@ -17,7 +17,27 @@ The runtime embeds SurrealDB/SurrealKV and requires no daemon or listening port.
 
 The current Windows release/smoke path is local on the development/release machine. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the installer catalog, and compiles the TypeScript + `@clack/prompts` installer with Bun into standalone `build/jl-skill.exe`.
 
+Run the full Map + installer regression smoke with:
+
+```bash
+bun run smoke
+```
+
 Consumers need only the downloaded standalone installer and the AI harness(es) they intend to target. They do not need Rust, Cargo, Bun, Node, npm, Go, Python, or a SurrealDB server.
+
+The installed Map CLI is a scope-independent support artifact. User, cwd, and explicit-path installs all provision the same executable at:
+
+```text
+~/.jl-skills/map/bin/map.exe
+```
+
+The default schema is shared at:
+
+```text
+~/.jl-skills/map/schema.surql
+```
+
+Skill discovery and managed harness instructions still obey the requested install scope; the shared CLI does not make Map discoverable at user scope by itself.
 
 ## Initialization
 
@@ -148,10 +168,16 @@ Session state is crash/context-loss recovery only. Semantic graph state remains 
 
 ## Tests
 
-The v2 suite exercises the public binary across separate processes against real embedded SurrealKV state.
+The v2 runtime suite exercises the public binary across separate processes against real embedded SurrealKV state:
 
 ```bash
 cargo test --manifest-path skills/map/Cargo.toml
 ```
 
-The durable Map contract now lives beside the implementation in `skills/map/SPEC.md`. The repo-wide installer contract lives at `INSTALLER_SPEC.md`.
+The Windows installer regression suite exercises cwd scope, user scope, existing Map preservation, managed-instruction injection/idempotency/boundaries, user-scope safety, recursive explicit paths, and the shared CLI destination. Run it together with the runtime suite and a clean standalone build using:
+
+```bash
+bun run smoke
+```
+
+The durable Map contract lives beside the implementation in `skills/map/SPEC.md`. The repo-wide installer contract lives at `INSTALLER_SPEC.md`.

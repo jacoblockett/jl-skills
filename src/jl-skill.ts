@@ -30,6 +30,7 @@ type Manifest = {
   runtime_artifacts?: Record<string, string>
   runtime_shared_files?: Record<string, string>
   runtime_cli?: string
+  runtime_cli_destination?: string
   cli_token?: string
   instruction_fragment?: string
 }
@@ -272,6 +273,7 @@ function runtimePlatformKey(): string {
 }
 
 function runtimeRoot(manifest: Manifest, scope: Scope): string {
+  if (manifest.runtime_cli_destination) return dirname(canonicalPath(manifest.runtime_cli_destination))
   if (scope.kind === 'user') return join(installerDataRoot(), manifest.name, 'runtime', manifest.version)
   return join(scope.root, '.jl-skill', 'runtime', manifest.name, manifest.version)
 }
@@ -283,7 +285,9 @@ function provisionRuntime(manifest: Manifest, scope: Scope): { cli: string; root
   if (!artifact) throw new Error(`${manifest.name} has no bundled runtime for ${runtimePlatformKey()}`)
   const root = runtimeRoot(manifest, scope)
   mkdirSync(root, { recursive: true })
-  const cli = join(root, isWindows ? `${manifest.runtime_cli}.exe` : manifest.runtime_cli)
+  const cli = manifest.runtime_cli_destination
+    ? canonicalPath(manifest.runtime_cli_destination)
+    : join(root, isWindows ? `${manifest.runtime_cli}.exe` : manifest.runtime_cli)
   extractAsset(manifest.name, artifact, cli, undefined, 0o755)
   for (const rel of manifest.runtime_files ?? []) extractAsset(manifest.name, rel, join(root, rel))
   for (const [rel, destination] of Object.entries(manifest.runtime_shared_files ?? {})) {

@@ -30,6 +30,7 @@ for (const entry of readdirSync(skillsRoot)) {
   const declared = new Set<string>([
     ...(manifest.skill_files ?? []),
     ...(manifest.runtime_files ?? []),
+    ...Object.keys(manifest.runtime_shared_files ?? {}),
     ...(manifest.instruction_fragment ? [manifest.instruction_fragment] : []),
   ])
   for (const rel of declared) addDeclared(files, skillRoot, rel)

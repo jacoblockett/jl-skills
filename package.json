@@ -5,7 +5,9 @@
   "type": "module",
   "packageManager": "bun@1.3.14",
   "scripts": {
-    "build": "bun scripts/build.ts"
+    "build": "bun scripts/build.ts",
+    "test:installer": "bun test tests/installer.test.ts",
+    "smoke": "cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map && bun run build && bun run test:installer"
   },
   "dependencies": {
     "@clack/prompts": "1.7.0"

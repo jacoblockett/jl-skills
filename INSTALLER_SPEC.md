@@ -69,7 +69,7 @@ The requested scope is authoritative. Harness detection determines available ada
 
 For `jl-skill.exe map --scope cwd`, detection of a user-installed Codex or Claude only permits those harnesses to be targeted at the current project. It does not authorize user-scope skill copies or instruction injection.
 
-The only permitted user-level data for a project/path install is installer-owned bookkeeping and explicitly declared narrow scope-independent support artifacts. Neither may make the skill discoverable at user scope or inject user-scope instructions.
+The only permitted user-level data for a project/path install is installer-owned bookkeeping and explicitly declared narrow scope-independent support artifacts. Neither may make the skill discoverable at user scope or inject user-scope instructions. Map's shared CLI and schema are such support artifacts.
 
 ## Scope semantics
 
@@ -79,7 +79,7 @@ The only permitted user-level data for a project/path install is installer-owned
 
 `cwd` resolves to the invocation working directory. Explicit paths normalize `~`, supported environment variables, relative components, separators, and `.`/`..`; they become absolute/canonical where safely available while preserving Windows drive/UNC semantics.
 
-The target may be completely uninitialized. The installer creates only the non-semantic structures required for discovery, harness resources, managed instructions, runtime placement, and declared support assets.
+The target may be completely uninitialized. The installer recursively creates the requested target path when needed, then creates only the non-semantic structures required for discovery, harness resources, managed instructions, runtime placement, and declared support assets.
 
 ## Harness adapters
 
@@ -110,13 +110,18 @@ Required behavior:
 - allow independent blocks from multiple skills;
 - use safe/atomic writes;
 - reject malformed/duplicate/conflicting markers rather than guessing;
+- clearly identify the interior as installer-managed content;
 - future uninstall removes only installer-owned content.
+
+Instruction fragments should give ordinary agents enough immediately useful CLI guidance to operate safely without reproducing the full skill manual. Map's fragment includes a short set of common read-only commands plus `--help` / `<command> --help` discovery and must render the actual installer-provisioned CLI path rather than assuming `map` is on `PATH`.
 
 Instruction integration always follows requested scope.
 
 ## Package model
 
-Installation is manifest-driven. A package may declare name/version/description, skill resources, runtime kind, platform runtime artifacts, runtime support files, scope-independent support artifacts, harness agent/subagent resources, instruction fragment, supported scopes/capabilities, validation, and migration metadata.
+Installation is manifest-driven. A package may declare name/version/description, skill resources, runtime kind, platform runtime artifacts, runtime support files, a scope-independent CLI destination, scope-independent support artifacts, harness agent/subagent resources, instruction fragment, supported scopes/capabilities, validation, and migration metadata.
+
+A manifest-declared scope-independent CLI destination is support infrastructure, not skill discovery. Its presence must not cause user-scope skill copies or user-scope instruction injection for a project/path install.
 
 Harness filesystem knowledge belongs in adapters, not every skill package. Semantic project initialization is not an installer hook.
 
@@ -136,16 +141,24 @@ TypeScript installer + @clack/prompts
   -> jl-skill.exe
 
 local smoke test
-  -> run compiled jl-skill.exe
-  -> install Map into isolated project scope
-  -> assert installer did not create .map
-  -> assert skill/runtime/support/instruction files exist
-  -> run installed map.exe --path <project> init
-  -> run installed map.exe --path <project> status
-  -> copy verified release artifact(s) into a distributable output
+  -> run compiled jl-skill.exe in isolated fake homes/projects
+  -> exercise cwd, user, and explicit-path scope
+  -> assert installer did not create or mutate .map
+  -> assert skill/support/instruction files exist at the requested scope
+  -> assert existing instruction content is preserved and managed blocks are idempotent
+  -> assert malformed managed boundaries reject rather than guess
+  -> assert user-scope installation preserves unrelated harness/user files
+  -> assert Map CLI is ~/.jl-skills/map/bin/map.exe for every scope
+  -> run installed map.exe against preserved/new Map state
 ```
 
 A release builder may have Bun, Rust, Cargo, and other build dependencies installed. Those dependencies remain completely outside the consumer contract.
+
+The checked-in Windows regression entry point is:
+
+```bash
+bun run smoke
+```
 
 ## Package transport
 
@@ -165,14 +178,24 @@ For Windows x64:
 Map Rust source
   -> release map.exe
   -> prebuilt package payload
-  -> installer places map.exe at the selected versioned runtime location
+  -> ~/.jl-skills/map/bin/map.exe
+```
+
+The Map CLI destination is deliberately scope-independent. User, cwd, and explicit-path installs all provision/update the same executable:
+
+```text
+~/.jl-skills/map/bin/map.exe
+```
+
+The shared default schema lives at:
+
+```text
+~/.jl-skills/map/schema.surql
 ```
 
 There is no SurrealDB daemon/listening port. The runtime owns embedded database access directly.
 
-User-scope runtime assets live in installer-owned application data, versioned by skill/runtime version. Project/path installations use project-local runtime placement unless a package explicitly declares a narrow scope-independent shared artifact.
-
-Scope-independent support artifacts may not widen skill discovery/instructions or create authoritative semantic state.
+The shared executable and schema do not widen harness discovery or instruction scope and do not create authoritative semantic state. Project `.map/` state remains project-local and runtime-owned.
 
 ## Installation responsibilities
 
@@ -201,13 +224,19 @@ Use an OS-appropriate installer-owned registry with at least skill/version, norm
 
 This bookkeeping must not make a project-scoped skill globally discoverable. Missing recorded resources are stale/missing installations, not permission to recreate elsewhere.
 
-`update` uses the same manifest/adapter machinery, never relocates an installation, preserves unrelated content, and may update owned skill files, harness resources, runtimes, support assets, managed instructions, receipts, and migrations.
+`update` uses the same manifest/adapter machinery, never relocates an installation's discovery/instruction scope, preserves unrelated content, and may update owned skill files, harness resources, shared or scope-local runtimes, support assets, managed instructions, receipts, and migrations.
 
 Bare interactive `jl-skill update` uses Clack multiselect to choose installer-managed installations before confirmation.
 
 ## Map-specific contract
 
 Installing Map installs/configures the skill, prebuilt native runtime, declared support assets, managed ordinary-agent instructions, and declared Map harness/subagent resources.
+
+Map always provisions its CLI to:
+
+```text
+~/.jl-skills/map/bin/map.exe
+```
 
 Installing Map must **not**:
 
@@ -216,11 +245,12 @@ Installing Map must **not**:
 - invoke `map init`;
 - apply the Map schema to project semantic state;
 - create semantic nodes/relations;
-- create a recovery session.
+- create a recovery session;
+- overwrite unrelated user/project harness configuration or unmanaged instruction content.
 
 Map state is runtime-owned. Explicit `map init` creates `.map` only when Map is actually started for a target project. A user-scope skill install therefore makes Map available across projects but never creates one global authoritative graph.
 
-Map may declare the default schema as a scope-independent runtime support artifact; installing that support file is not project-state initialization.
+The default schema and shared CLI are scope-independent runtime support artifacts; installing them is not project-state initialization.
 
 ## Deferred commands
 

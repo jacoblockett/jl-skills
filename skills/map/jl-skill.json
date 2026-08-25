@@ -5,17 +5,15 @@
   "skill_files": [
     "SKILL.md"
   ],
-  "runtime_files": [
-    "schema.surql"
-  ],
   "runtime": "rust",
   "runtime_artifacts": {
     "windows-x64": "runtime/windows-x64/map.exe"
   },
+  "runtime_cli": "map",
+  "runtime_cli_destination": "~/.jl-skills/map/bin/map.exe",
   "runtime_shared_files": {
     "schema.surql": "~/.jl-skills/map/schema.surql"
   },
-  "runtime_cli": "map",
   "cli_token": "JL_MAP_CLI",
   "instruction_fragment": "AGENTS.fragment.md"
 }
