@@ -13,7 +13,10 @@ async fn run() -> Result<()> {
         _ => {
             let map_dir = resolve_existing_map(cli.path.as_deref(), cli.config.as_deref())?;
             let store = Store::open(map_dir).await?;
-            dispatch(&store, cli.command).await
+            match ensure_project_registration(&store).await? {
+                RegistrationOutcome::Proceed => dispatch(&store, cli.command).await,
+                RegistrationOutcome::ExitSuccess => Ok(()),
+            }
         }
     }
 }
@@ -99,12 +102,22 @@ async fn init_map(cli: &Cli, schema_arg: Option<PathBuf>) -> Result<()> {
         return Err(error);
     }
 
+    let identity = match register_initialized_map(&selection) {
+        Ok(identity) => identity,
+        Err(error) => {
+            drop(store);
+            let _ = fs::remove_dir_all(&selection);
+            return Err(error).context("registering new Map project");
+        }
+    };
+
     emit(json!({
         "ok": true,
         "path": selection,
         "schema": schema_path,
         "schemaVersion": SCHEMA_VERSION,
         "runtimeVersion": env!("CARGO_PKG_VERSION"),
+        "projectId": identity.project_id,
     }))
 }
 
