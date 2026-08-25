@@ -20,7 +20,7 @@ const VERSION = '0.5.0'
 const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
 const CANCEL = '__jl_cancel__'
-const ALL = '__jl_all__'
+const BACK = '__jl_back__'
 
 type Manifest = {
   name: string
@@ -50,6 +50,7 @@ type Receipt = {
   agent: string
   skill_path: string
   instruction_path?: string
+  instructions?: boolean
   runtime_root: string
   updated_at: string
 }
@@ -57,9 +58,10 @@ type Receipt = {
 type Registry = { installations: Receipt[] }
 type AgentSpec = { id: string; label: string; command: string }
 type AgentInfo = AgentSpec & { detected: boolean }
-type ParsedAction = { skills: string[]; scope?: string; agents: string[] }
-type InstallGroup = { key: string; skill: string; scope: Scope; agents: string[] }
+type ParsedAction = { skills: string[]; scope?: string; agents: string[]; instructions?: boolean }
+type InstallGroup = { key: string; skill: string; scope: Scope; receipts: Receipt[] }
 type Intro = { shown: boolean }
+type NavResult<T> = T | typeof BACK
 
 type MapProjectRegistry = {
   projects?: Array<{ projectId?: string; path?: string }>
@@ -177,7 +179,7 @@ function detectedAgents(): AgentInfo[] {
   return agentCatalog.map((agent) => ({ ...agent, detected: harnessDetected(agent) }))
 }
 
-function agentLabel(id: string, agents: AgentInfo[]): string {
+function agentLabel(id: string, agents = detectedAgents()): string {
   return agents.find((item) => item.id === id)?.label ?? id
 }
 
@@ -281,15 +283,21 @@ function removeManagedBlock(path: string, skill: string): void {
   const before = current.slice(0, beginIndex).replace(/[\r\n]+$/, '')
   const after = current.slice(endIndex + end.length).replace(/^[\r\n]+/, '')
   const next = [before, after].filter((part) => part.length > 0).join('\n\n')
-  if (!next.trim()) {
-    rmSync(path, { force: true })
-  } else {
-    atomicWrite(path, `${next.replace(/[\r\n]+$/, '')}\n`)
-  }
+  if (!next.trim()) rmSync(path, { force: true })
+  else atomicWrite(path, `${next.replace(/[\r\n]+$/, '')}\n`)
 }
 
 function registryPath(): string {
   return join(installerDataRoot(), 'registry.json')
+}
+
+function normalizeReceipt(receipt: Receipt): Receipt {
+  if (receipt.instructions === undefined) {
+    receipt.instructions = true
+    receipt.instruction_path ??= agentPaths(receipt.agent, receipt.scope).instruction
+  }
+  if (!receipt.instructions) receipt.instruction_path = undefined
+  return receipt
 }
 
 function loadRegistry(): Registry {
@@ -297,11 +305,18 @@ function loadRegistry(): Registry {
   if (!existsSync(path)) return { installations: [] }
   const parsed = JSON.parse(readFileSync(path, 'utf8')) as Registry
   if (!Array.isArray(parsed.installations)) parsed.installations = []
+  parsed.installations = parsed.installations.map(normalizeReceipt)
   return parsed
 }
 
 function saveRegistry(registry: Registry): void {
   atomicWrite(registryPath(), `${JSON.stringify(registry, null, 2)}\n`)
+}
+
+function findReceipt(skill: string, scope: Scope, agent: string): Receipt | undefined {
+  return loadRegistry().installations.find((receipt) =>
+    receipt.skill === skill && receipt.scope.identity === scope.identity && receipt.agent === agent
+  )
 }
 
 function saveReceipt(receipt: Receipt): void {
@@ -344,7 +359,9 @@ function provisionRuntime(manifest: Manifest, scope: Scope): { cli: string; root
   return { cli, root }
 }
 
-function installOne(manifest: Manifest, scope: Scope, agents: string[]): void {
+type InstallTarget = { agent: string; instructions: boolean }
+
+function installTargets(manifest: Manifest, scope: Scope, targets: InstallTarget[]): void {
   if (scope.kind === 'project') mkdirSync(scope.root, { recursive: true })
   const runtime = provisionRuntime(manifest, scope)
   const tokenName = manifest.cli_token || 'JL_SKILL_CLI'
@@ -353,28 +370,33 @@ function installOne(manifest: Manifest, scope: Scope, agents: string[]): void {
     ? render(new TextDecoder().decode(decodeAsset(manifest.name, manifest.instruction_fragment)), tokens)
     : ''
 
-  for (const agent of agents) {
-    const paths = agentPaths(agent, scope)
+  for (const target of targets) {
+    const paths = agentPaths(target.agent, scope)
     const dest = join(paths.skillRoot, manifest.name)
     for (const rel of manifest.skill_files) extractAsset(manifest.name, rel, join(dest, rel), tokens)
-    if (fragment) managedBlock(paths.instruction, manifest.name, fragment)
+
+    const existing = findReceipt(manifest.name, scope, target.agent)
+    if (target.instructions && fragment) managedBlock(paths.instruction, manifest.name, fragment)
+    else if (existing?.instructions) removeManagedBlock(existing.instruction_path || paths.instruction, manifest.name)
+
     saveReceipt({
       skill: manifest.name,
       version: manifest.version,
       scope,
-      agent,
+      agent: target.agent,
       skill_path: dest,
-      instruction_path: fragment ? paths.instruction : undefined,
+      instruction_path: target.instructions && fragment ? paths.instruction : undefined,
+      instructions: target.instructions && !!fragment,
       runtime_root: runtime.root,
       updated_at: new Date().toISOString(),
     })
-    console.log(`Installed ${manifest.name} ${manifest.version} for ${agent} at ${dest}`)
+    console.log(`Installed ${manifest.name} ${manifest.version} for ${target.agent} at ${dest}`)
   }
 }
 
-function uninstallGroup(group: InstallGroup): void {
+function uninstallGroup(group: InstallGroup, showHarness = false): void {
   const registry = loadRegistry()
-  const removeAgents = new Set(group.agents)
+  const removeAgents = new Set(group.receipts.map((receipt) => receipt.agent))
   const receipts = registry.installations.filter((receipt) =>
     receipt.skill === group.skill
       && receipt.scope.identity === group.scope.identity
@@ -383,9 +405,7 @@ function uninstallGroup(group: InstallGroup): void {
 
   for (const receipt of receipts) {
     rmSync(receipt.skill_path, { recursive: true, force: true })
-    const instruction = receipt.instruction_path || agentPaths(receipt.agent, receipt.scope).instruction
-    removeManagedBlock(instruction, receipt.skill)
-    console.log(`Uninstalled ${receipt.skill} for ${receipt.agent} from ${receipt.scope.identity}`)
+    if (receipt.instructions && receipt.instruction_path) removeManagedBlock(receipt.instruction_path, receipt.skill)
   }
 
   registry.installations = registry.installations.filter((receipt) => !(
@@ -394,6 +414,12 @@ function uninstallGroup(group: InstallGroup): void {
       && removeAgents.has(receipt.agent)
   ))
   saveRegistry(registry)
+
+  if (showHarness && receipts.length === 1) {
+    console.log(`Uninstalled ${group.skill} for ${receipts[0].agent} from ${group.scope.identity}`)
+  } else {
+    console.log(`Uninstalled ${group.skill} from ${group.scope.identity}`)
+  }
 }
 
 function parseAction(args: string[], command: 'install' | 'update' | 'uninstall'): ParsedAction {
@@ -409,7 +435,13 @@ function parseAction(args: string[], command: 'install' | 'update' | 'uninstall'
       if (i + 1 >= body.length) throw new Error('--agent requires a harness name')
       out.agents.push(body[++i])
     } else if (arg.startsWith('--agent=')) out.agents.push(arg.slice('--agent='.length))
-    else if (arg.startsWith('-')) throw new Error(`unknown ${command} option ${arg}`)
+    else if (arg === '--instructions') {
+      if (command === 'uninstall') throw new Error('--instructions is not valid for uninstall')
+      out.instructions = true
+    } else if (arg === '--no-instructions') {
+      if (command === 'uninstall') throw new Error('--no-instructions is not valid for uninstall')
+      out.instructions = false
+    } else if (arg.startsWith('-')) throw new Error(`unknown ${command} option ${arg}`)
     else out.skills.push(arg)
   }
   return out
@@ -417,14 +449,19 @@ function parseAction(args: string[], command: 'install' | 'update' | 'uninstall'
 
 function groupInstallations(registry: Registry): InstallGroup[] {
   const groups = new Map<string, InstallGroup>()
-  for (const receipt of registry.installations) {
+  for (const receipt of registry.installations.map(normalizeReceipt)) {
     const key = `${receipt.skill}\u0000${receipt.scope.kind}\u0000${receipt.scope.identity}`
-    const group = groups.get(key) ?? { key, skill: receipt.skill, scope: receipt.scope, agents: [] }
-    if (!group.agents.includes(receipt.agent)) group.agents.push(receipt.agent)
+    const group = groups.get(key) ?? { key, skill: receipt.skill, scope: receipt.scope, receipts: [] }
+    group.receipts.push(receipt)
     groups.set(key, group)
   }
-  return [...groups.values()].map((group) => ({ ...group, agents: group.agents.sort() }))
+  return [...groups.values()]
+    .map((group) => ({ ...group, receipts: group.receipts.sort((a, b) => a.agent.localeCompare(b.agent)) }))
     .sort((a, b) => a.key.localeCompare(b.key))
+}
+
+function groupAgents(group: InstallGroup): string[] {
+  return group.receipts.map((receipt) => receipt.agent)
 }
 
 function groupsAtScope(scope: Scope): InstallGroup[] {
@@ -435,237 +472,360 @@ function matchingGroups(parsed: ParsedAction, scope?: Scope): InstallGroup[] {
   const requestedAgents = normalizeAgents(parsed.agents)
   return groupInstallations(loadRegistry()).map((group) => ({
     ...group,
-    agents: requestedAgents.length > 0 ? group.agents.filter((agent) => requestedAgents.includes(agent)) : group.agents,
+    receipts: requestedAgents.length > 0
+      ? group.receipts.filter((receipt) => requestedAgents.includes(receipt.agent))
+      : group.receipts,
   })).filter((group) => {
     if (parsed.skills.length > 0 && !parsed.skills.includes(group.skill)) return false
     if (scope && group.scope.identity !== scope.identity) return false
-    return group.agents.length > 0
+    return group.receipts.length > 0
   })
 }
 
-async function chooseScope(state: Intro, message = 'Where would you like to manage skills?'): Promise<Scope> {
+function installedVersions(group: InstallGroup): string[] {
+  return [...new Set(group.receipts.map((receipt) => receipt.version))].sort()
+}
+
+function updateHint(group: InstallGroup): string {
+  const available = loadManifest(group.skill).version
+  const installed = installedVersions(group)
+  if (installed.length === 1 && installed[0] === available) return 'up to date'
+  return `${installed.join(' / ')} -> ${available}`
+}
+
+function installedSummary(groups: InstallGroup[]): string {
+  return groups.map((group) => `${group.skill} ${installedVersions(group).join(' / ')}`).join('\n')
+}
+
+function updateSummary(groups: InstallGroup[]): string {
+  return groups.map((group) => `${group.skill}: ${updateHint(group)}`).join('\n')
+}
+
+async function chooseScope(state: Intro, message = 'Where would you like to manage skills?', allowBack = false): Promise<NavResult<Scope>> {
   ensureIntro(state)
-  const choice = checked<string>(await prompts.select({
-    message,
-    options: [
-      { value: 'cwd', label: 'Current directory', hint: process.cwd() },
-      { value: 'user', label: 'User' },
-      { value: 'custom', label: 'Custom path' },
-      { value: CANCEL, label: 'Cancel' },
-    ],
-    initialValue: 'cwd',
-  }))
+  const options = [
+    { value: 'cwd', label: 'Current directory', hint: process.cwd() },
+    { value: 'user', label: 'User' },
+    { value: 'custom', label: 'Custom path' },
+    ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
+    { value: CANCEL, label: 'Cancel' },
+  ]
+  const choice = checked<string>(await prompts.select({ message, options, initialValue: 'cwd' }))
   if (choice === CANCEL) cancel()
+  if (choice === BACK) return BACK
   if (choice !== 'custom') return resolveScope(choice)
   const path = checked<string>(await prompts.text({
     message: 'Custom path',
     placeholder: process.cwd(),
-    validate: (value) => value.trim() ? undefined : 'Path is required',
+    validate: (value: string) => value.trim() ? undefined : 'Path is required',
   })).trim()
   return resolveScope(path)
 }
 
-async function chooseAgents(explicit: string[], state: Intro): Promise<{ values: string[]; prompted: boolean; all: AgentInfo[] }> {
+async function chooseSpecificOrAll(
+  state: Intro,
+  message: string,
+  specificLabel: string,
+  allLabel: string,
+  allowBack: boolean,
+): Promise<'specific' | 'all' | typeof BACK> {
+  ensureIntro(state)
+  const choice = checked<string>(await prompts.select({
+    message,
+    options: [
+      { value: 'specific', label: specificLabel },
+      { value: 'all', label: allLabel },
+      ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
+      { value: CANCEL, label: 'Cancel' },
+    ],
+    initialValue: 'specific',
+  }))
+  if (choice === CANCEL) cancel()
+  if (choice === BACK) return BACK
+  return choice as 'specific' | 'all'
+}
+
+async function chooseAgents(explicit: string[], state: Intro, allowBack = true): Promise<NavResult<{ values: string[]; prompted: boolean; all: AgentInfo[] }>> {
   const all = detectedAgents()
   if (explicit.length > 0) return { values: normalizeAgents(explicit), prompted: false, all }
-  const detected = all.filter((item) => item.detected).map((item) => item.id)
-  if (detected.length === 1) return { values: detected, prompted: false, all }
   if (!process.stdin.isTTY) {
+    const detected = all.filter((item) => item.detected).map((item) => item.id)
     if (detected.length === 0) throw new Error('no supported harness detected; specify --agent')
     return { values: detected, prompted: false, all }
   }
-  ensureIntro(state)
+
+  const mode = await chooseSpecificOrAll(
+    state,
+    'Which AI harnesses should receive these skills?',
+    'Choose specific harnesses',
+    'Select all supported harnesses',
+    allowBack,
+  )
+  if (mode === BACK) return BACK
+  if (mode === 'all') return { values: all.map((item) => item.id), prompted: true, all }
+
   const values = checked<string[]>(await prompts.multiselect({
-    message: detected.length > 1 ? 'Select AI harnesses' : 'Select AI harnesses to target',
-    options: [
-      ...all.map((item) => ({ value: item.id, label: item.label, hint: item.detected ? 'detected' : undefined })),
-      { value: CANCEL, label: 'Cancel' },
-    ],
-    initialValues: detected,
+    message: 'Select AI harnesses',
+    options: all.map((item) => ({
+      value: item.id,
+      label: item.label,
+      hint: item.detected ? 'detected' : 'not detected on this computer',
+    })),
     required: true,
   }))
-  if (values.includes(CANCEL)) cancel()
   return { values: normalizeAgents(values), prompted: true, all }
 }
 
-async function exclusiveMultiselect(
-  state: Intro,
-  message: string,
-  items: Array<{ value: string; label: string; hint?: string }>,
-  allLabel: string,
-): Promise<string[]> {
+async function chooseInstructionInjection(state: Intro, allowBack = true): Promise<NavResult<boolean>> {
   ensureIntro(state)
-  const selected = checked<string[]>(await prompts.multiselect({
-    message,
+  const choice = checked<string>(await prompts.select({
+    message: 'Add skill guidance to your AI instruction files?',
     options: [
-      ...items,
-      { value: ALL, label: allLabel },
+      { value: 'yes', label: 'Yes', hint: 'recommended' },
+      { value: 'no', label: 'No', hint: 'leave instruction files unchanged' },
+      ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
       { value: CANCEL, label: 'Cancel' },
     ],
-    required: true,
+    initialValue: 'yes',
   }))
-  const hasAll = selected.includes(ALL)
-  const hasCancel = selected.includes(CANCEL)
-  if (hasAll && hasCancel) {
-    const choice = checked<string>(await prompts.select({
-      message: 'Choose one',
-      options: [
-        { value: ALL, label: allLabel },
-        { value: CANCEL, label: 'Cancel' },
-      ],
-      initialValue: ALL,
-    }))
-    if (choice === CANCEL) cancel()
-    return items.map((item) => item.value)
-  }
-  if (hasCancel) cancel()
-  if (hasAll) return items.map((item) => item.value)
-  return selected.filter((value) => value !== ALL && value !== CANCEL)
+  if (choice === CANCEL) cancel()
+  if (choice === BACK) return BACK
+  return choice === 'yes'
 }
 
-async function chooseInstallSkills(scope: Scope, state: Intro): Promise<string[]> {
+async function chooseInstallSkills(scope: Scope, state: Intro, allowBack = true): Promise<NavResult<string[]>> {
+  const mode = checked<string>(await prompts.select({
+    message: 'What would you like to install?',
+    options: [
+      { value: 'choose', label: 'Choose skills' },
+      ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
+      { value: CANCEL, label: 'Cancel' },
+    ],
+    initialValue: 'choose',
+  }))
+  if (mode === CANCEL) cancel()
+  if (mode === BACK) return BACK
+
   ensureIntro(state)
   const installed = new Set(groupsAtScope(scope).map((group) => group.skill))
   const selected = checked<string[]>(await prompts.multiselect({
     message: 'Select skills to install',
-    options: [
-      ...catalogManifests().map((item) => ({
-        value: item.name,
-        label: item.name,
-        hint: installed.has(item.name) ? 'already installed' : item.description || undefined,
-        disabled: installed.has(item.name),
-      })),
-      { value: CANCEL, label: 'Cancel' },
-    ],
+    options: catalogManifests().map((item) => ({
+      value: item.name,
+      label: item.name,
+      hint: installed.has(item.name) ? 'already installed' : item.description || undefined,
+      disabled: installed.has(item.name),
+    })),
     required: true,
   }))
-  if (selected.includes(CANCEL)) cancel()
   return selected
 }
 
-function installedSummary(groups: InstallGroup[]): string {
-  const agents = detectedAgents()
-  return groups.map((group) =>
-    `${group.skill} ${loadManifest(group.skill).version} · ${group.agents.map((id) => agentLabel(id, agents)).join(', ')}`
-  ).join('\n')
+async function chooseGroupSkills(
+  scope: Scope,
+  state: Intro,
+  action: 'update' | 'uninstall',
+): Promise<NavResult<InstallGroup[]>> {
+  const available = groupsAtScope(scope)
+  if (available.length === 0) throw new Error(`no installed skills at ${scope.identity}`)
+  const verb = action === 'update' ? 'update' : 'uninstall'
+  const mode = await chooseSpecificOrAll(
+    state,
+    `Which skills would you like to ${verb}?`,
+    'Choose specific skills',
+    action === 'update' ? 'Update all installed skills' : 'Uninstall all installed skills',
+    true,
+  )
+  if (mode === BACK) return BACK
+  if (mode === 'all') return available
+
+  const selected = checked<string[]>(await prompts.multiselect({
+    message: `Select skills to ${verb}`,
+    options: available.map((group) => ({
+      value: group.skill,
+      label: group.skill,
+      hint: action === 'update' ? updateHint(group) : undefined,
+    })),
+    required: true,
+  }))
+  return available.filter((group) => selected.includes(group.skill))
 }
 
-async function installAtScope(scope: Scope, skills: string[], explicitAgents: string[], state: Intro, alreadyPrompted: boolean): Promise<number> {
-  if (skills.length === 0) skills = await chooseInstallSkills(scope, state)
-  skills.forEach(loadManifest)
-  const agentChoice = await chooseAgents(explicitAgents, state)
-  const prompted = alreadyPrompted || agentChoice.prompted
-  if (prompted) {
-    prompts.note(
-      `Skills: ${skills.join(', ')}\nHarnesses: ${agentChoice.values.map((id) => agentLabel(id, agentChoice.all)).join(', ')}\nScope: ${scope.identity}\nMap state: not initialized by installer`,
-      'Planned installation',
-    )
-    const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
-    if (!proceed) cancel()
-  } else {
-    console.log(`Scope: ${scope.identity}`)
-    console.log(`Agents: ${agentChoice.values.join(', ')}`)
-    console.log(`Skills: ${skills.join(', ')}`)
+function targetsForNewInstall(agents: string[], instructions: boolean): InstallTarget[] {
+  return agents.map((agent) => ({ agent, instructions }))
+}
+
+function targetsForUpdate(group: InstallGroup, override?: boolean): InstallTarget[] {
+  return group.receipts.map((receipt) => ({
+    agent: receipt.agent,
+    instructions: override ?? receipt.instructions ?? true,
+  }))
+}
+
+async function installAtScope(
+  scope: Scope,
+  skills: string[],
+  explicitAgents: string[],
+  instructionOverride: boolean | undefined,
+  state: Intro,
+  allowBack = true,
+  askInstructions = true,
+): Promise<NavResult<number>> {
+  let selectedSkills = skills
+
+  while (true) {
+    if (selectedSkills.length === 0) {
+      const chosen = await chooseInstallSkills(scope, state, allowBack)
+      if (chosen === BACK) return BACK
+      selectedSkills = chosen
+    }
+    selectedSkills.forEach(loadManifest)
+
+    while (true) {
+      const agentChoice = await chooseAgents(explicitAgents, state, allowBack)
+      if (agentChoice === BACK) {
+        if (skills.length > 0) return BACK
+        selectedSkills = []
+        break
+      }
+
+      while (true) {
+        let instructions = instructionOverride
+        if (instructions === undefined && askInstructions && process.stdin.isTTY) {
+          const choice = await chooseInstructionInjection(state, true)
+          if (choice === BACK) break
+          instructions = choice
+        }
+        if (instructions === undefined) instructions = true
+
+        const prompted = process.stdin.isTTY && (skills.length === 0 || explicitAgents.length === 0 || (askInstructions && instructionOverride === undefined))
+        if (prompted) {
+          prompts.note(
+            `Skills: ${selectedSkills.join(', ')}\nHarnesses: ${agentChoice.values.map((id) => agentLabel(id, agentChoice.all)).join(', ')}\nScope: ${scope.identity}\nAI instruction files: ${instructions ? 'add managed guidance' : 'leave unchanged'}`,
+            'Planned installation',
+          )
+          const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
+          if (!proceed) continue
+        } else {
+          console.log(`Scope: ${scope.identity}`)
+          console.log(`Agents: ${agentChoice.values.join(', ')}`)
+          console.log(`Skills: ${selectedSkills.join(', ')}`)
+        }
+
+        for (const skill of selectedSkills) {
+          installTargets(loadManifest(skill), scope, targetsForNewInstall(agentChoice.values, instructions))
+        }
+        if (prompted) prompts.outro('Installation complete')
+        return 0
+      }
+    }
   }
-  for (const skill of skills) installOne(loadManifest(skill), scope, agentChoice.values)
-  if (prompted) prompts.outro('Installation complete')
-  return 0
 }
 
 async function installWizard(args: string[]): Promise<number> {
   const parsed = parseAction(args, 'install')
   const state: Intro = { shown: false }
-  let prompted = false
   let scope: Scope
   if (parsed.scope) scope = resolveScope(parsed.scope)
   else {
     if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
-    scope = await chooseScope(state, 'Where should the selected skills be installed?')
-    prompted = true
+    const chosen = await chooseScope(state, 'Where should the selected skills be installed?')
+    if (chosen === BACK) throw new Error('unexpected back navigation')
+    scope = chosen
   }
   if (parsed.skills.length === 0 && !process.stdin.isTTY) throw new Error('no skills selected')
-  if (parsed.skills.length === 0) prompted = true
-  return installAtScope(scope, parsed.skills, parsed.agents, state, prompted)
+  const askInstructions = parsed.skills.length === 0 || parsed.agents.length === 0 || !parsed.scope
+  const instructionMode = parsed.instructions ?? (askInstructions ? undefined : true)
+  const result = await installAtScope(scope, parsed.skills, parsed.agents, instructionMode, state, false, askInstructions)
+  if (result === BACK) cancel()
+  return result
 }
 
-async function updateAtScope(scope: Scope, skills: string[], explicitAgents: string[], state: Intro, prompted: boolean): Promise<number> {
-  const parsed: ParsedAction = { skills, scope: scope.identity, agents: explicitAgents }
-  let groups = matchingGroups(parsed, scope)
-  if (skills.length === 0) {
-    if (!process.stdin.isTTY) throw new Error('no skills selected for update')
-    const available = groupsAtScope(scope)
-    if (available.length === 0) throw new Error(`no installed skills at ${scope.identity}`)
-    const selected = await exclusiveMultiselect(
-      state,
-      'Select skills to update',
-      available.map((group) => ({
-        value: group.skill,
-        label: group.skill,
-        hint: group.agents.join(', '),
-      })),
-      'Update all',
-    )
-    groups = available.filter((group) => selected.includes(group.skill))
-    prompted = true
+async function updateAtScope(
+  scope: Scope,
+  skills: string[],
+  explicitAgents: string[],
+  instructionOverride: boolean | undefined,
+  state: Intro,
+): Promise<NavResult<number>> {
+  const parsed: ParsedAction = { skills, scope: scope.identity, agents: explicitAgents, instructions: instructionOverride }
+  while (true) {
+    let groups = matchingGroups(parsed, scope)
+    if (skills.length === 0) {
+      if (!process.stdin.isTTY) throw new Error('no skills selected for update')
+      prompts.note(updateSummary(groupsAtScope(scope)), 'Available updates')
+      const selected = await chooseGroupSkills(scope, state, 'update')
+      if (selected === BACK) return BACK
+      groups = selected
+    }
+    if (groups.length === 0) throw new Error('no installations match update filters')
+
+    if (process.stdin.isTTY) {
+      prompts.note(groups.map((group) => `${group.skill}: ${updateHint(group)}`).join('\n'), 'Planned updates')
+      const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
+      if (!proceed) {
+        if (skills.length > 0) return BACK
+        continue
+      }
+    }
+
+    for (const group of groups) {
+      installTargets(loadManifest(group.skill), group.scope, targetsForUpdate(group, instructionOverride))
+    }
+    if (process.stdin.isTTY) prompts.outro('Update complete')
+    return 0
   }
-  if (groups.length === 0) throw new Error('no installations match update filters')
-  if (prompted) {
-    prompts.note(groups.map((group) => `${group.skill} at ${group.scope.identity} [${group.agents.join(', ')}]`).join('\n'), 'Planned updates')
-    const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
-    if (!proceed) cancel()
-  }
-  for (const group of groups) installOne(loadManifest(group.skill), group.scope, normalizeAgents(group.agents))
-  if (prompted) prompts.outro('Update complete')
-  return 0
 }
 
 async function updateWizard(args: string[]): Promise<number> {
   const parsed = parseAction(args, 'update')
   const state: Intro = { shown: false }
-  let prompted = false
   let scope: Scope
   if (parsed.scope) scope = resolveScope(parsed.scope)
   else {
     if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
-    scope = await chooseScope(state, 'Where would you like to update skills?')
-    prompted = true
+    const chosen = await chooseScope(state, 'Where would you like to update skills?')
+    if (chosen === BACK) throw new Error('unexpected back navigation')
+    scope = chosen
   }
-  if (parsed.skills.length === 0 && process.stdin.isTTY) prompted = true
-  return updateAtScope(scope, parsed.skills, parsed.agents, state, prompted)
+  const result = await updateAtScope(scope, parsed.skills, parsed.agents, parsed.instructions, state)
+  if (result === BACK) cancel()
+  return result
 }
 
-async function uninstallAtScope(scope: Scope, skills: string[], explicitAgents: string[], state: Intro, prompted: boolean): Promise<number> {
+async function uninstallAtScope(
+  scope: Scope,
+  skills: string[],
+  explicitAgents: string[],
+  state: Intro,
+): Promise<NavResult<number>> {
   const parsed: ParsedAction = { skills, scope: scope.identity, agents: explicitAgents }
-  let groups = matchingGroups(parsed, scope)
-  if (skills.length === 0) {
-    if (!process.stdin.isTTY) throw new Error('no skills selected for uninstall')
-    const available = groupsAtScope(scope)
-    if (available.length === 0) throw new Error(`no installed skills at ${scope.identity}`)
-    const selected = await exclusiveMultiselect(
-      state,
-      'Select skills to uninstall',
-      available.map((group) => ({
-        value: group.skill,
-        label: group.skill,
-        hint: group.agents.join(', '),
-      })),
-      'Uninstall all',
-    )
-    groups = available.filter((group) => selected.includes(group.skill))
-    prompted = true
+  while (true) {
+    let groups = matchingGroups(parsed, scope)
+    if (skills.length === 0) {
+      if (!process.stdin.isTTY) throw new Error('no skills selected for uninstall')
+      const selected = await chooseGroupSkills(scope, state, 'uninstall')
+      if (selected === BACK) return BACK
+      groups = selected
+    }
+    if (groups.length === 0) throw new Error('no installations match uninstall filters')
+
+    if (process.stdin.isTTY) {
+      prompts.note(
+        `${groups.map((group) => group.skill).join('\n')}\n\nKeeps Map project data and shared JL-Skills program files.`,
+        'Planned uninstall',
+      )
+      const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
+      if (!proceed) {
+        if (skills.length > 0) return BACK
+        continue
+      }
+    }
+
+    for (const group of groups) uninstallGroup(group, explicitAgents.length > 0)
+    if (process.stdin.isTTY) prompts.outro('Uninstall complete')
+    return 0
   }
-  if (groups.length === 0) throw new Error('no installations match uninstall filters')
-  if (prompted) {
-    prompts.note(
-      `${groups.map((group) => `${group.skill} at ${group.scope.identity}`).join('\n')}\n\nKeeps Map project data and shared JL-Skills program files.`,
-      'Planned uninstall',
-    )
-    const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
-    if (!proceed) cancel()
-  }
-  for (const group of groups) uninstallGroup(group)
-  if (prompted) prompts.outro('Uninstall complete')
-  return 0
 }
 
 async function uninstallWizard(args: string[]): Promise<number> {
@@ -675,16 +835,17 @@ async function uninstallWizard(args: string[]): Promise<number> {
     return uninstallEntryWizard()
   }
   const state: Intro = { shown: false }
-  let prompted = false
   let scope: Scope
   if (parsed.scope) scope = resolveScope(parsed.scope)
   else {
     if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
-    scope = await chooseScope(state, 'Where would you like to uninstall skills?')
-    prompted = true
+    const chosen = await chooseScope(state, 'Where would you like to uninstall skills?')
+    if (chosen === BACK) throw new Error('unexpected back navigation')
+    scope = chosen
   }
-  if (parsed.skills.length === 0 && process.stdin.isTTY) prompted = true
-  return uninstallAtScope(scope, parsed.skills, parsed.agents, state, prompted)
+  const result = await uninstallAtScope(scope, parsed.skills, parsed.agents, state)
+  if (result === BACK) cancel()
+  return result
 }
 
 function mapRegistryPath(): string {
@@ -702,17 +863,37 @@ function knownMapProjectPaths(): string[] {
   return [...paths].sort()
 }
 
-async function confirmMapDataRemoval(state: Intro): Promise<string[]> {
+async function chooseMapDataRemoval(state: Intro): Promise<NavResult<string[]>> {
   const paths = knownMapProjectPaths()
   if (paths.length === 0) return []
-  ensureIntro(state)
-  prompts.note(paths.map((path) => `• ${path}`).join('\n'), 'Map project data that will be deleted')
-  const confirmed = checked<boolean>(await prompts.confirm({
-    message: 'Permanently delete the Map data at these locations?',
-    initialValue: false,
-  }))
-  if (!confirmed) cancel()
-  return paths
+  while (true) {
+    ensureIntro(state)
+    const selected = checked<string[]>(await prompts.multiselect({
+      message: 'Select Map project data to delete',
+      options: paths.map((path) => ({ value: path, label: path })),
+      initialValues: paths,
+      required: false,
+    }))
+    if (selected.length === 0) return []
+    prompts.note(selected.map((path) => `• ${path}`).join('\n'), 'Selected Map project data')
+    const next = checked<string>(await prompts.select({
+      message: 'What would you like to do with this selection?',
+      options: [
+        { value: 'continue', label: 'Continue' },
+        { value: BACK, label: 'Go back' },
+        { value: CANCEL, label: 'Cancel' },
+      ],
+      initialValue: 'continue',
+    }))
+    if (next === CANCEL) cancel()
+    if (next === BACK) continue
+    const confirmed = checked<boolean>(await prompts.confirm({
+      message: 'Permanently delete the selected Map project data?',
+      initialValue: false,
+    }))
+    if (!confirmed) continue
+    return selected
+  }
 }
 
 function removeAllIntegrations(): void {
@@ -737,119 +918,181 @@ function removeProgramFiles(): void {
   rmSync(installerDataRoot(), { recursive: true, force: true })
 }
 
-async function executeMachineRemoval(removeIntegrations: boolean, removePrograms: boolean, removeMapData: boolean, state: Intro): Promise<number> {
+async function executeMachineRemoval(
+  removeIntegrations: boolean,
+  removePrograms: boolean,
+  removeMapData: boolean,
+  state: Intro,
+): Promise<NavResult<number>> {
   if (removePrograms) removeIntegrations = true
-  const projectPaths = removeMapData ? await confirmMapDataRemoval(state) : []
-  prompts.note(
-    [
-      removeIntegrations ? 'Skills added to AI tools' : null,
-      removePrograms ? 'JL-Skills program files' : null,
-      removeMapData ? `Map project data (${projectPaths.length} known project${projectPaths.length === 1 ? '' : 's'})` : null,
-    ].filter(Boolean).join('\n'),
-    'Planned removal',
-  )
-  const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
-  if (!proceed) cancel()
-  if (removeMapData) removeMapProjectData(projectPaths)
-  if (removeIntegrations) removeAllIntegrations()
-  if (removePrograms) removeProgramFiles()
-  prompts.outro('Removal complete')
-  return 0
+  const projectPaths = removeMapData ? await chooseMapDataRemoval(state) : []
+  if (projectPaths === BACK) return BACK
+
+  while (true) {
+    prompts.note(
+      [
+        removeIntegrations ? 'Skills added to my AI tools' : null,
+        removePrograms ? 'JL-Skills program files' : null,
+        removeMapData ? `Map project data (${projectPaths.length} selected)` : null,
+      ].filter(Boolean).join('\n'),
+      'Planned removal',
+    )
+    const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
+    if (!proceed) return BACK
+    if (removeMapData) removeMapProjectData(projectPaths)
+    if (removeIntegrations) removeAllIntegrations()
+    if (removePrograms) removeProgramFiles()
+    prompts.outro('Removal complete')
+    return 0
+  }
 }
 
-async function machineRemovalWizard(state: Intro = { shown: false }): Promise<number> {
-  ensureIntro(state)
-  const choice = checked<string>(await prompts.select({
-    message: 'Remove JL-Skills from this computer',
-    options: [
-      { value: 'keep-data', label: 'Remove JL-Skills but keep my Map project data' },
-      { value: 'with-data', label: 'Remove JL-Skills and my Map project data' },
-      { value: 'choose', label: 'Choose what to remove' },
-      { value: CANCEL, label: 'Cancel' },
-    ],
-    initialValue: 'keep-data',
-  }))
-  if (choice === CANCEL) cancel()
-  if (choice === 'keep-data') return executeMachineRemoval(true, true, false, state)
-  if (choice === 'with-data') return executeMachineRemoval(true, true, true, state)
-
-  const selected = await exclusiveMultiselect(
+async function chooseMachineParts(state: Intro): Promise<NavResult<{ integrations: boolean; programs: boolean; mapData: boolean }>> {
+  const mode = await chooseSpecificOrAll(
     state,
-    'Select what to remove',
-    [
+    'What would you like to remove?',
+    'Choose specific items',
+    'Remove everything',
+    true,
+  )
+  if (mode === BACK) return BACK
+  if (mode === 'all') return { integrations: true, programs: true, mapData: true }
+
+  const selected = checked<string[]>(await prompts.multiselect({
+    message: 'Select what to remove',
+    options: [
       { value: 'integrations', label: 'Skills added to my AI tools' },
       { value: 'programs', label: 'JL-Skills program files' },
       { value: 'map-data', label: 'Map project data' },
     ],
-    'Remove everything',
-  )
-  const everything = selected.length === 3
-    && ['integrations', 'programs', 'map-data'].every((value) => selected.includes(value))
-  return executeMachineRemoval(
-    everything || selected.includes('integrations'),
-    everything || selected.includes('programs'),
-    everything || selected.includes('map-data'),
-    state,
-  )
+    required: true,
+  }))
+  return {
+    integrations: selected.includes('integrations'),
+    programs: selected.includes('programs'),
+    mapData: selected.includes('map-data'),
+  }
+}
+
+async function machineRemovalWizard(state: Intro = { shown: false }): Promise<NavResult<number>> {
+  ensureIntro(state)
+  while (true) {
+    const choice = checked<string>(await prompts.select({
+      message: 'How would you like to remove JL-Skills?',
+      options: [
+        { value: 'keep-data', label: 'Remove JL-Skills but keep my Map project data' },
+        { value: 'with-data', label: 'Remove JL-Skills and my Map project data' },
+        { value: 'choose', label: 'Choose what to remove' },
+        { value: BACK, label: 'Go back' },
+        { value: CANCEL, label: 'Cancel' },
+      ],
+      initialValue: 'keep-data',
+    }))
+    if (choice === CANCEL) cancel()
+    if (choice === BACK) return BACK
+
+    let result: NavResult<number>
+    if (choice === 'keep-data') result = await executeMachineRemoval(true, true, false, state)
+    else if (choice === 'with-data') result = await executeMachineRemoval(true, true, true, state)
+    else {
+      const parts = await chooseMachineParts(state)
+      if (parts === BACK) continue
+      result = await executeMachineRemoval(parts.integrations, parts.programs, parts.mapData, state)
+    }
+    if (result === BACK) continue
+    return result
+  }
 }
 
 async function uninstallEntryWizard(): Promise<number> {
   const state: Intro = { shown: false }
   ensureIntro(state, 'jl-skill uninstall')
-  const choice = checked<string>(await prompts.select({
-    message: 'What would you like to uninstall?',
-    options: [
-      { value: 'skills', label: 'Skills from a project or user installation' },
-      { value: 'machine', label: 'JL-Skills from this computer' },
-      { value: CANCEL, label: 'Cancel' },
-    ],
-    initialValue: 'skills',
-  }))
-  if (choice === CANCEL) cancel()
-  if (choice === 'machine') return machineRemovalWizard(state)
-  const scope = await chooseScope(state, 'Where would you like to uninstall skills?')
-  return uninstallAtScope(scope, [], [], state, true)
+  while (true) {
+    const choice = checked<string>(await prompts.select({
+      message: 'What would you like to uninstall?',
+      options: [
+        { value: 'skills', label: 'Skills from a project or user installation' },
+        { value: 'machine', label: 'JL-Skills from this computer' },
+        { value: CANCEL, label: 'Cancel' },
+      ],
+      initialValue: 'skills',
+    }))
+    if (choice === CANCEL) cancel()
+    if (choice === 'machine') {
+      const result = await machineRemovalWizard(state)
+      if (result === BACK) continue
+      return result
+    }
+
+    const scope = await chooseScope(state, 'Where would you like to uninstall skills?', true)
+    if (scope === BACK) continue
+    const result = await uninstallAtScope(scope, [], [], state)
+    if (result === BACK) continue
+    return result
+  }
+}
+
+async function manageScopeWizard(scope: Scope, state: Intro): Promise<NavResult<number>> {
+  while (true) {
+    const installed = groupsAtScope(scope)
+    if (installed.length === 0) return installAtScope(scope, [], [], undefined, state, true, true)
+
+    prompts.note(installedSummary(installed), `Installed at ${scope.identity}`)
+    const action = checked<string>(await prompts.select({
+      message: 'JL-Skills found the installations shown above. What would you like to do?',
+      options: [
+        { value: 'install', label: 'Install new skills' },
+        { value: 'update', label: 'Update installed skills' },
+        { value: 'uninstall', label: 'Uninstall installed skills' },
+        { value: BACK, label: 'Go back' },
+        { value: CANCEL, label: 'Cancel' },
+      ],
+      initialValue: 'install',
+    }))
+    if (action === CANCEL) cancel()
+    if (action === BACK) return BACK
+
+    const result = action === 'install'
+      ? await installAtScope(scope, [], [], undefined, state, true, true)
+      : action === 'update'
+        ? await updateAtScope(scope, [], [], undefined, state)
+        : await uninstallAtScope(scope, [], [], state)
+    if (result === BACK) continue
+    return result
+  }
 }
 
 async function bareWizard(): Promise<number> {
   if (!process.stdin.isTTY) throw new Error('no command supplied')
   const state: Intro = { shown: false }
   ensureIntro(state)
-  const choice = checked<string>(await prompts.select({
-    message: 'What would you like to do?',
-    options: [
-      { value: 'manage', label: 'Manage skills' },
-      { value: 'remove', label: 'Remove JL-Skills from this computer' },
-      { value: CANCEL, label: 'Cancel' },
-    ],
-    initialValue: 'manage',
-  }))
-  if (choice === CANCEL) cancel()
-  if (choice === 'remove') return machineRemovalWizard(state)
+  while (true) {
+    const choice = checked<string>(await prompts.select({
+      message: 'What would you like to do?',
+      options: [
+        { value: 'manage', label: 'Manage skills' },
+        { value: 'remove', label: 'Remove JL-Skills from this computer' },
+        { value: CANCEL, label: 'Cancel' },
+      ],
+      initialValue: 'manage',
+    }))
+    if (choice === CANCEL) cancel()
+    if (choice === 'remove') {
+      const result = await machineRemovalWizard(state)
+      if (result === BACK) continue
+      return result
+    }
 
-  const scope = await chooseScope(state)
-  const installed = groupsAtScope(scope)
-  if (installed.length === 0) return installAtScope(scope, [], [], state, true)
-
-  prompts.note(installedSummary(installed), `Installed at ${scope.identity}`)
-  const action = checked<string>(await prompts.select({
-    message: 'What would you like to do?',
-    options: [
-      { value: 'install', label: 'Install new skills' },
-      { value: 'update', label: 'Update installed skills' },
-      { value: 'uninstall', label: 'Uninstall installed skills' },
-      { value: CANCEL, label: 'Cancel' },
-    ],
-    initialValue: 'install',
-  }))
-  if (action === CANCEL) cancel()
-  if (action === 'install') return installAtScope(scope, [], [], state, true)
-  if (action === 'update') return updateAtScope(scope, [], [], state, true)
-  return uninstallAtScope(scope, [], [], state, true)
+    const scope = await chooseScope(state, 'Where would you like to manage skills?', true)
+    if (scope === BACK) continue
+    const result = await manageScopeWizard(scope, state)
+    if (result === BACK) continue
+    return result
+  }
 }
 
 function printHelp(): void {
-  console.log(`jl-skill\n\nUsage:\n  jl-skill install [skills...] [--scope user|cwd|PATH] [--agent AGENT]...\n  jl-skill update [skills...] [--scope user|cwd|PATH] [--agent AGENT]...\n  jl-skill uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...\n\nSkill-first invocations continue to mean install. Interactive prompts use @clack/prompts ${PROMPTS_VERSION}.\n`)
+  console.log(`jl-skill\n\nUsage:\n  jl-skill install [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jl-skill update [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jl-skill uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...\n\nSkill-first invocations continue to mean install. Interactive prompts use @clack/prompts ${PROMPTS_VERSION}.\n`)
 }
 
 async function main(): Promise<number> {
@@ -859,7 +1102,7 @@ async function main(): Promise<number> {
     console.log(`jl-skill ${VERSION}`)
     return 0
   }
-  if (args.some((arg) => arg === '--help' || arg === '-h') || args[0] === 'help') {
+  if (args.some((arg: string) => arg === '--help' || arg === '-h') || args[0] === 'help') {
     printHelp()
     return 0
   }
