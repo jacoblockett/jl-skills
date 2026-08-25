@@ -46,7 +46,7 @@ if (suppliedMap) {
 
 await import('./generate-catalog')
 
-const output = join(out, 'jl-skill.exe')
+const output = join(out, 'jl-skills.exe')
 rmSync(output, { force: true })
 const installerBuild = Bun.spawnSync([
   process.execPath,
