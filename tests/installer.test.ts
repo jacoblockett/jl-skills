@@ -205,7 +205,7 @@ describe('jl-skills installer scope regressions', () => {
     expect(text).toContain('KEEP_THIS=yes')
     expect(occurrences(text, begin)).toBe(1)
     expect(occurrences(text, end)).toBe(1)
-    expect(text).toContain('Managed by jl-skill')
+    expect(text).toContain('Managed by jl-skills')
     expect(text).toContain(' get intents')
     expect(text).toContain(' get questions')
     expect(text).toContain(' show <id>')
@@ -230,7 +230,7 @@ describe('jl-skills installer scope regressions', () => {
     expect(text).toContain('USER SUFFIX')
     expect(occurrences(text, begin)).toBe(1)
     expect(occurrences(text, end)).toBe(1)
-    expect(occurrences(text, 'Managed by jl-skill')).toBe(1)
+    expect(occurrences(text, 'Managed by jl-skills')).toBe(1)
     expect(occurrences(text, ' get intents')).toBe(1)
   })
 
