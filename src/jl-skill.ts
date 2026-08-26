@@ -23,6 +23,7 @@ const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
 const CANCEL = '__jl_cancel__'
 const BACK = '__jl_back__'
+const HOME = '__jl_home__'
 const ALL = '__jl_all__'
 
 type Manifest = {
@@ -65,7 +66,8 @@ type ParsedAction = { skills: string[]; scope?: string; agents: string[]; instru
 type InstallGroup = { key: string; skill: string; scope: Scope; receipts: Receipt[] }
 type Intro = { shown: boolean; selections?: Map<string, string[]> }
 type NavResult<T> = T | typeof BACK
-type ChoiceItem = { value: string; label: string; disabled?: boolean }
+type UpdateResult = NavResult<number> | typeof HOME
+type ChoiceItem = { value: string; label: string; disabled?: boolean; disabledSuffix?: string }
 
 type MapProjectRegistry = {
   projects?: Array<{ projectId?: string; path?: string }>
@@ -497,13 +499,12 @@ function installedVersions(group: InstallGroup): string[] {
 
 function updateStatus(group: InstallGroup): string {
   const available = loadManifest(group.skill).version
-  const installed = installedVersions(group)
-  if (installed.length === 1 && installed[0] === available) return 'up to date'
-  return `${installed.join(' / ')} -> ${available}`
+  return `${installedVersions(group).join(' / ')} → ${available}`
 }
 
-function installedSummary(groups: InstallGroup[]): string {
-  return groups.map((group) => `${displaySkillName(group.skill)} ${installedVersions(group).join(' / ')}`).join('\n')
+function updateAvailable(group: InstallGroup): boolean {
+  const available = loadManifest(group.skill).version
+  return installedVersions(group).some((version) => version !== available)
 }
 
 function displaySkillName(name: string): string {
@@ -537,7 +538,9 @@ function selectionKey(
   allowAll: boolean,
   allowBack: boolean,
 ): string {
-  const shape = items.map((item) => `${item.value}:${item.disabled ? 'disabled' : 'enabled'}`).join('\u0000')
+  const shape = items
+    .map((item) => `${item.value}:${item.disabled ? 'disabled' : 'enabled'}:${item.disabledSuffix ?? ''}`)
+    .join('\u0000')
   return `${message}\u0000${shape}\u0000${allowAll ? 'all' : 'no-all'}\u0000${allowBack ? 'back' : 'no-back'}`
 }
 
@@ -606,12 +609,16 @@ async function chooseScope(
   if (choice === BACK) return BACK
   if (choice !== 'custom') return resolveScope(choice)
 
-  const path = checked<string>(await prompts.text({
-    message: 'Custom path',
-    placeholder: process.cwd(),
-    validate: (value: string) => value.trim() ? undefined : 'Path is required',
-  })).trim()
-  return resolveScope(path)
+  while (true) {
+    const rawPath = checked<string | undefined>(await prompts.text({
+      message: 'Custom path',
+      placeholder: process.cwd(),
+      validate: (value: string | undefined) => value?.trim() ? undefined : 'Please provide a path.',
+    }))
+    const path = rawPath?.trim()
+    if (!path) continue
+    return resolveScope(path)
+  }
 }
 
 async function chooseInstallSkills(
@@ -625,10 +632,9 @@ async function chooseInstallSkills(
     'Select skills to install',
     catalogManifests().map((item) => ({
       value: item.name,
-      label: installed.has(item.name)
-        ? `${displaySkillName(item.name)} — already installed`
-        : displaySkillName(item.name),
+      label: displaySkillName(item.name),
       disabled: installed.has(item.name),
+      disabledSuffix: installed.has(item.name) ? ' (installed)' : undefined,
     })),
     { allowAll: true, allowBack },
   )
@@ -711,24 +717,20 @@ async function chooseInstructionInjection(
   return choice === 'yes'
 }
 
-async function chooseGroupSkills(
+async function chooseUninstallSkills(
   scope: Scope,
   state: Intro,
-  action: 'update' | 'uninstall',
 ): Promise<NavResult<InstallGroup[]>> {
   const available = groupsAtScope(scope)
-  if (available.length === 0) throw new Error(`no installed skills at ${scope.identity}`)
-  const verb = action === 'update' ? 'update' : 'uninstall'
+  if (available.length === 0) {
+    prompts.log.warn('No skills were detected. Choose a different scope or path.')
+    return BACK
+  }
 
   const selected = await chooseMany(
     state,
-    `Select skills to ${verb}`,
-    available.map((group) => ({
-      value: group.skill,
-      label: action === 'update'
-        ? `${displaySkillName(group.skill)} — ${updateStatus(group)}`
-        : displaySkillName(group.skill),
-    })),
+    'Select skills to uninstall',
+    available.map((group) => ({ value: group.skill, label: displaySkillName(group.skill) })),
     { allowAll: true, allowBack: true },
   )
   if (selected === BACK) return BACK
@@ -894,15 +896,37 @@ async function updateAtScope(
   explicitAgents: string[],
   instructionOverride: boolean | undefined,
   state: Intro,
-): Promise<NavResult<number>> {
+): Promise<UpdateResult> {
   const parsed: ParsedAction = { skills, scope: scope.identity, agents: explicitAgents, instructions: instructionOverride }
   while (true) {
     let groups = matchingGroups(parsed, scope)
     if (skills.length === 0) {
       if (!process.stdin.isTTY) throw new Error('no skills selected for update')
-      const selected = await chooseGroupSkills(scope, state, 'update')
+      const installed = groupsAtScope(scope)
+      if (installed.length === 0) {
+        prompts.log.warn('No skills were detected. Choose a different scope or path.')
+        return BACK
+      }
+
+      prompts.log.step('Checking for updates...')
+      const available = installed.filter(updateAvailable)
+      if (available.length === 0) {
+        prompts.log.warn('No updates found.')
+        return HOME
+      }
+
+      const skillWidth = Math.max(...available.map((group) => displaySkillName(group.skill).length))
+      const selected = await chooseMany(
+        state,
+        'The following skill updates were found. Which would you like to install?',
+        available.map((group) => ({
+          value: group.skill,
+          label: `${displaySkillName(group.skill).padEnd(skillWidth)}  ${updateStatus(group)}`,
+        })),
+        { allowAll: true, allowBack: true },
+      )
       if (selected === BACK) return BACK
-      groups = selected
+      groups = available.filter((group) => selected.includes(group.skill))
     }
     if (groups.length === 0) throw new Error('no installations match update filters')
 
@@ -936,6 +960,7 @@ async function updateWizard(args: string[]): Promise<number> {
     const scope = resolveScope(parsed.scope)
     const result = await updateAtScope(scope, parsed.skills, parsed.agents, parsed.instructions, state)
     if (result === BACK) cancel()
+    if (result === HOME) return 0
     return result
   }
 
@@ -945,6 +970,7 @@ async function updateWizard(args: string[]): Promise<number> {
     if (chosenScope === BACK) cancel()
     const result = await updateAtScope(chosenScope, parsed.skills, parsed.agents, parsed.instructions, state)
     if (result === BACK) continue
+    if (result === HOME) return 0
     return result
   }
 }
@@ -960,7 +986,7 @@ async function uninstallAtScope(
     let groups = matchingGroups(parsed, scope)
     if (skills.length === 0) {
       if (!process.stdin.isTTY) throw new Error('no skills selected for uninstall')
-      const selected = await chooseGroupSkills(scope, state, 'uninstall')
+      const selected = await chooseUninstallSkills(scope, state)
       if (selected === BACK) return BACK
       groups = selected
     }
@@ -1273,17 +1299,13 @@ async function bareWizard(): Promise<number> {
         continue
       }
 
-      prompts.note(
-        installed.length > 0 ? installedSummary(installed) : 'None detected.',
-        'Installed at selected path',
-      )
-
       const result = choice === 'install'
         ? await installAtScope(scope, [], [], undefined, state, true, true)
         : choice === 'update'
           ? await updateAtScope(scope, [], [], undefined, state)
           : await uninstallAtScope(scope, [], [], state)
 
+      if (result === HOME) break
       if (result === BACK) continue
       return result
     }
