@@ -40,240 +40,153 @@ fact      established contextual information
 
 There are no constraint/criterion nodes and no generic `related_to` edge.
 
-## Before changing graph state
+Questions do not store answers. A current non-abandoned decision attached to a question is its answer.
 
-Before mutating a Map, inspect enough current state to avoid duplicating or contradicting existing nodes. At minimum, use the relevant read command for the thing you are about to change. Prefer targeted reads over dumping the whole graph.
+## Discovery controls
 
-Common reads:
+A Map stores:
 
-```bash
-map get intents
-map get questions
-map get decisions
-map show <id>
-map context <id>
-map search "<query>"
-map status
-map validate
+```text
+depth:  mvp | thorough
+stance: normal | adversarial
 ```
 
-Use `map --help` and `map <command> --help` when the exact syntax is uncertain.
+An intent may store fields with the same names. If present, they override the Map values; if absent, the intent inherits them.
 
-## Intent workflow
+`explored=true` means only that an LLM has examined/reasoned about the intent at least once. Never infer it from question count or answers.
 
-Create an intent when the user has a distinct thing to achieve, define, resolve, decide, or develop:
+`closed=true` means discovery is sufficiently complete for the effective depth/stance and runtime closure invariants hold. Adding new unresolved structure may reopen a closed intent without changing `explored`.
+
+After actually examining an intent:
 
 ```bash
-map create intent "Choose a deployment model"
+map set <intent> explored true
 ```
 
-Add context only when the short intent text is insufficient for later recovery:
+Close only when the intent is actually ready:
 
 ```bash
-map create intent "Choose a deployment model" --context "For the production API, optimizing for low operations burden."
+map set <intent> close true
 ```
 
-Intent discovery controls:
+## Creation
 
-```bash
-map set depth <mvp|thorough>
-map set stance <normal|adversarial>
-map set <intent-id> depth <mvp|thorough|null>
-map set <intent-id> stance <normal|adversarial|null>
+```text
+map create intent <intent> [--context CONTEXT] [--depth DEPTH] [--stance STANCE]
+map create question <question> --intent <intent-id> [--reason REASON]
+map create decision <decision> [--question ID] [--source user|assistant]
+    [--assistant-reasoning REASONING] [--notes NOTES] [--soft]
+map create idea <idea>
+map create fact <fact> [--made-by user|assistant]
 ```
 
-`mvp` discovers the material questions needed for the smallest coherent useful result. `thorough` also discovers consequential adjacent questions. `adversarial` actively tests assumptions, contradictions, feasibility, and failure conditions.
+Assistant decisions require `--assistant-reasoning`. User decisions must not carry assistant reasoning.
 
-After actually examining an intent, mark it explored:
-
-```bash
-map set <intent-id> explored true
-```
-
-`explored` means an LLM has examined the intent. It does not mean the intent is complete.
-
-Close an intent only when its effective discovery requirement is satisfied:
+`--soft` is a usable but deliberately revisit-worthy decision. Soft decisions answer questions normally but prevent closing affected intents until hardened:
 
 ```bash
-map set <intent-id> close true
-```
-
-Closure rejects while material current questions remain unanswered, dependencies are not satisfied, child intents remain open, or current decisions are soft.
-
-## Questions and decisions
-
-Create questions under the intent they clarify:
-
-```bash
-map create question "Which database fits the workload?" --intent <intent-id>
-```
-
-Record a reason when it will not be obvious later:
-
-```bash
-map create question "Which database fits the workload?" --intent <intent-id> --reason "The write pattern determines whether the current design is viable."
-```
-
-Mark a question asked only when it has actually been presented to the user:
-
-```bash
-map set <question-id> asked true
-```
-
-Create the answer as a decision:
-
-```bash
-map create decision "Use PostgreSQL" --question <question-id>
-```
-
-Assistant-made decisions require explicit reasoning:
-
-```bash
-map create decision "Use PostgreSQL" --question <question-id> --source assistant --assistant-reasoning "It satisfies the stated consistency and operational constraints."
-```
-
-Use `--soft` for a provisional answer that should remain usable but block intent closure:
-
-```bash
-map create decision "Probably PostgreSQL" --question <question-id> --soft
-map set <decision-id> soft false
-```
-
-## Facts and ideas
-
-Use facts for established contextual information:
-
-```bash
-map create fact "The service must run on Windows" --made-by user
-```
-
-Use ideas for non-binding possibilities worth preserving without turning them into active work:
-
-```bash
-map create idea "Consider a local-first mode later"
-```
-
-Relate contextual facts/ideas to the relevant node when needed:
-
-```bash
-map relate <node-id> <fact-id>
-map relate <node-id> <idea-id>
+map set <decision> soft false
 ```
 
 ## Relationships
 
-`map relate` infers relation semantics from endpoint kinds.
-
-Containment/context:
-
-```bash
-map relate <intent-id> <question-id>
-map relate <intent-id> <decision-id>
-map relate <parent-intent-id> <child-intent-id>
+```text
+map relate <source> <target...> [--dependent]
+map unrelate <source> <target...> [--dependent]
 ```
 
-Dependencies use `--dependent` and read left-to-right as “source depends on target”:
+Do not invent relation names. Legal shapes are inferred:
 
-```bash
-map relate <dependent-intent> <prerequisite-intent> --dependent
-map relate <dependent-question> <prerequisite-question> --dependent
+```text
+intent   -> question             attachment
+question -> decision             answer
+intent   -> decision             direct decision
+intent   -> intent               sub-intent
+intent   -> intent --dependent   intent dependency
+question -> question --dependent question dependency
+any      -> fact                 fact context
+any      -> idea                 idea context
 ```
 
-Remove an inferred relationship with the same endpoint shape:
+Dependency direction is `SOURCE depends on TARGET`. Intent and question dependency graphs are acyclic.
 
-```bash
-map unrelate <source-id> <target-id>
-map unrelate <source-id> <target-id> --dependent
+## Mutation and history
+
+Small state/config changes use:
+
+```text
+map set depth <mvp|thorough>
+map set stance <normal|adversarial>
+map set <id> <property> <value>
 ```
 
-## Replacement, abandonment, deletion
+Do not use `set` as a generic content editor.
 
-Replace a current node while preserving history:
+Replace semantic content through explicit nodes:
 
 ```bash
-map replace <old-id> <new-id> --reason "Requirements changed"
+map replace <old> <new> --reason REASON
 ```
 
-Use `--in-place` when the old node itself should be removed while replacement history remains:
+Normal replacement retains history. `--in-place` is destructive: the new node takes the old graph position and the old node is physically removed.
+
+Abandonment retains the node but removes it from normal current work:
 
 ```bash
-map replace <old-id> <new-id> --reason "Corrected wording" --in-place
+map abandon <id> --by user|assistant --reason REASON
 ```
 
-Abandon material that is deliberately no longer part of the current graph:
+Physical deletion is stronger:
 
 ```bash
-map abandon <id> --by user --reason "No longer relevant"
+map delete <id...> [--force]
 ```
 
-Abandonment preserves the node in history and keeps it from becoming current accidentally.
+If deletion affects graph relationships, first surface the impact to the user; only retry with `--force` after confirmation. Forced delete removes selected nodes and incident edges only. Do not invent cascades.
 
-Physical deletion is guarded. Prefer abandonment/replacement when semantic history matters:
+## Reading
 
-```bash
-map delete <id>
-map delete <id> --force
+Normal retrieval is current-state oriented and excludes abandoned/history unless requested.
+
+```text
+map get intents ...
+map get questions ...
+map get decisions ...
+map get ideas ...
+map get facts ...
+map show <id...>
+map context <id>
+map search <query> [--limit N] [--include-history]
+map history <id> [--limit N]
+map validate
 ```
 
-## Recovery session capsule
+`map get questions` returns unanswered dependency-ready questions by default. Use `--include-blocked` when blocked questions are also needed. Use `--answered` to include answered questions.
 
-Map can persist a compact conversational recovery capsule independently of semantic graph state.
+`map context <id>` is the preferred compact local read when an agent needs the requested node plus its material current neighborhood.
 
-Start or inspect it with:
+`map validate` is read-only and non-repairing. Treat reported invariant errors as a blocker to further semantic mutation until understood.
 
-```bash
+## Recovery invariant
+
+Session state is conversational recovery, not semantic truth:
+
+```text
 map session init
-map session summary
-map session pending
+map session summary [new_summary]
+map session exchange [-u MESSAGE | -a MESSAGE] [--depth N]
+map session pending [new_pending | --clear]
+map session end [--force]
 ```
 
-Record exchanges explicitly:
+For substantive Map conversation:
 
-```bash
-map session exchange -u "<user message>"
-map session exchange -a "<assistant message>"
+```text
+A. Persist recovery state first.
+B. Apply and verify semantic mutations.
+C. Clear pending only after B is durable.
 ```
 
-Replace the rolling summary when needed:
+On explicit Map invocation, if a recovery session already exists, reconcile it before starting unrelated new Map work. Never blindly replay pending work; inspect the authoritative graph first.
 
-```bash
-map session summary "<new summary>"
-```
-
-Set or clear a pending continuation:
-
-```bash
-map session pending "<what should happen next>"
-map session pending --clear
-```
-
-End the capsule when no longer needed:
-
-```bash
-map session end
-```
-
-Use `--force` only when deliberately discarding non-empty pending recovery state.
-
-## Retrieval discipline
-
-Prefer the smallest read that answers the immediate question.
-
-- `get` for filtered/current sets.
-- `show` for specific nodes.
-- `context` for a node plus relevant surroundings.
-- `search` for text/keyword retrieval.
-- `history` when replacement/abandonment history matters.
-- `status` for Map-wide state.
-- `validate` when integrity is in question or before/after risky changes.
-
-Normal reads exclude abandoned/historical material unless the command explicitly requests it.
-
-## Safety
-
-- Never edit `.map/db` directly.
-- Never infer a missing answer from conversational memory when Map has a current explicit decision.
-- Never silently overwrite or recreate an existing `.map` with `init`.
-- Never use `--force` merely to bypass an invariant you have not understood.
-- Never create speculative graph structure just because a relationship is technically legal.
-- Keep intent/question/decision payloads concise; use context/reason/notes fields for supporting detail when their documented semantics fit.
+Summary is capped at 2200 Unicode characters. Write it in concise Classical Chinese; preserve material names, identifiers, technical terms, decisions, uncertainty, rationale, jargon, quotations, user-specific wording, and anything that cannot be safely translated without semantic loss. Recent exchange entries are exact raw messages.
