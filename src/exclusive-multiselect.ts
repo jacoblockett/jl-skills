@@ -6,6 +6,7 @@ export type ExclusiveOption<Value> = {
   value: Value
   label: string
   disabled?: boolean
+  disabledSuffix?: string
   exclusive?: boolean
 }
 
@@ -131,7 +132,8 @@ function optionText<Value>(
 ): string {
   const label = option.label
   if (state === 'disabled') {
-    return `${styleText('gray', S_CHECKBOX_INACTIVE)} ${styleText(['strikethrough', 'gray'], label)}`
+    const suffix = option.disabledSuffix ? styleText('gray', option.disabledSuffix) : ''
+    return `${styleText('gray', S_CHECKBOX_INACTIVE)} ${styleText(['strikethrough', 'gray'], label)}${suffix}`
   }
   if (state === 'active') return `${styleText('cyan', S_CHECKBOX_ACTIVE)} ${label}`
   if (state === 'selected') return `${styleText('green', S_CHECKBOX_SELECTED)} ${styleText('dim', label)}`
