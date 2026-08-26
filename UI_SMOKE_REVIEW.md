@@ -65,6 +65,9 @@ Required behavior:
 - Back from instruction choice returns to harnesses.
 - `No` at final confirmation returns to the immediately preceding instruction choice.
 - Multiselect screens must include their appropriate `All of the above`, `Go back`, and `Cancel & Exit` choices rather than trapping the user in the selection screen.
+- When a user returns to a previously submitted multiselect during the same wizard invocation, restore the selections they previously made rather than presenting that question as blank/default again.
+- Retention is wizard-local; a new `jl-skills.exe` invocation starts clean.
+- Previously remembered values must be filtered against the current selectable option set so disabled/stale choices cannot be resurrected.
 - Normal wizard mutation still happens only after the final confirmed plan.
 
 ## 5. Withdrawn update-harness idea
@@ -88,7 +91,7 @@ Required version behavior:
 - If no update is available, communicate `up to date` without using Clack option hints.
 - If an update is available, show a concise transition such as `0.2.0 -> 0.3.0` without using option hints.
 - An up-to-date skill remains selectable so the user can intentionally reapply/repair owned resources.
-- Update selection begins with nothing selected.
+- Update selection begins with nothing selected on first entry; if revisited in the same wizard, restore the prior submitted selection.
 
 ## 7. Instruction injection must be optional and understandable
 
@@ -99,7 +102,9 @@ Required direction:
 - Add an explicit interactive choice controlling managed instruction injection.
 - Users who want skill files/runtime support but want their instruction files untouched must be able to decline it.
 - Do not use jargon such as `AI instruction files` without explaining the concrete file and its purpose.
-- Put the explanation in the actual question text so it cannot be visually separated and easily missed in a preceding note block.
+- Keep the clean explanatory note block above the question.
+- The following question must explicitly point the user to the information above with short, unobtrusive hint-like text in the question itself so the note is not easy to miss.
+- Do not stuff the full explanation into the question body; preserve the compact Clack visual shape.
 - Name the applicable files dynamically (`AGENTS.md`, `CLAUDE.md`, or both).
 - Explain in plain language that these files contain general instructions the selected AI tool reads automatically.
 - Answer choices should be plain `Yes`, `No`, `Go back`, and `Cancel & Exit` with no recommendation hints.
@@ -107,6 +112,8 @@ Required direction:
 - Receipts record actual instruction ownership.
 - Update preserves the user's existing choice unless explicitly changed.
 - Uninstall removes a managed block only when that installation owns one.
+
+Implementation status: explanatory note restored; the following question includes a short dimmed pointer to the information above.
 
 ## 8. BLOCKING: Map skill/sub-agent architecture may have regressed
 
@@ -162,9 +169,10 @@ This supersedes all earlier notes that requested or tolerated Clack option hints
 
 Required direction:
 
-- Do not use Clack `hint` text anywhere in the installer UI unless the user explicitly reintroduces a specific hint later.
+- Do not use Clack option `hint` text anywhere in the installer UI unless the user explicitly reintroduces a specific option hint later.
 - This includes detection hints, recommendation hints, version hints, and generic descriptive hints.
-- Information that is actually necessary should be expressed in the main label, prompt wording, summary, or other deliberate UI copy instead of dim parenthetical hint clutter.
+- Information that is actually necessary should be expressed in the main label, prompt wording, summary, or other deliberate UI copy instead of dim parenthetical option-hint clutter.
+- Short dimmed explanatory text that is part of a question's message is not an option hint and is allowed when it points to important context immediately above.
 
 Implementation status: installer source contains no `hint:` options; regression coverage guards this.
 
@@ -232,6 +240,7 @@ Preferred behavior:
 - For the broad delete-data action, registered locations may begin selected so the broad intent is represented while still allowing individual deselection.
 - Include live-exclusive `All of the above`, `Go back`, and `Cancel & Exit` controls.
 - Keep an explicit destructive confirmation after project selection.
+- Revisited project-selection screens restore the prior submitted subset within the same wizard instead of resetting to all projects.
 - Do not scan drives for unregistered `.map` directories.
 
 ## 15. Map duplicate/recovery prompts must not use an ad hoc TUI
@@ -270,14 +279,16 @@ Required direction:
 Before PR #8 is considered UI-complete, manually recheck at least:
 
 - executable/product is consistently `jl-skills` / `jl-skills.exe`;
-- install skill picker begins empty;
-- harness picker begins empty and shows all supported harnesses with no detection hints;
+- install skill picker begins empty on first entry;
+- harness picker begins empty on first entry and shows all supported harnesses with no detection hints;
 - no installer option hints are present;
 - `All of the above` is live-exclusive with individual choices;
 - `Go back` and `Cancel & Exit` are live-exclusive with every other choice;
 - back navigation returns exactly one question at a time;
+- revisiting a previously submitted multiselect restores its prior choices;
 - `No` on confirmation returns exactly one question;
-- instruction-file explanation is part of the actual question text;
+- instruction-file explanation remains in a clean note block;
+- instruction question clearly points to the information above without duplicating the whole explanation;
 - instruction injection can be declined;
 - installation summary uses natural action-oriented prose;
 - installed-scope state is difficult to miss;
