@@ -714,7 +714,11 @@ async function chooseInstallSkills(
   stepId: string,
   allowBack = true,
 ): Promise<NavResult<string[]>> {
-  const installed = new Set(discoverInstallations(scope).map((group) => group.skill))
+  const installed = new Set(
+    discoverInstallations(scope)
+      .filter((group) => agentCatalog.every((agent) => group.targets.some((target) => target.agent === agent.id)))
+      .map((group) => group.skill),
+  )
   return chooseMany(
     state,
     stepId,
@@ -965,7 +969,16 @@ async function installWizard(args: string[]): Promise<number> {
     if (parsed.skills.length === 0 && !process.stdin.isTTY) throw new Error('no skills selected')
     const askInstructions = parsed.skills.length === 0 || parsed.agents.length === 0
     const instructionMode = parsed.instructions ?? (askInstructions ? undefined : true)
-    const result = await installAtScope(scope, parsed.skills, parsed.agents, instructionMode, state, 'install', false, askInstructions)
+    const result = await installAtScope(
+      scope,
+      parsed.skills,
+      parsed.agents,
+      instructionMode,
+      state,
+      `install.${scope.kind}:${scope.identity}`,
+      false,
+      askInstructions,
+    )
     if (result === BACK_SIGNAL) cancel()
     return result
   }
@@ -974,7 +987,16 @@ async function installWizard(args: string[]): Promise<number> {
   while (true) {
     const scope = await chooseScope(state, 'install.scope', 'Where would you like to install skills?', false)
     if (scope === BACK_SIGNAL) cancel()
-    const result = await installAtScope(scope, parsed.skills, parsed.agents, parsed.instructions, state, 'install', true, true)
+    const result = await installAtScope(
+      scope,
+      parsed.skills,
+      parsed.agents,
+      parsed.instructions,
+      state,
+      `install.${scope.kind}:${scope.identity}`,
+      true,
+      true,
+    )
     if (result === BACK_SIGNAL) continue
     return result
   }
@@ -1051,7 +1073,14 @@ async function updateWizard(args: string[]): Promise<number> {
 
   if (parsed.scope) {
     const scope = resolveScope(parsed.scope)
-    const result = await updateAtScope(scope, parsed.skills, parsed.agents, parsed.instructions, state, 'update')
+    const result = await updateAtScope(
+      scope,
+      parsed.skills,
+      parsed.agents,
+      parsed.instructions,
+      state,
+      `update.${scope.kind}:${scope.identity}`,
+    )
     if (result === BACK_SIGNAL) cancel()
     if (result === HOME) return 0
     return result
@@ -1061,7 +1090,14 @@ async function updateWizard(args: string[]): Promise<number> {
   while (true) {
     const scope = await chooseScope(state, 'update.scope', 'Where would you like to update skills?', false)
     if (scope === BACK_SIGNAL) cancel()
-    const result = await updateAtScope(scope, parsed.skills, parsed.agents, parsed.instructions, state, 'update')
+    const result = await updateAtScope(
+      scope,
+      parsed.skills,
+      parsed.agents,
+      parsed.instructions,
+      state,
+      `update.${scope.kind}:${scope.identity}`,
+    )
     if (result === BACK_SIGNAL) continue
     if (result === HOME) return 0
     return result
@@ -1128,7 +1164,13 @@ async function uninstallWizard(args: string[]): Promise<number> {
 
   if (parsed.scope) {
     const scope = resolveScope(parsed.scope)
-    const result = await uninstallAtScope(scope, parsed.skills, parsed.agents, state, 'uninstall')
+    const result = await uninstallAtScope(
+      scope,
+      parsed.skills,
+      parsed.agents,
+      state,
+      `uninstall.${scope.kind}:${scope.identity}`,
+    )
     if (result === BACK_SIGNAL) cancel()
     return result
   }
@@ -1137,7 +1179,13 @@ async function uninstallWizard(args: string[]): Promise<number> {
   while (true) {
     const scope = await chooseScope(state, 'uninstall.scope', 'Where would you like to uninstall skills?', false)
     if (scope === BACK_SIGNAL) cancel()
-    const result = await uninstallAtScope(scope, parsed.skills, parsed.agents, state, 'uninstall')
+    const result = await uninstallAtScope(
+      scope,
+      parsed.skills,
+      parsed.agents,
+      state,
+      `uninstall.${scope.kind}:${scope.identity}`,
+    )
     if (result === BACK_SIGNAL) continue
     return result
   }
@@ -1193,7 +1241,7 @@ async function removeSkillGeneratedDataWizard(state: WizardState): Promise<NavRe
     while (true) {
       const selected = await chooseMany(
         state,
-        'generated-data.skills',
+        `generated-data.${scope.kind}:${scope.identity}.skills`,
         'Which skills would you like to remove generated data for?',
         available.map((group) => ({ value: group.skill, label: displaySkillName(group.skill) })),
         { allowBack: true },
@@ -1313,12 +1361,13 @@ async function bareWizard(): Promise<number> {
     while (true) {
       const scope = await chooseScope(state, `${choice}.scope`, scopeQuestion, true)
       if (scope === BACK_SIGNAL) break
+      const stepPrefix = `${choice}.${scope.kind}:${scope.identity}`
 
       const result = choice === 'install'
-        ? await installAtScope(scope, [], [], undefined, state, 'install', true, true)
+        ? await installAtScope(scope, [], [], undefined, state, stepPrefix, true, true)
         : choice === 'update'
-          ? await updateAtScope(scope, [], [], undefined, state, 'update')
-          : await uninstallAtScope(scope, [], [], state, 'uninstall')
+          ? await updateAtScope(scope, [], [], undefined, state, stepPrefix)
+          : await uninstallAtScope(scope, [], [], state, stepPrefix)
 
       if (result === HOME) break
       if (result === BACK_SIGNAL) continue
