@@ -15,5 +15,11 @@
     "schema.surql": "~/.jl-skills/map/schema.surql"
   },
   "cli_token": "JL_MAP_CLI",
-  "instruction_fragment": "AGENTS.fragment.md"
+  "instruction_fragment": "AGENTS.fragment.md",
+  "generated_data": [
+    {
+      "path": ".map",
+      "marker": "project.json"
+    }
+  ]
 }
