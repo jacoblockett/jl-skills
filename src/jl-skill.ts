@@ -365,7 +365,12 @@ function provisionRuntime(manifest: Manifest, scope: Scope): { cli: string; root
 
 type InstallTarget = { agent: string; instructions: boolean }
 
-function installTargets(manifest: Manifest, scope: Scope, targets: InstallTarget[]): void {
+function installTargets(
+  manifest: Manifest,
+  scope: Scope,
+  targets: InstallTarget[],
+  interactive = false,
+): void {
   if (scope.kind === 'project') mkdirSync(scope.root, { recursive: true })
   const runtime = provisionRuntime(manifest, scope)
   const tokenName = manifest.cli_token || 'JL_SKILL_CLI'
@@ -394,7 +399,11 @@ function installTargets(manifest: Manifest, scope: Scope, targets: InstallTarget
       runtime_root: runtime.root,
       updated_at: new Date().toISOString(),
     })
-    console.log(`Installed ${manifest.name} ${manifest.version} for ${target.agent} at ${dest}`)
+    if (interactive) {
+      prompts.log.step(`Installed ${displaySkillName(manifest.name)} ${manifest.version} for ${agentLabel(target.agent)}`)
+    } else {
+      console.log(`Installed ${manifest.name} ${manifest.version} for ${target.agent} at ${dest}`)
+    }
   }
 }
 
@@ -501,6 +510,10 @@ function displaySkillName(name: string): string {
   return name ? `${name[0].toUpperCase()}${name.slice(1)}` : name
 }
 
+function scopeDisplay(scope: Scope): string {
+  return scope.kind === 'user' ? 'User account' : scope.identity
+}
+
 function humanList(values: string[]): string {
   if (values.length <= 1) return values[0] ?? ''
   if (values.length === 2) return `${values[0]} and ${values[1]}`
@@ -575,7 +588,7 @@ async function chooseMany(
 
 async function chooseScope(
   state: Intro,
-  message = 'Where would you like to manage skills?',
+  message: string,
   allowBack = false,
 ): Promise<NavResult<Scope>> {
   ensureIntro(state)
@@ -583,7 +596,7 @@ async function chooseScope(
     message,
     options: [
       { value: 'cwd', label: 'Current directory' },
-      { value: 'user', label: 'User' },
+      { value: 'user', label: 'User account' },
       { value: 'custom', label: 'Custom path' },
       ...navOptions(allowBack),
     ],
@@ -748,7 +761,7 @@ function installationSummary(
     bulletList(skillNames),
     '',
     'Installation Location',
-    bulletList([scope.identity]),
+    bulletList([scopeDisplay(scope)]),
     '',
     'Affected AI Harnesses',
     bulletList(harnessNames),
@@ -829,7 +842,12 @@ async function installAtScope(
         }
 
         for (const skill of selectedSkills) {
-          installTargets(loadManifest(skill), scope, targetsForNewInstall(agentChoice.values, instructions))
+          installTargets(
+            loadManifest(skill),
+            scope,
+            targetsForNewInstall(agentChoice.values, instructions),
+            prompted,
+          )
         }
         if (prompted) prompts.outro('Installation complete')
         return 0
@@ -854,7 +872,7 @@ async function installWizard(args: string[]): Promise<number> {
 
   if (!process.stdin.isTTY) throw new Error('--scope is required in non-interactive mode')
   while (true) {
-    const chosenScope = await chooseScope(state, 'Where should the selected skills be installed?', false)
+    const chosenScope = await chooseScope(state, 'Where would you like to install skills?', false)
     if (chosenScope === BACK) cancel()
     const result = await installAtScope(
       chosenScope,
@@ -898,7 +916,12 @@ async function updateAtScope(
     }
 
     for (const group of groups) {
-      installTargets(loadManifest(group.skill), group.scope, targetsForUpdate(group, instructionOverride))
+      installTargets(
+        loadManifest(group.skill),
+        group.scope,
+        targetsForUpdate(group, instructionOverride),
+        process.stdin.isTTY,
+      )
     }
     if (process.stdin.isTTY) prompts.outro('Update complete')
     return 0
@@ -1234,17 +1257,26 @@ async function bareWizard(): Promise<number> {
       return result
     }
 
+    const scopeQuestion = choice === 'install'
+      ? 'Where would you like to install skills?'
+      : choice === 'update'
+        ? 'Where would you like to update skills?'
+        : 'Where would you like to uninstall skills?'
+
     while (true) {
-      const scope = await chooseScope(state, 'Where would you like to manage skills?', true)
+      const scope = await chooseScope(state, scopeQuestion, true)
       if (scope === BACK) break
 
       const installed = groupsAtScope(scope)
-      prompts.note(
-        installed.length > 0 ? installedSummary(installed) : 'No skills installed.',
-        `Installed at ${scope.identity}`,
-      )
+      if (choice !== 'install' && installed.length === 0) {
+        prompts.log.warn('No skills were detected. Choose a different scope or path.')
+        continue
+      }
 
-      if (choice !== 'install' && installed.length === 0) continue
+      prompts.note(
+        installed.length > 0 ? installedSummary(installed) : 'None detected.',
+        'Installed at selected path',
+      )
 
       const result = choice === 'install'
         ? await installAtScope(scope, [], [], undefined, state, true, true)
