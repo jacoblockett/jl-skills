@@ -111,14 +111,37 @@ function expandPath(raw: string): string {
   return value
 }
 
+function normalizedPath(path: string): string {
+  const normalized = normalize(path)
+  if (!isWindows) return normalized
+  return normalized.replace(/^([a-z]):/, (_, drive: string) => `${drive.toUpperCase()}:`)
+}
+
 function canonicalPath(raw: string): string {
   const absolute = resolve(expandPath(raw))
   if (existsSync(absolute)) {
     try {
-      return normalize(realpathSync.native(absolute))
+      return normalizedPath(realpathSync.native(absolute))
     } catch {}
   }
-  return normalize(absolute)
+
+  if (isWindows) {
+    let existing = absolute
+    const missing: string[] = []
+    while (!existsSync(existing)) {
+      const parent = dirname(existing)
+      if (parent === existing) break
+      missing.unshift(basename(existing))
+      existing = parent
+    }
+    if (existsSync(existing)) {
+      try {
+        return normalizedPath(join(realpathSync.native(existing), ...missing))
+      } catch {}
+    }
+  }
+
+  return normalizedPath(absolute)
 }
 
 function userHome(): string {
