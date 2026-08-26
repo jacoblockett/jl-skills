@@ -10,6 +10,7 @@
     "smoke": "cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map && bun run build && bun run test:installer"
   },
   "dependencies": {
+    "@clack/core": "1.4.3",
     "@clack/prompts": "1.7.0"
   }
 }
