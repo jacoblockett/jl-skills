@@ -5,6 +5,7 @@
     "": {
       "name": "jl-skills-installer",
       "dependencies": {
+        "@clack/core": "1.4.3",
         "@clack/prompts": "1.7.0",
       },
     },
