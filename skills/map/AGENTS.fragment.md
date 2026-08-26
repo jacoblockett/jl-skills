@@ -1,4 +1,4 @@
-<!-- Managed by jl-skill. Do not edit inside this block; reinstall/update replaces it. -->
+<!-- Managed by jl-skills. Do not edit inside this block; reinstall/update replaces it. -->
 ## Map
 
 If `.map/` exists, it contains durable user intent and reasoning state. Do not create or initialize `.map/` merely because these instructions are present.
