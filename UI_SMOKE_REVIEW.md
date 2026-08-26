@@ -296,3 +296,76 @@ Recommended order after this document:
 7. Repeat the manual UI branch smoke pass.
 
 Do not merge PR #8 until the review items intended for V1 are either resolved or explicitly deferred by the user.
+
+## 17. Second install-path smoke pass: superseding UX rules
+
+These notes come from the next manual pass over the basic current-directory Map installation flow. Where they conflict with earlier sections, **this section wins**.
+
+### 17.1 Remove all option hints
+
+The earlier requirement to show `detected`, `not detected on this computer`, `up to date`, `already installed`, recommendation notes, path hints, or similar Clack option hints is revoked.
+
+Required direction:
+
+- Remove every Clack option `hint` from installer UI.
+- Do not add new option hints unless the user explicitly requests a specific one later.
+- If information genuinely matters, put it in the question text, a deliberate summary, or another primary UI element rather than attaching parenthetical hint clutter to choices.
+- Detection may remain an internal implementation concern but should not be surfaced as a harness-option hint.
+
+Harness detection itself is machine/user-level rather than project-scope-level. The UI-smoke sandbox intentionally creates a fake home containing Codex state while still inheriting the host `PATH`; therefore smoke detection can come from the fake home and/or installed commands on the host. Interactive install should list all supported harnesses regardless of detection.
+
+### 17.2 True live exclusive selection is mandatory
+
+The previous section 9 fallback allowance and its `no Clack fork` constraint are revoked.
+
+Post-submit precedence is not sufficient. The visible selection state itself must never remain contradictory.
+
+Required behavior for every multiselect with special/exclusive options:
+
+```text
+select ordinary item  -> clear any exclusive option
+select All            -> clear all ordinary items and other exclusive options
+select Go back        -> clear every other selection
+select Cancel & Exit  -> clear every other selection
+select another choice -> clear Go back / Cancel & Exit / All as applicable
+```
+
+The clearing must happen immediately when Space toggles the option so the screen always represents what Enter will submit.
+
+Implementation research may consider, in order of preference:
+
+1. a small JL-Skills component built on Clack's public lower-level API while retaining Clack appearance and behavior;
+2. a narrowly maintained Clack fork/patch if public primitives cannot support the behavior cleanly;
+3. another prompt framework only if it can preserve the existing UI quality and the full required behavior without larger regressions.
+
+Do not retain the current ambiguous post-submit resolution.
+
+### 17.3 Instruction-file explanation belongs in the question
+
+The explanatory `About AGENTS.md / CLAUDE.md` note is too easy to miss because the user's eyes are drawn immediately to the following question and choices.
+
+Required direction:
+
+- Remove the separate explanatory note.
+- Put the necessary explanation directly into the question text itself, using concise language understandable to someone unfamiliar with AI instruction files.
+- Name the actual file or files that would be changed for the selected harnesses.
+- Explain that these files contain general instructions the selected AI tool reads automatically.
+- Keep the answer choices simple: `Yes`, `No`, `Go back`, `Cancel & Exit`.
+- Do not attach recommendation or explanatory hints to `Yes` or `No`.
+
+### 17.4 Installation summary needs a deliberate rewrite
+
+The current planned-installation block is visually and linguistically under-polished. Labels such as `Standing instructions: add skill guidance` are too abstract and do not clearly connect to the choice the user just made.
+
+Required direction:
+
+- Remove `Standing instructions`, `add skill guidance`, and similarly abstract internal language.
+- Present the final plan in concrete user terms: what skill is being installed, where, which AI tools will receive it, and which instruction files will or will not be changed.
+- Prefer natural, compact sentences or another intentionally designed summary over a mechanically generated key/value dump.
+- When instruction injection is enabled, name the actual instruction file(s).
+- When disabled, state plainly that those files will be left unchanged if that information is useful to the final decision.
+- The summary should visually match the polish of the surrounding Clack flow rather than looking like debugging output.
+
+### 17.5 Do not request another full UI pass until these are cohesive
+
+Avoid another partial retest that knowingly leaves the exclusive-control behavior unresolved. Complete the agreed install-path corrections as one cohesive pass, run automated smoke coverage, and then ask for another manual basic-install-path review.
