@@ -76,7 +76,7 @@ class BackSelectPrompt<Value> extends SelectPrompt<NavOption<Value>> {
   backRequested = false
 
   constructor(
-    opts: ConstructorParameters<typeof SelectPrompt<NavOption<Value>>>[0],
+    opts: any,
     allowBack: boolean,
     onCursor?: (value: Value) => void,
   ) {
@@ -137,7 +137,7 @@ export async function navSelect<Value>(opts: NavSelectOptions<Value>): Promise<V
         return `${title}${hasGuide ? `${styleText('gray', S_BAR)}  ` : ''}${selectOptionText(this.options[this.cursor], 'cancelled')}${hasGuide ? `\n${styleText('gray', S_BAR)}` : ''}`
       }
       const prefix = hasGuide ? `${styleText(this.state === 'error' ? 'yellow' : 'cyan', S_BAR)}  ` : ''
-      const lines = this.options.map((option, index) => selectOptionText(
+      const lines = this.options.map((option: NavOption<Value>, index: number) => selectOptionText(
         option,
         option.disabled ? 'disabled' : index === this.cursor ? 'active' : 'inactive',
       ))
@@ -155,7 +155,7 @@ class BackTextPrompt extends TextPrompt {
   private hadInput: boolean
 
   constructor(
-    opts: ConstructorParameters<typeof TextPrompt>[0],
+    opts: any,
     private readonly allowBack: boolean,
     onInput?: (value: string) => void,
   ) {
