@@ -15,6 +15,7 @@ import { arch, homedir, platform } from 'node:os'
 import { basename, dirname, join, normalize, resolve } from 'node:path'
 import { Buffer } from 'node:buffer'
 import { catalog } from './catalog.generated'
+import { exclusiveMultiselect, type ExclusiveOption } from './exclusive-multiselect'
 
 const VERSION = '0.5.0'
 const PROMPTS_VERSION = '1.7.0'
@@ -63,7 +64,7 @@ type ParsedAction = { skills: string[]; scope?: string; agents: string[]; instru
 type InstallGroup = { key: string; skill: string; scope: Scope; receipts: Receipt[] }
 type Intro = { shown: boolean }
 type NavResult<T> = T | typeof BACK
-type ChoiceItem = { value: string; label: string; hint?: string; disabled?: boolean }
+type ChoiceItem = { value: string; label: string; disabled?: boolean }
 
 type MapProjectRegistry = {
   projects?: Array<{ projectId?: string; path?: string }>
@@ -181,7 +182,7 @@ function detectedAgents(): AgentInfo[] {
   return agentCatalog.map((agent) => ({ ...agent, detected: harnessDetected(agent) }))
 }
 
-function agentLabel(id: string, agents = detectedAgents()): string {
+function agentLabel(id: string, agents: AgentSpec[] = agentCatalog): string {
   return agents.find((item) => item.id === id)?.label ?? id
 }
 
@@ -484,7 +485,7 @@ function installedVersions(group: InstallGroup): string[] {
   return [...new Set(group.receipts.map((receipt) => receipt.version))].sort()
 }
 
-function updateHint(group: InstallGroup): string {
+function updateStatus(group: InstallGroup): string {
   const available = loadManifest(group.skill).version
   const installed = installedVersions(group)
   if (installed.length === 1 && installed[0] === available) return 'up to date'
@@ -492,11 +493,21 @@ function updateHint(group: InstallGroup): string {
 }
 
 function installedSummary(groups: InstallGroup[]): string {
-  return groups.map((group) => `${group.skill} ${installedVersions(group).join(' / ')}`).join('\n')
+  return groups.map((group) => `${displaySkillName(group.skill)} ${installedVersions(group).join(' / ')}`).join('\n')
 }
 
 function updateSummary(groups: InstallGroup[]): string {
-  return groups.map((group) => `${group.skill}: ${updateHint(group)}`).join('\n')
+  return groups.map((group) => `${displaySkillName(group.skill)}: ${updateStatus(group)}`).join('\n')
+}
+
+function displaySkillName(name: string): string {
+  return name ? `${name[0].toUpperCase()}${name.slice(1)}` : name
+}
+
+function humanList(values: string[]): string {
+  if (values.length <= 1) return values[0] ?? ''
+  if (values.length === 2) return `${values[0]} and ${values[1]}`
+  return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`
 }
 
 function navOptions(allowBack: boolean): ChoiceItem[] {
@@ -504,27 +515,6 @@ function navOptions(allowBack: boolean): ChoiceItem[] {
     ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
     { value: CANCEL, label: 'Cancel & Exit' },
   ]
-}
-
-async function clarifySpecialSelection(
-  state: Intro,
-  message: string,
-  selected: string[],
-  allowAll: boolean,
-  allowBack: boolean,
-): Promise<'all' | 'back' | 'cancel'> {
-  ensureIntro(state)
-  const choices: ChoiceItem[] = []
-  if (allowAll && selected.includes(ALL)) choices.push({ value: ALL, label: 'All of the above' })
-  if (allowBack && selected.includes(BACK)) choices.push({ value: BACK, label: 'Go back' })
-  if (selected.includes(CANCEL)) choices.push({ value: CANCEL, label: 'Cancel & Exit' })
-  const choice = checked<string>(await prompts.select({
-    message,
-    options: choices,
-  }))
-  if (choice === CANCEL) cancel()
-  if (choice === BACK) return 'back'
-  return 'all'
 }
 
 async function chooseMany(
@@ -545,63 +535,26 @@ async function chooseMany(
 ): Promise<NavResult<string[]>> {
   ensureIntro(state)
   const selectable = items.filter((item) => !item.disabled).map((item) => item.value)
-  const options: ChoiceItem[] = [
+  const options: ExclusiveOption<string>[] = [
     ...items,
-    ...(allowAll && selectable.length > 0 ? [{ value: ALL, label: 'All of the above' }] : []),
-    ...navOptions(allowBack),
+    ...(allowAll && selectable.length > 0
+      ? [{ value: ALL, label: 'All of the above', exclusive: true }]
+      : []),
+    ...(allowBack ? [{ value: BACK, label: 'Go back', exclusive: true }] : []),
+    { value: CANCEL, label: 'Cancel & Exit', exclusive: true },
   ]
-  while (true) {
-    const selected = checked<string[]>(await prompts.multiselect({
-      message,
-      options,
-      initialValues,
-      required,
-    }))
 
-    const specials = [ALL, BACK, CANCEL].filter((value) => selected.includes(value))
-    const normal = selected.filter((value) => !specials.includes(value))
+  const selected = checked<string[]>(await exclusiveMultiselect({
+    message,
+    options,
+    initialValues,
+    required,
+  }))
 
-    if (specials.length > 1) {
-      const resolved = await clarifySpecialSelection(
-        state,
-        'Choose one navigation option',
-        specials,
-        allowAll,
-        allowBack,
-      )
-      if (resolved === 'back') return BACK
-      return selectable
-    }
-
-    if (selected.includes(CANCEL)) {
-      if (normal.length === 0) cancel()
-      const choice = checked<string>(await prompts.select({
-        message: 'Cancel & Exit was selected with other choices. What would you like to do?',
-        options: [
-          { value: 'choices', label: 'Use my selected choices' },
-          { value: CANCEL, label: 'Cancel & Exit' },
-        ],
-      }))
-      if (choice === CANCEL) cancel()
-      return normal
-    }
-
-    if (selected.includes(BACK)) {
-      if (normal.length === 0) return BACK
-      const choice = checked<string>(await prompts.select({
-        message: 'Go back was selected with other choices. What would you like to do?',
-        options: [
-          { value: 'choices', label: 'Use my selected choices' },
-          { value: BACK, label: 'Go back' },
-        ],
-      }))
-      if (choice === BACK) return BACK
-      return normal
-    }
-
-    if (selected.includes(ALL)) return selectable
-    return normal
-  }
+  if (selected.includes(CANCEL)) cancel()
+  if (selected.includes(BACK)) return BACK
+  if (selected.includes(ALL)) return selectable
+  return selected
 }
 
 async function chooseScope(
@@ -643,8 +596,9 @@ async function chooseInstallSkills(
     'Select skills to install',
     catalogManifests().map((item) => ({
       value: item.name,
-      label: item.name,
-      hint: installed.has(item.name) ? 'already installed' : undefined,
+      label: installed.has(item.name)
+        ? `${displaySkillName(item.name)} — already installed`
+        : displaySkillName(item.name),
       disabled: installed.has(item.name),
     })),
     { allowAll: true, allowBack },
@@ -668,11 +622,7 @@ async function chooseAgents(
   const values = await chooseMany(
     state,
     'Which AI harnesses should receive these skills?',
-    all.map((item) => ({
-      value: item.id,
-      label: item.label,
-      hint: item.detected ? 'detected' : 'not detected on this computer',
-    })),
+    all.map((item) => ({ value: item.id, label: item.label })),
     { allowAll: true, allowBack },
   )
   if (values === BACK) return BACK
@@ -683,6 +633,20 @@ function instructionFiles(agents: string[], scope: Scope): string[] {
   return [...new Set(agents.map((agent) => basename(agentPaths(agent, scope).instruction)))]
 }
 
+function instructionQuestion(
+  agents: string[],
+  scope: Scope,
+  skills: string[],
+): string {
+  const files = instructionFiles(agents, scope)
+  const fileText = humanList(files)
+  const skillText = humanList(skills.map(displaySkillName))
+  const explanation = files.length === 1 && agents.length === 1
+    ? `${fileText} contains general instructions that ${agentLabel(agents[0])} reads automatically.`
+    : `${fileText} contain general instructions that your selected AI tools read automatically.`
+  return `Add ${skillText} instructions to ${fileText}?\n${explanation}`
+}
+
 async function chooseInstructionInjection(
   state: Intro,
   agents: string[],
@@ -691,20 +655,8 @@ async function chooseInstructionInjection(
   allowBack = true,
 ): Promise<NavResult<boolean>> {
   ensureIntro(state)
-  const files = instructionFiles(agents, scope)
-  const fileText = files.length === 1
-    ? files[0]
-    : files.length === 2
-      ? `${files[0]} and ${files[1]}`
-      : files.join(', ')
-
-  prompts.note(
-    `${fileText} ${files.length === 1 ? 'is a file your AI checks for general instructions before it starts working in this location' : 'are files your AI tools check for general instructions before they start working in this location'}. JL-Skills can add a small section explaining how to use ${skills.join(', ')} without changing the rest of ${files.length === 1 ? 'the file' : 'those files'}.`,
-    `About ${fileText}`,
-  )
-
   const choice = checked<string>(await prompts.select({
-    message: `Add guidance for ${skills.join(', ')} to ${fileText}?`,
+    message: instructionQuestion(agents, scope, skills),
     options: [
       { value: 'yes', label: 'Yes' },
       { value: 'no', label: 'No' },
@@ -731,8 +683,9 @@ async function chooseGroupSkills(
     `Select skills to ${verb}`,
     available.map((group) => ({
       value: group.skill,
-      label: group.skill,
-      hint: action === 'update' ? updateHint(group) : undefined,
+      label: action === 'update'
+        ? `${displaySkillName(group.skill)} — ${updateStatus(group)}`
+        : displaySkillName(group.skill),
     })),
     { allowAll: true, allowBack: true },
   )
@@ -749,6 +702,25 @@ function targetsForUpdate(group: InstallGroup, override?: boolean): InstallTarge
     agent: receipt.agent,
     instructions: override ?? receipt.instructions ?? true,
   }))
+}
+
+function installationSummary(
+  scope: Scope,
+  skills: string[],
+  agents: string[],
+  instructions: boolean,
+  allAgents: AgentSpec[],
+): string {
+  const skillText = humanList(skills.map(displaySkillName))
+  const harnessText = humanList(agents.map((id) => agentLabel(id, allAgents)))
+  const fileText = humanList(instructionFiles(agents, scope))
+  return [
+    `Install ${skillText} in ${scope.identity}.`,
+    `Make ${skills.length === 1 ? 'it' : 'them'} available to ${harnessText}.`,
+    instructions
+      ? `Add ${skillText} instructions to ${fileText}.`
+      : `Leave ${fileText} unchanged.`,
+  ].join('\n')
 }
 
 async function installAtScope(
@@ -804,8 +776,14 @@ async function installAtScope(
 
         if (prompted) {
           prompts.note(
-            `Skills: ${selectedSkills.join(', ')}\nAI harnesses: ${agentChoice.values.map((id) => agentLabel(id, agentChoice.all)).join(', ')}\nLocation: ${scope.identity}\nStanding instructions: ${instructions ? 'add skill guidance' : 'leave unchanged'}`,
-            'Planned installation',
+            installationSummary(
+              scope,
+              selectedSkills,
+              agentChoice.values,
+              instructions,
+              agentChoice.all,
+            ),
+            'Installation summary',
           )
           const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
           if (!proceed) continue instructionStep
@@ -877,7 +855,7 @@ async function updateAtScope(
     if (groups.length === 0) throw new Error('no installations match update filters')
 
     if (process.stdin.isTTY) {
-      prompts.note(groups.map((group) => `${group.skill}: ${updateHint(group)}`).join('\n'), 'Planned updates')
+      prompts.note(groups.map((group) => `${displaySkillName(group.skill)}: ${updateStatus(group)}`).join('\n'), 'Planned updates')
       const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
       if (!proceed) {
         if (skills.length > 0) return BACK
@@ -933,7 +911,7 @@ async function uninstallAtScope(
 
     if (process.stdin.isTTY) {
       prompts.note(
-        `${groups.map((group) => group.skill).join('\n')}\n\nMap project data and shared JL-Skills program files will be kept.`,
+        `${groups.map((group) => displaySkillName(group.skill)).join('\n')}\n\nMap project data and shared JL-Skills program files will be kept.`,
         'Planned uninstall',
       )
       const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
