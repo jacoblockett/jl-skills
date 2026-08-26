@@ -126,82 +126,65 @@ fn init_refuses_existing_map_and_ids_use_native_shape() {
 }
 
 #[test]
-fn map_init_registers_project_identity() {
-    let root = new_map("runtime-project-registration");
+fn map_init_creates_local_project_identity_without_registry() {
+    let root = new_map("runtime-project-identity");
     let identity: Value = serde_json::from_str(
         &fs::read_to_string(root.join(".map").join("project.json")).expect("project identity"),
     )
     .expect("identity JSON");
     let project_id = identity["projectId"].as_str().expect("project ID");
     assert_eq!(project_id.len(), 20);
-
-    let registry: Value = serde_json::from_str(
-        &fs::read_to_string(
-            test_home()
-                .join(".jl-skills")
-                .join("map")
-                .join("registry.json"),
-        )
-        .expect("Map registry"),
-    )
-    .expect("registry JSON");
-    assert_eq!(registry["projects"].as_array().expect("projects").len(), 1);
-    assert_eq!(registry["projects"][0]["projectId"], project_id);
+    assert!(project_id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+    assert!(identity["createdAtMs"].is_number());
+    assert!(!test_home().join(".jl-skills").join("map").join("registry.json").exists());
 }
 
 #[test]
-fn moving_a_registered_project_refreshes_its_path() {
+fn moving_a_map_preserves_local_identity() {
     let root = new_map("runtime-project-move-source");
-    let identity: Value = serde_json::from_str(
+    let identity_before: Value = serde_json::from_str(
         &fs::read_to_string(root.join(".map").join("project.json")).unwrap(),
     )
     .unwrap();
-    let project_id = identity["projectId"].as_str().unwrap().to_string();
 
     let moved = scratch("runtime-project-move-destination");
     fs::remove_dir_all(&moved).unwrap();
     fs::rename(&root, &moved).expect("move project");
 
     ok(&moved, &["status"]);
-    let registry: Value = serde_json::from_str(
-        &fs::read_to_string(
-            test_home()
-                .join(".jl-skills")
-                .join("map")
-                .join("registry.json"),
-        )
-        .unwrap(),
+    let identity_after: Value = serde_json::from_str(
+        &fs::read_to_string(moved.join(".map").join("project.json")).unwrap(),
     )
     .unwrap();
-    let entry = registry["projects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["projectId"] == project_id)
-        .expect("moved project registry entry");
-    assert!(entry["path"].as_str().unwrap().ends_with("runtime-project-move-destination"));
+    assert_eq!(identity_after["projectId"], identity_before["projectId"]);
 }
 
 #[test]
-fn copied_project_identity_is_rejected_noninteractively() {
+fn copied_map_is_self_contained() {
     let root = new_map("runtime-project-copy-source");
+    let original_identity: Value = serde_json::from_str(
+        &fs::read_to_string(root.join(".map").join("project.json")).unwrap(),
+    )
+    .unwrap();
     let copy = scratch("runtime-project-copy-destination");
     fs::remove_dir_all(&copy).unwrap();
     copy_dir_all(&root, &copy);
 
-    let message = err(&copy, &["status"]);
-    assert!(message.contains("duplicate Map project identity"));
-    assert!(message.contains("runtime-project-copy-source"));
-    assert!(message.contains("runtime-project-copy-destination"));
+    ok(&copy, &["status"]);
+    let copied_identity: Value = serde_json::from_str(
+        &fs::read_to_string(copy.join(".map").join("project.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(copied_identity["projectId"], original_identity["projectId"]);
 }
 
 #[test]
-fn damaged_project_identity_requires_explicit_recovery() {
+fn damaged_project_identity_is_rejected() {
     let root = new_map("runtime-project-identity-damaged");
     fs::write(root.join(".map").join("project.json"), "{}\n").unwrap();
     let message = err(&root, &["status"]);
     assert!(message.contains("identity"));
-    assert!(message.contains("interactive user"));
+    assert!(!message.contains("interactive user"));
 }
 
 #[test]
