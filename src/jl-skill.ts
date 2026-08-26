@@ -497,10 +497,6 @@ function installedSummary(groups: InstallGroup[]): string {
   return groups.map((group) => `${displaySkillName(group.skill)} ${installedVersions(group).join(' / ')}`).join('\n')
 }
 
-function updateSummary(groups: InstallGroup[]): string {
-  return groups.map((group) => `${displaySkillName(group.skill)}: ${updateStatus(group)}`).join('\n')
-}
-
 function displaySkillName(name: string): string {
   return name ? `${name[0].toUpperCase()}${name.slice(1)}` : name
 }
@@ -511,10 +507,14 @@ function humanList(values: string[]): string {
   return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`
 }
 
+function bulletList(values: string[]): string {
+  return values.map((value) => `  • ${value}`).join('\n')
+}
+
 function navOptions(allowBack: boolean): ChoiceItem[] {
   return [
     ...(allowBack ? [{ value: BACK, label: 'Go back' }] : []),
-    { value: CANCEL, label: 'Cancel & Exit' },
+    { value: CANCEL, label: 'Cancel & exit' },
   ]
 }
 
@@ -552,7 +552,7 @@ async function chooseMany(
       ? [{ value: ALL, label: 'All of the above', exclusive: true }]
       : []),
     ...(allowBack ? [{ value: BACK, label: 'Go back', exclusive: true }] : []),
-    { value: CANCEL, label: 'Cancel & Exit', exclusive: true },
+    { value: CANCEL, label: 'Cancel & exit', exclusive: true },
   ]
   const key = selectionKey(message, items, allowAll, allowBack)
   const remembered = state.selections?.get(key)
@@ -669,8 +669,8 @@ function instructionExplanation(
   const fileText = humanList(files)
   const skillText = humanList(skills.map(displaySkillName))
   const body = files.length === 1 && agents.length === 1
-    ? `${fileText} contains general instructions that ${agentLabel(agents[0])} reads automatically. JL-Skills can add a small section explaining how to use ${skillText} without changing the rest of the file.`
-    : `${fileText} contain general instructions that your selected AI tools read automatically. JL-Skills can add a small section explaining how to use ${skillText} without changing the rest of those files.`
+    ? `${fileText} contains general instructions that ${agentLabel(agents[0])} reads automatically. jl-skills can add a small section explaining how to use ${skillText} without changing the rest of the file.`
+    : `${fileText} contain general instructions that your selected AI tools read automatically. jl-skills can add a small section explaining how to use ${skillText} without changing the rest of those files.`
   return { title: `About ${fileText}`, body }
 }
 
@@ -685,7 +685,7 @@ async function chooseInstructionInjection(
   const explanation = instructionExplanation(agents, scope, skills)
   prompts.note(explanation.body, explanation.title)
   const choice = checked<string>(await prompts.select({
-    message: `${instructionQuestion(agents, scope, skills)}\n${styleText('dim', 'See the information above for details.')}`,
+    message: `${instructionQuestion(agents, scope, skills)} ${styleText('dim', '(See above for more information.)')}`,
     options: [
       { value: 'yes', label: 'Yes' },
       { value: 'no', label: 'No' },
@@ -740,15 +740,21 @@ function installationSummary(
   instructions: boolean,
   allAgents: AgentSpec[],
 ): string {
-  const skillText = humanList(skills.map(displaySkillName))
-  const harnessText = humanList(agents.map((id) => agentLabel(id, allAgents)))
-  const fileText = humanList(instructionFiles(agents, scope))
+  const skillNames = skills.map(displaySkillName)
+  const harnessNames = agents.map((id) => agentLabel(id, allAgents))
+  const files = instructionFiles(agents, scope)
   return [
-    `Install ${skillText} in ${scope.identity}.`,
-    `Make ${skills.length === 1 ? 'it' : 'them'} available to ${harnessText}.`,
-    instructions
-      ? `Add ${skillText} instructions to ${fileText}.`
-      : `Leave ${fileText} unchanged.`,
+    'Skills to Install',
+    bulletList(skillNames),
+    '',
+    'Installation Location',
+    bulletList([scope.identity]),
+    '',
+    'Affected AI Harnesses',
+    bulletList(harnessNames),
+    '',
+    'Instruction Injection',
+    instructions ? bulletList(files) : bulletList(['None']),
   ].join('\n')
 }
 
@@ -812,7 +818,7 @@ async function installAtScope(
               instructions,
               agentChoice.all,
             ),
-            'Installation summary',
+            'Installation Summary',
           )
           const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
           if (!proceed) continue instructionStep
@@ -876,7 +882,6 @@ async function updateAtScope(
     let groups = matchingGroups(parsed, scope)
     if (skills.length === 0) {
       if (!process.stdin.isTTY) throw new Error('no skills selected for update')
-      prompts.note(updateSummary(groupsAtScope(scope)), 'Available updates')
       const selected = await chooseGroupSkills(scope, state, 'update')
       if (selected === BACK) return BACK
       groups = selected
@@ -940,7 +945,7 @@ async function uninstallAtScope(
 
     if (process.stdin.isTTY) {
       prompts.note(
-        `${groups.map((group) => displaySkillName(group.skill)).join('\n')}\n\nMap project data and shared JL-Skills program files will be kept.`,
+        `${groups.map((group) => displaySkillName(group.skill)).join('\n')}\n\nSkill project data and shared jl-skills data & tooling will be kept.`,
         'Planned uninstall',
       )
       const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
@@ -1025,6 +1030,36 @@ async function chooseMapDataRemoval(state: Intro): Promise<NavResult<string[]>> 
   }
 }
 
+async function chooseSkillProjectDataRemoval(
+  state: Intro,
+  selectAllByDefault = false,
+): Promise<NavResult<string[]>> {
+  const dataSkills: ChoiceItem[] = [{ value: 'map', label: 'Map' }]
+
+  while (true) {
+    const selected = await chooseMany(
+      state,
+      'Which skill project data would you like to remove?',
+      dataSkills,
+      {
+        allowAll: dataSkills.length > 1,
+        allowBack: true,
+        initialValues: selectAllByDefault ? dataSkills.map((item) => item.value) : [],
+        required: !selectAllByDefault,
+      },
+    )
+    if (selected === BACK) return BACK
+    if (selected.length === 0) return []
+
+    if (selected.includes('map')) {
+      const paths = await chooseMapDataRemoval(state)
+      if (paths === BACK) continue
+      return paths
+    }
+    return []
+  }
+}
+
 function removeAllIntegrations(): void {
   const groups = groupInstallations(loadRegistry())
   for (const group of groups) uninstallGroup(group)
@@ -1057,7 +1092,7 @@ async function executeMachineRemoval(
   prompts.note(
     [
       removeIntegrations ? 'Skills added to my AI tools' : null,
-      removePrograms ? 'JL-Skills program files' : null,
+      removePrograms ? 'jl-skills data & tooling' : null,
       projectPaths.length > 0 ? `Map project data (${projectPaths.length} selected)` : null,
     ].filter(Boolean).join('\n'),
     'Planned removal',
@@ -1074,14 +1109,14 @@ async function executeMachineRemoval(
 
 async function chooseMachineParts(
   state: Intro,
-): Promise<NavResult<{ integrations: boolean; programs: boolean; mapData: boolean }>> {
+): Promise<NavResult<{ integrations: boolean; programs: boolean; projectData: boolean }>> {
   const selected = await chooseMany(
     state,
     'Select what to remove',
     [
       { value: 'integrations', label: 'Skills added to my AI tools' },
-      { value: 'programs', label: 'JL-Skills program files' },
-      { value: 'map-data', label: 'Map project data' },
+      { value: 'programs', label: 'jl-skills data & tooling' },
+      { value: 'project-data', label: 'Skill project data' },
     ],
     { allowAll: true, allowBack: true },
   )
@@ -1089,7 +1124,7 @@ async function chooseMachineParts(
   return {
     integrations: selected.includes('integrations'),
     programs: selected.includes('programs'),
-    mapData: selected.includes('map-data'),
+    projectData: selected.includes('project-data'),
   }
 }
 
@@ -1098,10 +1133,10 @@ async function machineRemovalWizard(state: Intro = { shown: false }): Promise<Na
 
   while (true) {
     const choice = checked<string>(await prompts.select({
-      message: 'How would you like to remove JL-Skills?',
+      message: 'How would you like to remove jl-skills?',
       options: [
-        { value: 'keep-data', label: 'Remove JL-Skills but keep my Map project data' },
-        { value: 'with-data', label: 'Remove JL-Skills and my Map project data' },
+        { value: 'keep-data', label: 'Remove jl-skills data & tooling, but keep skill project data' },
+        { value: 'with-data', label: 'Remove jl-skills data & tooling and skill project data' },
         { value: 'choose', label: 'Choose what to remove' },
         ...navOptions(true),
       ],
@@ -1117,7 +1152,7 @@ async function machineRemovalWizard(state: Intro = { shown: false }): Promise<Na
     }
 
     if (choice === 'with-data') {
-      const projectPaths = await chooseMapDataRemoval(state)
+      const projectPaths = await chooseSkillProjectDataRemoval(state, true)
       if (projectPaths === BACK) continue
       const result = await executeMachineRemoval(true, true, projectPaths, state)
       if (result === BACK) continue
@@ -1129,8 +1164,8 @@ async function machineRemovalWizard(state: Intro = { shown: false }): Promise<Na
       if (parts === BACK) break
 
       let projectPaths: string[] = []
-      if (parts.mapData) {
-        const selected = await chooseMapDataRemoval(state)
+      if (parts.projectData) {
+        const selected = await chooseSkillProjectDataRemoval(state)
         if (selected === BACK) continue
         projectPaths = selected
       }
@@ -1151,8 +1186,8 @@ async function uninstallEntryWizard(): Promise<number> {
       message: 'What would you like to uninstall?',
       options: [
         { value: 'skills', label: 'Skills from a project or user installation' },
-        { value: 'machine', label: 'JL-Skills from this computer' },
-        { value: CANCEL, label: 'Cancel & Exit' },
+        { value: 'machine', label: 'jl-skills data & tooling' },
+        { value: CANCEL, label: 'Cancel & exit' },
       ],
       initialValue: 'skills',
     }))
@@ -1174,38 +1209,6 @@ async function uninstallEntryWizard(): Promise<number> {
   }
 }
 
-async function manageScopeWizard(scope: Scope, state: Intro): Promise<NavResult<number>> {
-  while (true) {
-    const installed = groupsAtScope(scope)
-    if (installed.length === 0) {
-      return installAtScope(scope, [], [], undefined, state, true, true)
-    }
-
-    prompts.note(installedSummary(installed), `Installed at ${scope.identity}`)
-    const action = checked<string>(await prompts.select({
-      message: 'JL-Skills found the installations shown above. What would you like to do?',
-      options: [
-        { value: 'install', label: 'Install new skills' },
-        { value: 'update', label: 'Update installed skills' },
-        { value: 'uninstall', label: 'Uninstall installed skills' },
-        ...navOptions(true),
-      ],
-      initialValue: 'install',
-    }))
-    if (action === CANCEL) cancel()
-    if (action === BACK) return BACK
-
-    const result = action === 'install'
-      ? await installAtScope(scope, [], [], undefined, state, true, true)
-      : action === 'update'
-        ? await updateAtScope(scope, [], [], undefined, state)
-        : await uninstallAtScope(scope, [], [], state)
-
-    if (result === BACK) continue
-    return result
-  }
-}
-
 async function bareWizard(): Promise<number> {
   if (!process.stdin.isTTY) throw new Error('no command supplied')
   const state: Intro = { shown: false }
@@ -1215,11 +1218,13 @@ async function bareWizard(): Promise<number> {
     const choice = checked<string>(await prompts.select({
       message: 'What would you like to do?',
       options: [
-        { value: 'manage', label: 'Manage skills' },
-        { value: 'remove', label: 'Remove JL-Skills from this computer' },
-        { value: CANCEL, label: 'Cancel & Exit' },
+        { value: 'install', label: 'Install skills' },
+        { value: 'update', label: 'Update skills' },
+        { value: 'uninstall', label: 'Uninstall skills' },
+        { value: 'remove', label: 'Remove jl-skills data & tooling' },
+        { value: CANCEL, label: 'Cancel & exit' },
       ],
-      initialValue: 'manage',
+      initialValue: 'install',
     }))
     if (choice === CANCEL) cancel()
 
@@ -1233,7 +1238,20 @@ async function bareWizard(): Promise<number> {
       const scope = await chooseScope(state, 'Where would you like to manage skills?', true)
       if (scope === BACK) break
 
-      const result = await manageScopeWizard(scope, state)
+      const installed = groupsAtScope(scope)
+      prompts.note(
+        installed.length > 0 ? installedSummary(installed) : 'No skills installed.',
+        `Installed at ${scope.identity}`,
+      )
+
+      if (choice !== 'install' && installed.length === 0) continue
+
+      const result = choice === 'install'
+        ? await installAtScope(scope, [], [], undefined, state, true, true)
+        : choice === 'update'
+          ? await updateAtScope(scope, [], [], undefined, state)
+          : await uninstallAtScope(scope, [], [], state)
+
       if (result === BACK) continue
       return result
     }
