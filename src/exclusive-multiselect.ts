@@ -1,6 +1,7 @@
 import { styleText } from 'node:util'
 import type { Readable, Writable } from 'node:stream'
 import { Prompt, settings, wrapTextWithPrefix, type PromptOptions, type State } from '@clack/core'
+import { BACK_SIGNAL } from './nav-prompts'
 
 export type ExclusiveOption<Value> = {
   value: Value
@@ -14,7 +15,10 @@ export type ExclusiveMultiselectOptions<Value> = {
   message: string
   options: ExclusiveOption<Value>[]
   initialValues?: Value[]
+  cursorAt?: Value
   required?: boolean
+  allowBack?: boolean
+  onCursor?: (value: Value) => void
   input?: Readable
   output?: Writable
   signal?: AbortSignal
@@ -30,12 +34,6 @@ const S_BAR_END = '└'
 const S_CHECKBOX_ACTIVE = '◻'
 const S_CHECKBOX_SELECTED = '◼'
 const S_CHECKBOX_INACTIVE = '◻'
-
-const MULTISELECT_INSTRUCTIONS = [
-  `${styleText('dim', '↑/↓')} to navigate`,
-  `${styleText('dim', 'Space:')} select`,
-  `${styleText('dim', 'Enter:')} confirm`,
-]
 
 function symbol(state: State): string {
   if (state === 'cancel') return styleText('red', S_STEP_CANCEL)
@@ -84,6 +82,7 @@ export function applyExclusiveToggle<Value>(
 export class ExclusiveMultiSelectPrompt<Value> extends Prompt<Value[]> {
   options: ExclusiveOption<Value>[]
   cursor = 0
+  backRequested = false
 
   private get enabledNormalValues(): Value[] {
     return this.options
@@ -96,6 +95,8 @@ export class ExclusiveMultiSelectPrompt<Value> extends Prompt<Value[]> {
       options: ExclusiveOption<Value>[]
       initialValues?: Value[]
       cursorAt?: Value
+      allowBack?: boolean
+      onCursor?: (value: Value) => void
     },
   ) {
     super(opts, false)
@@ -109,6 +110,12 @@ export class ExclusiveMultiSelectPrompt<Value> extends Prompt<Value[]> {
       ? nextCursor(requestedCursor, 1, this.options)
       : requestedCursor
 
+    const reportCursor = () => {
+      const option = this.options[this.cursor]
+      if (option) opts.onCursor?.(option.value)
+    }
+    reportCursor()
+
     this.on('cursor', (key) => {
       if (key === 'left' || key === 'up') this.cursor = nextCursor(this.cursor, -1, this.options)
       else if (key === 'down' || key === 'right') this.cursor = nextCursor(this.cursor, 1, this.options)
@@ -116,6 +123,7 @@ export class ExclusiveMultiSelectPrompt<Value> extends Prompt<Value[]> {
         const option = this.options[this.cursor]
         if (option) this._setValue(applyExclusiveToggle(this.value ?? [], option, this.options))
       }
+      reportCursor()
     })
 
     this.on('key', (_char, key) => {
@@ -127,6 +135,9 @@ export class ExclusiveMultiSelectPrompt<Value> extends Prompt<Value[]> {
       } else if (key.name === 'i') {
         const current = this.value ?? []
         this._setValue(this.enabledNormalValues.filter((value) => !current.includes(value)))
+      } else if ((opts.allowBack ?? true) && key.name === 'backspace') {
+        this.backRequested = true
+        this.state = 'submit'
       }
     })
   }
@@ -149,19 +160,41 @@ function optionText<Value>(
   return `${styleText('dim', S_CHECKBOX_INACTIVE)} ${styleText('dim', label)}`
 }
 
+function instructionFooter(hasGuide: boolean, allowBack: boolean): string {
+  const lines = [
+    [
+      `${styleText('dim', '↑/↓')} to navigate`,
+      `${styleText('dim', 'Space:')} select`,
+      `${styleText('dim', 'Enter:')} confirm`,
+    ].join(' • '),
+    [
+      `${styleText('dim', 'A:')} toggle all`,
+      ...(allowBack ? [`${styleText('dim', 'Backspace:')} back`] : []),
+      `${styleText('dim', 'Esc:')} cancel`,
+    ].join(' • '),
+  ]
+  if (!hasGuide) return lines.join('\n')
+  return `${styleText('cyan', S_BAR)}  ${lines[0]}\n${styleText('cyan', S_BAR)}  ${lines[1]}\n${styleText('cyan', S_BAR_END)}`
+}
+
 export function exclusiveMultiselect<Value>(
   opts: ExclusiveMultiselectOptions<Value>,
 ): Promise<Value[] | symbol> {
   const required = opts.required ?? true
   const output = opts.output ?? process.stdout
   const hasGuide = opts.withGuide ?? settings.withGuide
+  const allowBack = opts.allowBack ?? true
+  let prompt!: ExclusiveMultiSelectPrompt<Value>
 
-  return new ExclusiveMultiSelectPrompt<Value>({
+  prompt = new ExclusiveMultiSelectPrompt<Value>({
     options: opts.options,
     input: opts.input,
     output: opts.output,
     signal: opts.signal,
     initialValues: opts.initialValues,
+    cursorAt: opts.cursorAt,
+    allowBack,
+    onCursor: opts.onCursor,
     validate(selected) {
       if (required && (!selected || selected.length === 0)) return 'Please select at least one option.'
     },
@@ -176,6 +209,7 @@ export function exclusiveMultiselect<Value>(
       const value = this.value ?? []
 
       if (this.state === 'submit') {
+        if (prompt.backRequested) return `${title}${hasGuide ? styleText('gray', S_BAR) : ''}`
         const submitted = this.options
           .filter((option) => value.includes(option.value))
           .map((option) => optionText(option, 'submitted'))
@@ -204,8 +238,10 @@ export function exclusiveMultiselect<Value>(
       })
       const footer = this.state === 'error'
         ? `${hasGuide ? `${styleText('yellow', S_BAR_END)}  ` : ''}${styleText('yellow', this.error)}`
-        : `${hasGuide ? `${styleText('cyan', S_BAR)}  ` : ''}${MULTISELECT_INSTRUCTIONS.join(' • ')}${hasGuide ? `\n${styleText('cyan', S_BAR_END)}` : ''}`
+        : instructionFooter(hasGuide, allowBack)
       return `${title}${prefix}${lines.join(`\n${prefix}`)}\n${footer}\n`
     },
-  }).prompt() as Promise<Value[] | symbol>
+  })
+
+  return prompt.prompt().then((value) => prompt.backRequested ? BACK_SIGNAL : value) as Promise<Value[] | symbol>
 }
