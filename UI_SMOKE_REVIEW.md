@@ -1,6 +1,6 @@
 # Installer + Map UI Smoke Review
 
-Status: durable review notes from the 2026-08-25 interactive smoke pass on `spec-installer-lifecycle`.
+Status: durable review notes from the 2026-08-25 interactive smoke passes on `spec-installer-lifecycle`.
 
 Purpose: preserve every observed UX/architecture issue before implementation so later changes can be checked against one source instead of relying on conversation memory.
 
@@ -8,39 +8,38 @@ This document is review input, not a replacement for `INSTALLER_SPEC.md` or `ski
 
 ## 1. Harness selection during install
 
-Current observed behavior is not desired.
+Current observed behavior from the first smoke passes is not desired.
 
-Required direction:
+Current accepted direction:
 
-- Do not preselect all detected harnesses.
-- Harness selection should begin with no harnesses selected.
-- Provide a `Select all` choice.
-- Detected harnesses should be clearly marked as detected.
-- Undetected supported harnesses should still be visible and selectable.
-- An undetected harness should carry a simple user-facing hint such as `not detected on this computer` rather than being hidden or disabled merely because detection failed.
-- Preserve an explicit `Cancel` choice.
-- A `Go back` path is also required as described in section 4.
+- Do not preselect harnesses.
+- Harness selection begins with nothing selected.
+- Show every supported harness, whether or not JL-Skills detects it on the machine.
+- Do not display detection status or any other option hint in the interactive picker.
+- Detection remains an internal implementation detail and may still support deterministic/noninteractive fallback behavior.
+- Provide `All of the above`, `Go back`, and `Cancel & Exit` directly in the same harness-selection screen.
+- Do not insert an extra `Choose specific harnesses` screen.
 
-Detection remains informational. It must not widen scope or prevent a user from explicitly targeting a supported harness.
+Install scope determines where the integration is installed. Harness detection is machine/user-level and must not widen or narrow the selected project/user scope.
 
 ## 2. Pre-install plan copy
 
-The current plan note includes language equivalent to:
+The original plan note included language equivalent to:
 
 ```text
 Map state: not initialized by installer
 ```
 
-This is confusing and appears unnecessary in normal user-facing UI.
+This is confusing and unnecessary in normal user-facing UI.
 
 Required direction:
 
-- Remove this line unless a concrete user-facing purpose is established.
+- Remove this line.
 - The installer contract may still prohibit semantic Map initialization, but that implementation/safety invariant does not need to be repeated in ordinary install-plan copy.
 
 ## 3. Installed-scope summary visibility
 
-The current installed-skill summary is too easy to miss because it is printed immediately before the next prompt.
+The installed-skill summary can be too easy to miss because it is printed immediately before the next prompt.
 
 Required direction:
 
@@ -48,80 +47,70 @@ Required direction:
 - Make the following question explicitly draw attention to the information above in professional, nontechnical wording.
 - Do not make the user infer that a transient block immediately above contains important detected state.
 
-Exact wording remains open, but the UI should make clear that JL-Skills found existing installations at the selected scope before asking what to do next.
-
-## 4. Back vs Cancel semantics
-
-Current cancellation behavior is too destructive to navigation.
+## 4. Back vs cancel semantics
 
 The UI needs two distinct concepts:
 
 ```text
-Go back = return to the previous meaningful question without mutation
-Cancel  = abandon the entire CLI operation without mutation
+Go back       = return exactly one question backward without mutation
+Cancel & Exit = abandon the entire CLI operation without mutation
 ```
 
 Required behavior:
 
-- Add `Go back` where the user is more than one meaningful decision into a wizard and returning to the prior step is useful.
-- `Cancel` remains the explicit way to exit the whole operation.
-- If a final `confirm` asks whether to continue and the user answers `No`, return to the immediately preceding selection/plan step rather than terminating the entire process.
-- The user should not need to restart a five-step wizard because they selected the wrong item one screen earlier.
-- Normal wizard mutation should still happen only after the final confirmed plan, so back/cancel paths should not need cleanup in ordinary flows.
+- `Go back` means the immediately preceding question, not the preceding major workflow section.
+- Example install chain: scope -> skills -> harnesses -> instruction choice -> confirmation.
+- Back from skills returns to scope.
+- Back from harnesses returns to skills.
+- Back from instruction choice returns to harnesses.
+- `No` at final confirmation returns to the immediately preceding instruction choice.
+- Multiselect screens must include their appropriate `All of the above`, `Go back`, and `Cancel & Exit` choices rather than trapping the user in the selection screen.
+- Normal wizard mutation still happens only after the final confirmed plan.
 
 ## 5. Withdrawn update-harness idea
 
 During review, an idea was raised that update might offer newly detected harnesses that were not part of the existing installation.
 
-That idea was explicitly withdrawn and must **not** be implemented from these notes.
+That idea was explicitly withdrawn and must **not** be implemented.
 
 Reason: update should update the installation the user already chose. Installing the skill for another harness belongs to the Install flow.
 
 ## 6. Update skill-choice presentation
 
-Current harness hints on each update skill option are considered clutter.
+Harness names on every update skill option are clutter and should not be shown unless a harness-specific operation actually requires that distinction.
 
-Required direction:
-
-- Do not append `Codex`, `Claude`, etc. to every skill option merely to repeat existing receipt information.
-- The user is selecting skills to update, not reconstructing harness targeting.
-- Existing harness receipts should continue to determine which integrations are updated unless explicit CLI `--agent` filters are supplied.
-
-Update choices should instead emphasize **version state**.
+Update choices should emphasize version state.
 
 Required version behavior:
 
-- Before the update picker, compare the installed version recorded in the installer registry with the currently available/catalog version.
-- The informational block should make version state visible.
-- Each skill option should indicate whether it is already up to date.
-- If an update is available, show a concise transition such as:
-
-```text
-0.2.0 -> 0.3.0
-```
-
-- If no update is available, show a simple hint such as `up to date`.
-- An up-to-date skill should remain selectable so the user can intentionally reapply/repair/update its owned resources.
+- Before the update picker, compare installed registry version with the bundled/catalog version.
+- Make version state visible in the update flow.
+- If no update is available, communicate `up to date` without using Clack option hints.
+- If an update is available, show a concise transition such as `0.2.0 -> 0.3.0` without using option hints.
+- An up-to-date skill remains selectable so the user can intentionally reapply/repair owned resources.
 - Update selection begins with nothing selected.
 
-## 7. Instruction injection must be optional
+## 7. Instruction injection must be optional and understandable
 
 Installing a skill must not force modification of `AGENTS.md`, `CLAUDE.md`, or equivalent ordinary-agent instruction files.
 
 Required direction:
 
 - Add an explicit interactive choice controlling managed instruction injection.
-- Users who want JL-Skills to install skill files/runtime support but keep their instruction files untouched must be able to do so.
-- The choice should be presented before mutation and reflected in the final plan.
-- Installer receipts must accurately represent whether an instruction block was installed so later update/uninstall does not assume ownership that was never granted.
-- Update should preserve the user's existing injection choice unless the user explicitly changes it through an appropriate management flow.
-- Uninstall removes a managed block only when that installation actually owns one.
-
-This flexibility is considered important for users who maintain carefully controlled agent instructions.
+- Users who want skill files/runtime support but want their instruction files untouched must be able to decline it.
+- Do not use jargon such as `AI instruction files` without explaining the concrete file and its purpose.
+- Put the explanation in the actual question text so it cannot be visually separated and easily missed in a preceding note block.
+- Name the applicable files dynamically (`AGENTS.md`, `CLAUDE.md`, or both).
+- Explain in plain language that these files contain general instructions the selected AI tool reads automatically.
+- Answer choices should be plain `Yes`, `No`, `Go back`, and `Cancel & Exit` with no recommendation hints.
+- The choice is reflected in the final installation summary.
+- Receipts record actual instruction ownership.
+- Update preserves the user's existing choice unless explicitly changed.
+- Uninstall removes a managed block only when that installation owns one.
 
 ## 8. BLOCKING: Map skill/sub-agent architecture may have regressed
 
-This is the highest-priority architecture concern from the smoke review.
+This remains intentionally deferred for a separate deep historical review.
 
 Observed concern:
 
@@ -140,80 +129,112 @@ Required next action before redesigning `SKILL.md`:
 5. Do **not** invent a new orchestration architecture until this historical contract has been recovered or ruled out.
 6. If no relevant durable material can be found, stop and tell the user immediately so they can help locate/reconstruct it.
 
-This investigation is intentionally deferred until after this review document is committed. It must not be forgotten merely because recent work focused on installer/runtime/database implementation.
+## 9. True live exclusive multiselect behavior is required
 
-## 9. Exclusive multiselect behavior is not currently working live
+The earlier post-submit fallback is no longer acceptable.
 
-The accepted UX called for mutually exclusive sentinel choices such as:
-
-```text
-[ ] Map
-[ ] Update all
-[ ] Cancel
-```
-
-Observed behavior:
-
-- Selecting an ordinary item and then selecting `Update all` leaves both visibly selected.
-- Both values are submitted/recorded as selected.
-- Therefore the intended live exclusive wrapper either was not implemented or is not functioning.
-
-Required direction:
-
-Preferred behavior remains a clean reusable wrapper:
+Required live behavior:
 
 ```text
-individual selected -> clear All + Cancel
-All selected        -> clear individuals + Cancel
+individual selected -> clear All / Back / Cancel
+All selected        -> clear individuals / Back / Cancel
+Go back selected    -> clear everything else
 Cancel selected     -> clear everything else
 ```
 
-Constraints remain:
+The visual state must change **when Space is pressed**, before submission, so contradictory selections are never displayed as simultaneously active.
 
-- no Clack fork;
-- no monkey-patching;
-- no large copied renderer solely for this behavior.
+Implementation decision after review of Clack internals:
 
-If true live exclusivity cannot be achieved cleanly with Clack 1.7.0, use the previously accepted fallback deliberately and make that limitation explicit. Do not describe the current post-submit behavior as a working exclusive wrapper.
+- Keep `@clack/prompts` 1.7.0 for the overall installer UI.
+- Use its exact underlying public `@clack/core` 1.4.3 package for one JL-Skills-owned exclusive multiselect component.
+- Do not replace the whole UI framework.
+- Do not monkey-patch Clack globally.
+- Do not maintain a full Clack fork merely for this policy.
+- The component owns only the selection policy/render surface required to enforce JL-Skills exclusivity while retaining Clack's prompt machinery and visual language.
+- Automated tests must exercise exclusivity on the live Space/cursor event, not only normalize answers after Enter.
 
-## 10. Remove unnecessary harness language from broad removal flows
+Implementation status: implemented on `spec-installer-lifecycle`; pending Windows smoke/manual UI confirmation.
 
-Broad removal screens currently expose language such as `Map for Codex` / `Map for Claude` in places where the user has already asked to remove the skill/integration broadly.
+## 10. No option hints
+
+This supersedes all earlier notes that requested or tolerated Clack option hints.
+
+Required direction:
+
+- Do not use Clack `hint` text anywhere in the installer UI unless the user explicitly reintroduces a specific hint later.
+- This includes detection hints, recommendation hints, version hints, and generic descriptive hints.
+- Information that is actually necessary should be expressed in the main label, prompt wording, summary, or other deliberate UI copy instead of dim parenthetical hint clutter.
+
+Implementation status: installer source contains no `hint:` options; regression coverage guards this.
+
+## 11. Installation summary should read like an action, not implementation state
+
+The earlier key/value dump such as:
+
+```text
+Skills: map
+AI harnesses: Claude Code, OpenAI Codex
+Location: ...
+Standing instructions: add skill guidance
+```
+
+is not acceptable product copy.
+
+Required direction:
+
+- Use a polished natural-language summary of what will happen.
+- Describe the skill, destination, selected AI tools, and concrete instruction-file behavior.
+- Do not use vague phrases such as `Standing instructions` or `add skill guidance`.
+- Example shape:
+
+```text
+Installation summary
+
+Install Map in C:\Projects\Vacation.
+Make it available to OpenAI Codex and Claude Code.
+Add Map instructions to AGENTS.md and CLAUDE.md.
+```
+
+or, if injection was declined:
+
+```text
+Leave AGENTS.md and CLAUDE.md unchanged.
+```
+
+Implementation status: implemented on `spec-installer-lifecycle`; pending UI confirmation.
+
+## 12. Remove unnecessary harness language from broad removal flows
+
+Broad removal screens should not expose `Map for Codex` / `Map for Claude` when the user has already asked to remove the skill/integration broadly.
 
 Required direction:
 
 - Avoid repeating harness names when they do not help the user's decision.
-- Machine-wide or broad skill-removal plans should describe the skill/integration in user terms, not enumerate internal harness receipts unless the user is specifically performing a harness-scoped operation.
-- Keep harness detail available where it materially disambiguates an explicitly harness-filtered command.
+- Machine-wide or broad skill-removal plans should describe the skill/integration in user terms.
+- Keep harness detail only where it materially disambiguates an explicitly harness-filtered operation.
 
-## 11. Machine-removal follow-up wording
+## 13. Machine-removal follow-up wording
 
-Observed issue:
-
-- After choosing `Remove JL-Skills from this computer`, the next prompt repeats essentially the same phrase as its question text.
+After choosing `Remove JL-Skills from this computer`, the next prompt must advance the decision rather than repeat the same phrase.
 
 Required direction:
 
-- Use an actual follow-up question that advances the decision.
-- Avoid title/question duplication that makes the wizard feel mechanically generated.
+- Use an actual follow-up question.
+- Avoid title/question duplication.
 - Continue using nontechnical wording.
 
-Exact wording is open for revision during the UX pass.
-
-## 12. Selecting Map project data to delete
-
-Current machine-removal behavior lists all known Map project locations and then asks whether all should be deleted.
+## 14. Selecting Map project data to delete
 
 Preferred behavior:
 
-- Present registered Map project locations as a multiselect so the user can choose exactly which project data to delete.
-- Make all registered project locations selected by default, or provide an equivalent `Select all` default that clearly represents the broad removal action the user just requested.
-- The user must be able to deselect individual projects they want to preserve.
-- Preserve `Go back` and `Cancel` navigation.
+- Present authoritative registered Map project locations as a multiselect.
+- For the broad delete-data action, registered locations may begin selected so the broad intent is represented while still allowing individual deselection.
+- Include live-exclusive `All of the above`, `Go back`, and `Cancel & Exit` controls.
 - Keep an explicit destructive confirmation after project selection.
-- The authoritative Map registry remains the source of the candidate project list; do not scan drives for unregistered `.map` directories.
+- Do not scan drives for unregistered `.map` directories.
 
-## 13. Map duplicate/recovery prompts must not use an ad hoc TUI
+## 15. Map duplicate/recovery prompts must not use an ad hoc TUI
 
 Observed issue:
 
@@ -223,149 +244,62 @@ Observed issue:
 Required direction:
 
 - Remove the rolled-own numbered prompt experience.
-- Duplicate/recovery interaction should use the accepted JL-Skills prompt framework/visual language.
+- Duplicate/recovery interaction should use the accepted JL-Skills prompt visual language.
 
-Architecture caveat to resolve:
+Architecture caveat to resolve separately:
 
-- `map.exe` is a native Rust runtime while Clack 1.7.0 is part of the TypeScript/Bun installer stack.
-- Therefore simply "use Clack inside Rust" is not a viable implementation assumption.
-- Before coding this fix, determine the smallest architecture that preserves the native Map runtime while presenting these user-required recovery decisions through the accepted prompt UX.
-- Do not solve the mismatch by maintaining a second bespoke Rust TUI that merely imitates Clack.
+- `map.exe` is a native Rust runtime while Clack is part of the TypeScript/Bun installer stack.
+- Do not assume Clack can simply be imported into Rust.
+- Determine the smallest architecture that preserves the native runtime while presenting these user-required decisions through the accepted prompt UX.
+- Do not solve this by maintaining a second bespoke Rust TUI that merely imitates Clack.
 
-## 14. Duplicate-Map wording is ambiguous
-
-Current wording uses concepts like:
-
-```text
-This Map
-Original
-Copy
-```
-
-Observed concern:
-
-- `This Map` is ambiguous.
-- `Original` and `Copy` may not tell a nontechnical user which physical project is currently being operated on or what each resolution will change.
+## 16. Duplicate-Map wording is ambiguous
 
 Required direction:
 
-- Clearly identify the **currently opened project path**.
-- Clearly identify the **other registered project path**.
-- Explain the effect of each action in terms of those concrete paths.
-- Avoid relying on `original` / `copy` labels as the only disambiguation.
-- Before destructive deletion, state exactly which project's `.map` data will be removed.
-- Before separation, state that the currently opened project will receive a new Map project identity while its existing Map contents remain.
+- Clearly identify the currently opened project path.
+- Clearly identify the other registered project path.
+- Explain every resolution in terms of those concrete paths.
+- Do not rely on `original` / `copy` labels as the only disambiguation.
+- Before deletion, state exactly which project's `.map` data will be removed.
+- Before separation, state that the currently opened project receives a new Map project identity while its contents remain.
+- Apply the same concrete-path clarity to identity recovery.
 
-The same clarity principle applies to recovery prompts: say what project/path is being repaired and what will change.
-
-## 15. UI review acceptance checklist
+## 17. UI review acceptance checklist
 
 Before PR #8 is considered UI-complete, manually recheck at least:
 
-- install harness picker starts empty;
-- detected and undetected supported harnesses are both visible/selectable with appropriate hints;
-- Select all works as intended;
-- pre-install plan no longer contains unexplained Map-initialization copy;
+- executable/product is consistently `jl-skills` / `jl-skills.exe`;
+- install skill picker begins empty;
+- harness picker begins empty and shows all supported harnesses with no detection hints;
+- no installer option hints are present;
+- `All of the above` is live-exclusive with individual choices;
+- `Go back` and `Cancel & Exit` are live-exclusive with every other choice;
+- back navigation returns exactly one question at a time;
+- `No` on confirmation returns exactly one question;
+- instruction-file explanation is part of the actual question text;
+- instruction injection can be declined;
+- installation summary uses natural action-oriented prose;
 - installed-scope state is difficult to miss;
-- Go back exists at meaningful nested steps;
-- `No` on confirmation returns to the prior step;
-- Cancel exits the operation;
-- update picker shows installed/current available version state;
+- update flow exposes version state without option hints;
 - up-to-date skills remain selectable;
 - harness labels are removed from update options where they add clutter;
-- instruction injection can be declined;
-- instruction ownership/receipt behavior follows that choice;
-- exclusive sentinel behavior works or an explicitly accepted fallback is used;
 - broad removal UI does not unnecessarily enumerate harness receipts;
 - machine-removal follow-up wording is not repetitive;
-- Map project-data deletion uses a selectable registered-project list;
+- Map project-data deletion uses a selectable registered-project list with live-exclusive navigation/all controls;
 - duplicate/recovery UX no longer uses an ad hoc numbered TUI;
-- duplicate/recovery wording names concrete project paths and concrete effects;
+- duplicate/recovery wording names concrete project paths and effects;
 - recovered historical Map skill/sub-agent architecture has been reviewed before finalizing skill resources.
 
-## 16. Deferred implementation order
+## 18. Deferred implementation order
 
-Recommended order after this document:
+Remaining major work after the current installer UI pass:
 
-1. Recover and review the historical Map orchestrator/sub-agent contract.
-2. Resolve the Map-runtime-versus-Clack interactive recovery architecture.
-3. Update authoritative specs with accepted outcomes from those investigations and the confirmed UI notes above.
-4. Implement installer navigation, harness selection, version display, optional instruction injection, removal-project selection, and copy cleanup.
-5. Implement/recover Map skill/sub-agent resources according to the recovered contract.
-6. Re-run automated smoke tests.
-7. Repeat the manual UI branch smoke pass.
+1. Run the Windows automated smoke and focused manual install UI confirmation.
+2. Continue the rest of the installer UI branch review only after the basic install path is accepted.
+3. Recover and review the historical Map orchestrator/sub-agent contract.
+4. Resolve the Map-runtime-versus-Clack interactive recovery architecture.
+5. Fold accepted final UI behavior into authoritative specs.
+6. Repeat the complete manual branch smoke.
 
 Do not merge PR #8 until the review items intended for V1 are either resolved or explicitly deferred by the user.
-
-## 17. Second install-path smoke pass: superseding UX rules
-
-These notes come from the next manual pass over the basic current-directory Map installation flow. Where they conflict with earlier sections, **this section wins**.
-
-### 17.1 Remove all option hints
-
-The earlier requirement to show `detected`, `not detected on this computer`, `up to date`, `already installed`, recommendation notes, path hints, or similar Clack option hints is revoked.
-
-Required direction:
-
-- Remove every Clack option `hint` from installer UI.
-- Do not add new option hints unless the user explicitly requests a specific one later.
-- If information genuinely matters, put it in the question text, a deliberate summary, or another primary UI element rather than attaching parenthetical hint clutter to choices.
-- Detection may remain an internal implementation concern but should not be surfaced as a harness-option hint.
-
-Harness detection itself is machine/user-level rather than project-scope-level. The UI-smoke sandbox intentionally creates a fake home containing Codex state while still inheriting the host `PATH`; therefore smoke detection can come from the fake home and/or installed commands on the host. Interactive install should list all supported harnesses regardless of detection.
-
-### 17.2 True live exclusive selection is mandatory
-
-The previous section 9 fallback allowance and its `no Clack fork` constraint are revoked.
-
-Post-submit precedence is not sufficient. The visible selection state itself must never remain contradictory.
-
-Required behavior for every multiselect with special/exclusive options:
-
-```text
-select ordinary item  -> clear any exclusive option
-select All            -> clear all ordinary items and other exclusive options
-select Go back        -> clear every other selection
-select Cancel & Exit  -> clear every other selection
-select another choice -> clear Go back / Cancel & Exit / All as applicable
-```
-
-The clearing must happen immediately when Space toggles the option so the screen always represents what Enter will submit.
-
-Implementation research may consider, in order of preference:
-
-1. a small JL-Skills component built on Clack's public lower-level API while retaining Clack appearance and behavior;
-2. a narrowly maintained Clack fork/patch if public primitives cannot support the behavior cleanly;
-3. another prompt framework only if it can preserve the existing UI quality and the full required behavior without larger regressions.
-
-Do not retain the current ambiguous post-submit resolution.
-
-### 17.3 Instruction-file explanation belongs in the question
-
-The explanatory `About AGENTS.md / CLAUDE.md` note is too easy to miss because the user's eyes are drawn immediately to the following question and choices.
-
-Required direction:
-
-- Remove the separate explanatory note.
-- Put the necessary explanation directly into the question text itself, using concise language understandable to someone unfamiliar with AI instruction files.
-- Name the actual file or files that would be changed for the selected harnesses.
-- Explain that these files contain general instructions the selected AI tool reads automatically.
-- Keep the answer choices simple: `Yes`, `No`, `Go back`, `Cancel & Exit`.
-- Do not attach recommendation or explanatory hints to `Yes` or `No`.
-
-### 17.4 Installation summary needs a deliberate rewrite
-
-The current planned-installation block is visually and linguistically under-polished. Labels such as `Standing instructions: add skill guidance` are too abstract and do not clearly connect to the choice the user just made.
-
-Required direction:
-
-- Remove `Standing instructions`, `add skill guidance`, and similarly abstract internal language.
-- Present the final plan in concrete user terms: what skill is being installed, where, which AI tools will receive it, and which instruction files will or will not be changed.
-- Prefer natural, compact sentences or another intentionally designed summary over a mechanically generated key/value dump.
-- When instruction injection is enabled, name the actual instruction file(s).
-- When disabled, state plainly that those files will be left unchanged if that information is useful to the final decision.
-- The summary should visually match the polish of the surrounding Clack flow rather than looking like debugging output.
-
-### 17.5 Do not request another full UI pass until these are cohesive
-
-Avoid another partial retest that knowingly leaves the exclusive-control behavior unresolved. Complete the agreed install-path corrections as one cohesive pass, run automated smoke coverage, and then ask for another manual basic-install-path review.
