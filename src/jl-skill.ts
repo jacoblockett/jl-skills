@@ -14,6 +14,7 @@ import {
 import { arch, homedir, platform } from 'node:os'
 import { basename, dirname, join, normalize, resolve } from 'node:path'
 import { Buffer } from 'node:buffer'
+import { styleText } from 'node:util'
 import { catalog } from './catalog.generated'
 import { exclusiveMultiselect, type ExclusiveOption } from './exclusive-multiselect'
 
@@ -62,7 +63,7 @@ type AgentSpec = { id: string; label: string; command: string }
 type AgentInfo = AgentSpec & { detected: boolean }
 type ParsedAction = { skills: string[]; scope?: string; agents: string[]; instructions?: boolean }
 type InstallGroup = { key: string; skill: string; scope: Scope; receipts: Receipt[] }
-type Intro = { shown: boolean }
+type Intro = { shown: boolean; selections?: Map<string, string[]> }
 type NavResult<T> = T | typeof BACK
 type ChoiceItem = { value: string; label: string; disabled?: boolean }
 
@@ -517,6 +518,16 @@ function navOptions(allowBack: boolean): ChoiceItem[] {
   ]
 }
 
+function selectionKey(
+  message: string,
+  items: ChoiceItem[],
+  allowAll: boolean,
+  allowBack: boolean,
+): string {
+  const shape = items.map((item) => `${item.value}:${item.disabled ? 'disabled' : 'enabled'}`).join('\u0000')
+  return `${message}\u0000${shape}\u0000${allowAll ? 'all' : 'no-all'}\u0000${allowBack ? 'back' : 'no-back'}`
+}
+
 async function chooseMany(
   state: Intro,
   message: string,
@@ -543,18 +554,23 @@ async function chooseMany(
     ...(allowBack ? [{ value: BACK, label: 'Go back', exclusive: true }] : []),
     { value: CANCEL, label: 'Cancel & Exit', exclusive: true },
   ]
+  const key = selectionKey(message, items, allowAll, allowBack)
+  const remembered = state.selections?.get(key)
+  const startingValues = (remembered ?? initialValues).filter((value) => selectable.includes(value))
 
   const selected = checked<string[]>(await exclusiveMultiselect({
     message,
     options,
-    initialValues,
+    initialValues: startingValues,
     required,
   }))
 
   if (selected.includes(CANCEL)) cancel()
   if (selected.includes(BACK)) return BACK
-  if (selected.includes(ALL)) return selectable
-  return selected
+  const resolved = selected.includes(ALL) ? selectable : selected
+  state.selections ??= new Map()
+  state.selections.set(key, [...resolved])
+  return resolved
 }
 
 async function chooseScope(
@@ -641,10 +657,21 @@ function instructionQuestion(
   const files = instructionFiles(agents, scope)
   const fileText = humanList(files)
   const skillText = humanList(skills.map(displaySkillName))
-  const explanation = files.length === 1 && agents.length === 1
-    ? `${fileText} contains general instructions that ${agentLabel(agents[0])} reads automatically.`
-    : `${fileText} contain general instructions that your selected AI tools read automatically.`
-  return `Add ${skillText} instructions to ${fileText}?\n${explanation}`
+  return `Add ${skillText} instructions to ${fileText}?`
+}
+
+function instructionExplanation(
+  agents: string[],
+  scope: Scope,
+  skills: string[],
+): { title: string; body: string } {
+  const files = instructionFiles(agents, scope)
+  const fileText = humanList(files)
+  const skillText = humanList(skills.map(displaySkillName))
+  const body = files.length === 1 && agents.length === 1
+    ? `${fileText} contains general instructions that ${agentLabel(agents[0])} reads automatically. JL-Skills can add a small section explaining how to use ${skillText} without changing the rest of the file.`
+    : `${fileText} contain general instructions that your selected AI tools read automatically. JL-Skills can add a small section explaining how to use ${skillText} without changing the rest of those files.`
+  return { title: `About ${fileText}`, body }
 }
 
 async function chooseInstructionInjection(
@@ -655,8 +682,10 @@ async function chooseInstructionInjection(
   allowBack = true,
 ): Promise<NavResult<boolean>> {
   ensureIntro(state)
+  const explanation = instructionExplanation(agents, scope, skills)
+  prompts.note(explanation.body, explanation.title)
   const choice = checked<string>(await prompts.select({
-    message: instructionQuestion(agents, scope, skills),
+    message: `${instructionQuestion(agents, scope, skills)}\n${styleText('dim', 'See the information above for details.')}`,
     options: [
       { value: 'yes', label: 'Yes' },
       { value: 'no', label: 'No' },
