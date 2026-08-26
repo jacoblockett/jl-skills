@@ -196,9 +196,12 @@ export function exclusiveMultiselect<Value>(
         if (selected) return optionText(option, 'selected')
         return optionText(option, 'inactive')
       })
+      const footerPrefix = hasGuide
+        ? `${styleText(this.state === 'error' ? 'yellow' : 'cyan', S_BAR)}  `
+        : ''
       const footer = this.state === 'error'
-        ? `${styleText('yellow', this.error)}\n${hasGuide ? styleText('yellow', S_BAR_END) : ''}`
-        : `${styleText('dim', '↑/↓ to navigate • Space: select • Enter: confirm')}${hasGuide ? `\n${styleText('cyan', S_BAR_END)}` : ''}`
+        ? `${footerPrefix}${styleText('yellow', this.error)}\n${hasGuide ? styleText('yellow', S_BAR_END) : ''}`
+        : `${footerPrefix}${styleText('dim', '↑/↓ to navigate • Space: select • Enter: confirm')}${hasGuide ? `\n${styleText('cyan', S_BAR_END)}` : ''}`
       return `${title}${prefix}${lines.join(`\n${prefix}`)}\n${footer}\n`
     },
   }).prompt() as Promise<Value[] | symbol>
