@@ -521,8 +521,12 @@ function humanList(values: string[]): string {
   return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`
 }
 
-function bulletList(values: string[]): string {
-  return values.map((value) => `  • ${value}`).join('\n')
+function indentedCommaList(values: string[]): string {
+  return `  ${values.join(', ')}`
+}
+
+function indentedLineList(values: string[]): string {
+  return values.map((value) => `  ${value}`).join('\n')
 }
 
 function navOptions(allowBack: boolean): ChoiceItem[] {
@@ -759,17 +763,36 @@ function installationSummary(
   const harnessNames = agents.map((id) => agentLabel(id, allAgents))
   const files = instructionFiles(agents, scope)
   return [
-    'Skills to Install',
-    bulletList(skillNames),
+    'Skills to install',
+    indentedCommaList(skillNames),
     '',
-    'Installation Location',
-    bulletList([scopeDisplay(scope)]),
+    'Installation location',
+    indentedLineList([scopeDisplay(scope)]),
     '',
-    'Affected AI Harnesses',
-    bulletList(harnessNames),
+    'Affected AI harnesses',
+    indentedCommaList(harnessNames),
     '',
-    'Instruction Injection',
-    instructions ? bulletList(files) : bulletList(['None']),
+    'Instruction injection',
+    indentedCommaList(instructions ? files : ['None']),
+  ].join('\n')
+}
+
+function uninstallSummary(groups: InstallGroup[]): string {
+  const skillNames = [...new Set(groups.map((group) => displaySkillName(group.skill)))]
+  const locations = [...new Set(groups.map((group) => scopeDisplay(group.scope)))]
+  const harnessNames = [...new Set(groups.flatMap((group) => group.receipts.map((receipt) => agentLabel(receipt.agent))))]
+  return [
+    'Skills to uninstall',
+    indentedCommaList(skillNames),
+    '',
+    'Uninstall location',
+    indentedLineList(locations),
+    '',
+    'Affected AI harnesses',
+    indentedCommaList(harnessNames),
+    '',
+    'Preserved data',
+    indentedCommaList(['Skill project data', 'shared jl-skills data & tooling']),
   ].join('\n')
 }
 
@@ -833,7 +856,7 @@ async function installAtScope(
               instructions,
               agentChoice.all,
             ),
-            'Installation Summary',
+            'Installation summary',
           )
           const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: true }))
           if (!proceed) continue instructionStep
@@ -993,10 +1016,7 @@ async function uninstallAtScope(
     if (groups.length === 0) throw new Error('no installations match uninstall filters')
 
     if (process.stdin.isTTY) {
-      prompts.note(
-        `${groups.map((group) => displaySkillName(group.skill)).join('\n')}\n\nSkill project data and shared jl-skills data & tooling will be kept.`,
-        'Planned uninstall',
-      )
+      prompts.note(uninstallSummary(groups), 'Uninstall summary')
       const proceed = checked<boolean>(await prompts.confirm({ message: 'Continue?', initialValue: false }))
       if (!proceed) {
         if (skills.length > 0) return BACK
