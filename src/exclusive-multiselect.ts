@@ -31,6 +31,12 @@ const S_CHECKBOX_ACTIVE = '◻'
 const S_CHECKBOX_SELECTED = '◼'
 const S_CHECKBOX_INACTIVE = '◻'
 
+const MULTISELECT_INSTRUCTIONS = [
+  `${styleText('dim', '↑/↓')} to navigate`,
+  `${styleText('dim', 'Space:')} select`,
+  `${styleText('dim', 'Enter:')} confirm`,
+]
+
 function symbol(state: State): string {
   if (state === 'cancel') return styleText('red', S_STEP_CANCEL)
   if (state === 'error') return styleText('yellow', S_STEP_ERROR)
@@ -196,12 +202,9 @@ export function exclusiveMultiselect<Value>(
         if (selected) return optionText(option, 'selected')
         return optionText(option, 'inactive')
       })
-      const footerPrefix = hasGuide
-        ? `${styleText(this.state === 'error' ? 'yellow' : 'cyan', S_BAR)}  `
-        : ''
       const footer = this.state === 'error'
-        ? `${footerPrefix}${styleText('yellow', this.error)}\n${hasGuide ? styleText('yellow', S_BAR_END) : ''}`
-        : `${footerPrefix}${styleText('dim', '↑/↓ to navigate • Space: select • Enter: confirm')}${hasGuide ? `\n${styleText('cyan', S_BAR_END)}` : ''}`
+        ? `${hasGuide ? `${styleText('yellow', S_BAR_END)}  ` : ''}${styleText('yellow', this.error)}`
+        : `${hasGuide ? `${styleText('cyan', S_BAR)}  ` : ''}${MULTISELECT_INSTRUCTIONS.join(' • ')}${hasGuide ? `\n${styleText('cyan', S_BAR_END)}` : ''}`
       return `${title}${prefix}${lines.join(`\n${prefix}`)}\n${footer}\n`
     },
   }).prompt() as Promise<Value[] | symbol>
