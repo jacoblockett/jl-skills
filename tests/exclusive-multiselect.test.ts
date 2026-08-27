@@ -78,23 +78,20 @@ describe('installer option presentation', () => {
     expect(source).not.toContain('prompts.confirm(')
   })
 
-  test('custom prompt footers use the accepted one-line glyph vocabulary', () => {
+  test('custom prompt footers use explicit key names except for navigation arrows', () => {
     const repo = resolve(import.meta.dir, '..')
     const multiselect = readFileSync(join(repo, 'src', 'exclusive-multiselect.ts'), 'utf8')
     const navigation = readFileSync(join(repo, 'src', 'nav-prompts.ts'), 'utf8')
-    for (const glyph of ['↑/↓', '↵', '←', '⎋']) {
-      expect(multiselect).toContain(glyph)
-      expect(navigation).toContain(glyph)
+
+    for (const text of ['↑/↓', 'Enter', 'Backspace', 'Esc']) {
+      expect(multiselect).toContain(text)
+      expect(navigation).toContain(text)
     }
-    expect(multiselect).toContain('␣')
-    expect(multiselect).toContain('A')
-    expect(multiselect).not.toContain('⌫')
-    expect(multiselect).not.toContain('␛')
-    expect(navigation).not.toContain('⌫')
-    expect(navigation).not.toContain('␛')
-    expect(multiselect).not.toContain('Space:')
-    expect(multiselect).not.toContain('Enter:')
-    expect(multiselect).not.toContain('Backspace:')
-    expect(multiselect).not.toContain('Esc:')
+    for (const text of ['Space', 'A']) expect(multiselect).toContain(text)
+
+    for (const glyph of ['␣', '↵', '←', '⎋', '⌫', '␛']) {
+      expect(multiselect).not.toContain(glyph)
+      expect(navigation).not.toContain(glyph)
+    }
   })
 })
