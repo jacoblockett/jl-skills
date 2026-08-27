@@ -766,13 +766,20 @@ This action will uninstall the jl-skills installer and any associated installer-
 
 Then use the standard safe-default `Continue?` confirmation.
 
-After confirmation:
+After the user confirms Yes, the foreground `jl-skills` process delegates the entire installer-owned cleanup request to a silent detached helper and exits immediately. The foreground process must not print `scheduled`, `complete`, success, failure, or any other post-confirmation status.
 
-- remove actual installer-owned data if present;
-- schedule deletion of the running Windows executable after it exits;
-- preserve installed skills and self-reported metadata;
-- preserve skill-specific shared support/runtime directories such as `~/.jl-skills/map/...`;
-- preserve all generated project data.
+The helper waits long enough for the foreground process to release the executable, then removes:
+
+- actual installer-owned data if present;
+- the installer executable itself.
+
+The helper must use ignored stdio and must not present a visible helper shell/window. The same lifecycle applies on Windows and Unix-like platforms, with platform-native cleanup commands hidden behind the same user-visible behavior.
+
+The helper must preserve:
+
+- installed skills and self-reported metadata;
+- skill-specific shared support/runtime directories such as `~/.jl-skills/map/...`;
+- all generated project data.
 
 Do not describe or delete a nonexistent central installer registry.
 
@@ -873,7 +880,8 @@ Regression coverage includes at least:
 - skill-generated-data bounded deletion;
 - offline installer updater metadata/version/hash/staging behavior;
 - release-manifest hash matching the built executable;
-- installer self-uninstall preservation boundaries.
+- installer self-uninstall preservation boundaries;
+- installer self-uninstall silent delegated cleanup with no post-confirmation foreground status.
 
 Manual UI smoke may exercise a real-looking skill update without publishing a new release by installing the current bundled skill into the isolated UI-smoke project, deliberately lowering only that installed copy's self-reported metadata version, and then running the compiled installer Update Skills flow against the same project.
 
