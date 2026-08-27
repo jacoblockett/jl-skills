@@ -60,44 +60,39 @@ Project-wide confirmation behavior:
 
 This applies to installation, update, skill uninstall, generated-data deletion, installer update, and installer uninstall confirmations.
 
-## 3. Instruction injection must be per harness and per selected skill
+## 3. Instruction injection must support a selected-skill subset
 
-Current implementation is not generalized enough. It currently reduces instruction injection to one boolean that is applied across all selected skills and all selected harnesses.
+The current implementation is already generalized in its text: it derives the displayed skill names from the selected skill list and the instruction filenames from the selected harness list. It only appears Map-specific today because Map is currently the only catalog skill/selected skill.
 
-Replace that model.
+The actual problem is control granularity. The current implementation reduces instruction injection to one boolean, so either every selected skill is injected into every selected harness instruction file or none are.
+
+Replace that boolean with one multiselect over the skills the user already selected for installation.
 
 Required interactive behavior:
 
 1. User selects skills.
 2. User selects one or more AI harnesses.
-3. For each selected harness/instruction file, present a multiselect containing only the skills selected in step 1.
-4. Ask which of those selected skills should have managed instructions injected into that harness's instruction file.
-5. Each such multiselect starts with nothing selected on first entry.
-6. Returning to a previously visited harness instruction step restores the prior submitted subset.
+3. Present one multiselect containing only the selected skills.
+4. Ask which of those skills should have managed instructions injected into the instruction files belonging to all selected harnesses.
+5. The multiselect starts with nothing selected on first entry.
+6. Returning to the step restores the prior submitted subset.
+7. The same selected subset is applied uniformly across every selected harness instruction file. Do not create a harness-by-harness matrix.
+8. Even when only one skill is selected, retain the generalized multiselect instead of collapsing into a Map-specific or one-off binary question.
 
-Examples:
+Example with Codex and Claude selected:
 
 ```text
-Which skills would you like to add to AGENTS.md?
+Which skills would you like to add to AGENTS.md and CLAUDE.md?
 
 [ ] Map
 [ ] Another Skill
 ```
 
-and separately:
+If only one harness is selected, name only its applicable instruction file.
 
-```text
-Which skills would you like to add to CLAUDE.md?
+All surrounding explanatory copy and note content must derive from the selected skills/files rather than hardcoding Map. The installation summary must reflect the selected injection subset and the affected instruction files.
 
-[ ] Map
-[ ] Another Skill
-```
-
-The implementation must support the full skill × harness matrix. Do not special-case Map merely because it is currently the only catalog skill.
-
-The installation summary must reflect the actual per-file/per-skill injection choices rather than one global Yes/No state.
-
-Update must preserve the actual managed-block state independently for each installed skill/harness pair unless explicitly changed. Uninstall removes only the managed block for the selected skill/harness pair.
+Update must preserve the actual existing managed-block state for installed skill/harness targets unless a future explicit update control changes it. Uninstall removes only the matching managed block for the selected skill/harness target.
 
 ## 4. Note-block title casing and naming
 
@@ -120,22 +115,23 @@ Do not use sentence-case note titles such as `Installation summary`, `Update sum
 
 The current installer-uninstall summary is overexplained.
 
-Remove the current summary block that always lists:
+Remove the current summary block that lists:
 
 - installer executable;
-- `Installer-owned data: None detected.`;
+- installer-owned data state/path;
 - a `Preserved` list.
 
 Preferred flow:
 
-- Present a concise warning message such as: `This action will uninstall the jl-skills installer and any associated installer-owned data and tooling.`
-- If installer-owned data actually exists, identify the concrete data/path that will also be removed.
-- If no installer-owned data exists, do not tell the user that none was detected.
+- Present one concise warning such as: `This action will uninstall the jl-skills installer and any associated installer-owned data and tooling.`
+- Do not enumerate the executable path.
+- Do not enumerate installer-owned data paths even when such data exists.
+- Do not say that no installer-owned data was detected.
 - Do not list obvious preserved items merely to reassure the user.
 - Follow the warning with the standard `Continue?` Yes/No selection.
 - Do not rewrite the confirmation as `Permanently uninstall the jl-skills installer?` or similarly heightened wording.
 
-The operation should remove only the installer executable and actual installer-owned data/tooling. Installed skills, skill runtime/tooling, and skill-generated project data remain untouched by implementation, but the UI does not need to enumerate that obvious preservation on this screen.
+The implementation still removes only the installer executable and actual installer-owned data/tooling. Installed skills, skill runtime/tooling, and skill-generated project data remain untouched, but that preservation does not need to be narrated on this screen.
 
 ## 6. Add `Update jl-skills installer`
 
@@ -183,7 +179,7 @@ Required update semantics:
 - Compare installed self-reported metadata to the catalog version.
 - Update the actual installed `SKILL.md` and every other manifest-declared skill asset for the selected installed harness targets.
 - Update declared runtime/support assets where appropriate.
-- Preserve each skill/harness instruction-injection choice unless explicitly changed.
+- Preserve actual existing instruction-injection state for each installed target unless an explicit future control changes it.
 - Never add a new harness during Update; adding another harness belongs to Install.
 - Never initialize or mutate skill-generated semantic/project data.
 - Keep updates scoped to the selected scope and selected skills.
@@ -232,7 +228,7 @@ Before PR #8 is considered ready:
 
 1. Implement the navigation glyph/footer and spacing changes.
 2. Replace all project confirmation prompts with the standard line-oriented Yes/No selector.
-3. Generalize instruction injection to per-harness/per-skill selection.
+3. Replace global instruction injection Yes/No with one generalized selected-skill multiselect applied across all selected harness instruction files.
 4. Normalize note titles and simplify installer-uninstall UX.
 5. Design and implement `Update jl-skills installer` with deterministic updater tests.
 6. Strengthen `Update Skills` regression coverage around an actual stale installed skill/version/content.
