@@ -13,7 +13,8 @@ import {
   type InstallerUpdate,
 } from '../src/installer-updater'
 
-const scratch = resolve(import.meta.dir, '..', 'build', 'installer-updater-tests')
+const repo = resolve(import.meta.dir, '..')
+const scratch = join(repo, 'build', 'installer-updater-tests')
 
 function reset(name: string): string {
   const root = join(scratch, name)
@@ -27,7 +28,7 @@ function sha256(data: Uint8Array | string): string {
 }
 
 function fixtureFetcher(manifest: unknown, artifact: Uint8Array | string = 'replacement-exe'): typeof fetch {
-  return (async (input: RequestInfo | URL) => {
+  return (async (input: any) => {
     const url = String(input)
     if (url === 'https://fixture.invalid/manifest.json') {
       return new Response(JSON.stringify(manifest), {
@@ -53,6 +54,19 @@ describe('installer update metadata', () => {
       version: '0.6.0',
       artifacts: { 'windows-x64': { url: 'x', sha256: 'bad' } },
     })).toThrow('invalid SHA-256')
+  })
+
+  test('release build emits a manifest matching the built executable', () => {
+    const executable = join(repo, 'build', 'jl-skills.exe')
+    const manifestPath = join(repo, 'build', 'jl-skills-manifest.json')
+    expect(existsSync(executable)).toBe(true)
+    expect(existsSync(manifestPath)).toBe(true)
+
+    const manifest = parseInstallerUpdateManifest(JSON.parse(readFileSync(manifestPath, 'utf8')))
+    const artifact = manifest.artifacts['windows-x64']
+    expect(artifact).toBeDefined()
+    expect(artifact.sha256).toBe(sha256(readFileSync(executable)))
+    expect(artifact.url).toContain(`/releases/download/v${manifest.version}/jl-skills.exe`)
   })
 
   test('no-update path returns null for equal or older releases', async () => {
