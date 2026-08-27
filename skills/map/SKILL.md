@@ -1,183 +1,168 @@
 ---
 name: map
-description: Durable local graph for preserving and clarifying user intent across conversations.
+description: Define, clarify, and persist durable user intent in the local Map graph. Use when explicitly invoked as $map; ordinary agents may query Map without invoking this workflow.
 ---
 <!-- jl-skills-meta: {"name":"map","version":"0.2.0","format":1} -->
 
 # Map
 
-Use `map` to persist semantic state for work whose intent, questions, decisions, facts, or parked ideas need to survive context loss or be queried later.
+Map is the interactive editor for durable intent. It never implements the mapped work.
+Use this workflow when the user explicitly invokes `$map` or explicitly asks to start/resume Map clarification.
 
-Map is authoritative structured state. Do not read or modify `.map/db` directly and do not execute SurrealQL as a substitute for the CLI.
+The authoritative semantic state is the selected `.map` graph. Session state is recovery only.
+Never read or modify `.map/db` directly and never use SurrealQL instead of the CLI.
 
-## Location
+## Runtime invariants
 
-Use the Map selected by:
+1. Preserve user intent. Never invent requirements, decisions, facts, or rationale.
+2. Ask only decisions that can materially affect the requested outcome at the effective depth/stance. Prefer safe inference and downstream freedom over interrogation.
+3. Five questions is a cap, never a quota.
+4. Facts are contextual evidence; decisions are choices. Do not ask the user for externally knowable facts when they can be established safely.
+5. Children run serially. Consume and close each child before spawning another. Children never spawn children.
+6. Use subagents at semantic transaction boundaries, not for CLI clerical work.
+7. Spawn prompts contain only dynamic arguments/evidence. The installed agent definition owns its semantic contract.
+8. One semantic repair cycle maximum per reviewed transaction. No reviewer/worker ping-pong.
+9. Persist recovery state before exposing resumable work. Clear pending only after its semantic consequence is durably verified.
+10. `explored` and `closed` are explicit. Never infer either from question count.
+11. Do not implement, plan implementation, create tasks, export to Beads/Jira/etc., or turn Map into a task tracker.
 
-```text
-map [--path PATH] [--config PATH] <command>
-```
+## Required specialists
 
-Normal commands require an existing `.map`. Do not initialize one merely because the skill is installed. Initialize only when Map is actually being started for the target project:
+The skill bundles seven specialist role contracts under `agents/`:
 
-```bash
-map init
-```
+- `map-state-writer`
+- `map-state-reviewer`
+- `map-discovery`
+- `map-discovery-reviewer`
+- `map-linguist`
+- `map-context`
+- `map-completion-auditor`
 
-Use `map status` to verify the resolved Map before semantic work when location is uncertain.
+Each contract is `agents/<role>.toml`, resolved relative to this `SKILL.md`. The TOML is a bundled role contract, not a requirement that the host register it globally. A fresh child must read its `developer_instructions` before doing the delegated work.
 
-## Semantic model
+For each specialist stage, spawn one fresh child and instruct that child to load and obey its exact bundled role contract, then provide only the dynamic arguments/evidence required by that stage. Do not inline, paraphrase, or expand the role contract into the parent prompt. Close the child after consuming its result.
 
-Kinds:
+If a required child cannot run or cannot load its role contract, fail that stage closed. Do not replace its semantic judgment with the parent thread.
 
-```text
-intent    what the user wants to achieve/define/resolve
-question  an unresolved question discovered while clarifying an intent
-decision  an actual answer/choice
-idea      a parked non-binding possibility
-fact      established contextual information
-```
+Normal fresh flow with no external context need should normally use three children before questions: State Writer, Discovery, Discovery Reviewer. Linguist is a fourth child only when needed.
 
-There are no constraint/criterion nodes and no generic `related_to` edge.
+## CLI
 
-Questions do not store answers. A current non-abandoned decision attached to a question is its answer.
-
-## Discovery controls
-
-A Map stores:
-
-```text
-depth:  mvp | thorough
-stance: normal | adversarial
-```
-
-An intent may store fields with the same names. If present, they override the Map values; if absent, the intent inherits them.
-
-`explored=true` means only that an LLM has examined/reasoned about the intent at least once. Never infer it from question count or answers.
-
-`closed=true` means discovery is sufficiently complete for the effective depth/stance and runtime closure invariants hold. Adding new unresolved structure may reopen a closed intent without changing `explored`.
-
-After actually examining an intent:
-
-```bash
-map set <intent> explored true
-```
-
-Close only when the intent is actually ready:
-
-```bash
-map set <intent> close true
-```
-
-## Creation
+Use the installer-provisioned CLI:
 
 ```text
-map create intent <intent> [--context CONTEXT] [--depth DEPTH] [--stance STANCE]
-map create question <question> --intent <intent-id> [--reason REASON]
-map create decision <decision> [--question ID] [--source user|assistant]
-    [--assistant-reasoning REASONING] [--notes NOTES] [--soft]
-map create idea <idea>
-map create fact <fact> [--made-by user|assistant]
+{{JL_MAP_CLI}}
 ```
 
-Assistant decisions require `--assistant-reasoning`. User decisions must not carry assistant reasoning.
-
-`--soft` is a usable but deliberately revisit-worthy decision. Soft decisions answer questions normally but prevent closing affected intents until hardened:
-
-```bash
-map set <decision> soft false
-```
-
-## Relationships
+Global form:
 
 ```text
-map relate <source> <target...> [--dependent]
-map unrelate <source> <target...> [--dependent]
+{{JL_MAP_CLI}} [--path PATH] [--config PATH] <command>
 ```
 
-Do not invent relation names. Legal shapes are inferred:
+Use `status`, `context`, `show`, `get`, `search`, `history`, and `validate` for reads. Use `--help` for exact command flags instead of memorizing unnecessary grammar.
 
-```text
-intent   -> question             attachment
-question -> decision             answer
-intent   -> decision             direct decision
-intent   -> intent               sub-intent
-intent   -> intent --dependent   intent dependency
-question -> question --dependent question dependency
-any      -> fact                 fact context
-any      -> idea                 idea context
-```
+Normal commands require an existing Map. Do not initialize one merely because the skill is installed.
 
-Dependency direction is `SOURCE depends on TARGET`. Intent and question dependency graphs are acyclic.
+## Start or resume
 
-## Mutation and history
+1. Resolve the intended Map and run `status` when one exists.
+2. If a recovery session exists, inspect session pending/exchange plus authoritative graph state before doing unrelated new Map work. Never blindly replay pending work.
+3. Briefly state your understanding of the requested outcome and effective `mvp|thorough` depth plus `normal|adversarial` stance. Ask for correction/confirmation before first authoritative mutation for a new direction.
+4. If no Map exists and the user confirms they are starting one here, run `init`. Do not initialize any other path by inference.
+5. Ensure a session exists for substantive Map conversation. Record exact user/assistant exchanges as required by the session-first persistence invariant.
 
-Small state/config changes use:
+If the user is only querying an existing Map rather than editing/clarifying it, answer from read-only Map state and do not start the full discovery workflow unnecessarily.
 
-```text
-map set depth <mvp|thorough>
-map set stance <normal|adversarial>
-map set <id> <property> <value>
-```
+## Optional context transaction
 
-Do not use `set` as a generic content editor.
+Use `map-context` only when repository/environment/external context materially affects the focused intent.
+Pass the exact authorized context scope and focus. Reuse its compact report for the current semantic transaction.
+Skip it when Map state and user evidence are sufficient.
 
-Replace semantic content through explicit nodes:
+Context evidence may establish facts. It never silently becomes user intent.
 
-```bash
-map replace <old> <new> --reason REASON
-```
+## Baseline semantic transaction
 
-Normal replacement retains history. `--in-place` is destructive: the new node takes the old graph position and the old node is physically removed.
+Before Discovery, confirmed concrete direction must exist as durable Map semantic state.
 
-Abandonment retains the node but removes it from normal current work:
+For a new direction or a material direction correction:
 
-```bash
-map abandon <id> --by user|assistant --reason REASON
-```
+1. Persist the recovery checkpoint first.
+2. Spawn `map-state-writer` with `MODE: BASELINE` or `MODE: DIRECTION_CORRECTION`, Map path, confirmed source evidence, and optional context report.
+3. Close it.
+4. Run `validate` and inspect the affected intent/context.
+5. If mechanical validation fails, allow one State Writer repair with the exact defect. If it still fails, stop and report the blocker.
 
-Physical deletion is stronger:
+Normal baseline does not use State Reviewer. Concrete confirmed direction must produce at least one durable intent unless doing so would require inventing the user's objective.
 
-```bash
-map delete <id...> [--force]
-```
+## Discovery batch
 
-If deletion affects graph relationships, first surface the impact to the user; only retry with `--force` after confirmation. Forced delete removes selected nodes and incident edges only. Do not invent cascades.
+For each focused non-closed intent needing exploration:
 
-## Reading
+1. Read its compact `context` and effective depth/stance.
+2. Spawn `map-discovery` once with Map path, focus intent IDs, optional context report, and optional audit focus.
+3. Close it.
+4. Spawn `map-discovery-reviewer` once with the whole candidate batch and exhaustion claim.
+5. Close it.
+6. Persist only reviewer-approved questions, using their exact approved semantic decision and reason. Do not create nodes for rejected/duplicate/already-settled candidates.
+7. If wording help is requested by Reviewer, run `map-linguist` once for that subset and use its returned wording exactly.
+8. Mark the focused intent `explored=true` after it has actually been examined.
+9. Before presenting questions, append the exact assistant message to session exchange and set session pending to the question IDs/text being exposed.
+10. Mark each presented question `asked=true`, then present the approved batch together.
 
-Normal retrieval is current-state oriented and excludes abandoned/history unless requested.
+Discovery standards:
+- material ambiguity only
+- no arbitrary quota
+- semantic duplicates do not become new questions
+- dependent questions wait for prerequisites
+- optional capabilities default out once direction is concrete
+- postponable implementation choices stay open
+- adversarial stance challenges assumptions rather than merely increasing question count
+- `EXHAUSTED` means no additional worthwhile decision belongs in the current pass; fewer than five is correct
 
-```text
-map get intents ...
-map get questions ...
-map get decisions ...
-map get ideas ...
-map get facts ...
-map show <id...>
-map context <id>
-map search <query> [--limit N] [--include-history]
-map history <id> [--limit N]
-map validate
-```
+If zero candidates are approved and Reviewer rejects exhaustion, allow one focused Discovery+Reviewer retry. If the same gap remains, surface that gap instead of looping.
 
-`map get questions` returns unanswered dependency-ready questions by default. Use `--include-blocked` when blocked questions are also needed. Use `--answered` to include answered questions.
+## Answers and semantic persistence
 
-`map context <id>` is the preferred compact local read when an agent needs the requested node plus its material current neighborhood.
+When the user answers:
 
-`map validate` is read-only and non-repairing. Treat reported invariant errors as a blocker to further semantic mutation until understood.
+1. Append the exact user message to session exchange. Keep pending intact.
+2. Preserve the approved question text, materially relevant clarification, and user answer without strengthening or generalizing it.
+3. Spawn `map-state-writer` with `MODE: DECISIONS`, the exact evidence packet, Map path, and optional context report.
+4. Close Writer. Spawn `map-state-reviewer` once with the same evidence plus Writer's affected IDs/result.
+5. Close Reviewer.
+6. On PASS, run `validate`, verify affected context, update the session summary, and clear only pending work whose semantic consequence is durable.
+7. On FAIL, allow one fresh Writer+Reviewer repair using the original evidence plus exact deficiencies. If it fails again, stop and report the defects with pending intact.
+8. Return to Discovery using refreshed Map state.
+
+User decisions use user provenance. Assistant decisions require explicit assistant reasoning and must be soft when deliberately revisit-worthy. Never hide assistant inference as a user decision.
+
+## Completion
+
+When reviewed Discovery is exhausted and no current unanswered material question remains for the focused intent, spawn `map-completion-auditor` once.
+
+- PASS: mechanically attempt `map set <intent> close true` for each auditor-approved focus intent. Runtime closure invariants remain authoritative.
+- FAIL: allow one focused Discovery batch using the auditor's unresolved material areas. If the same blocker remains, surface it.
+
+Closing an intent is not permanent. Later requirements may reopen affected state through normal Map semantics.
+
+## Parent-owned mechanics
+
+The parent owns CLI bookkeeping that does not require fresh semantic judgment:
+
+- path/status resolution
+- session init/exchange/summary/pending/end bookkeeping
+- exact persistence of reviewer-approved questions
+- stable returned IDs and command-result tracking
+- `asked`, `explored`, and auditor-approved `close` operations when their semantic precondition was established by the workflow
+- validation and exact readback
+- retry counting
+- serial child lifecycle
+
+The parent must not replace Discovery, Reviewer, Linguist, State Writer/Reviewer, Context, or Completion Auditor semantic work with its own improvised substitute.
 
 ## Recovery invariant
-
-Session state is conversational recovery, not semantic truth:
-
-```text
-map session init
-map session summary [new_summary]
-map session exchange [-u MESSAGE | -a MESSAGE] [--depth N]
-map session pending [new_pending | --clear]
-map session end [--force]
-```
 
 For substantive Map conversation:
 
@@ -187,6 +172,10 @@ B. Apply and verify semantic mutations.
 C. Clear pending only after B is durable.
 ```
 
-On explicit Map invocation, if a recovery session already exists, reconcile it before starting unrelated new Map work. Never blindly replay pending work; inspect the authoritative graph first.
+A crash between mutation and pending clear recovers by comparing pending/exchange against authoritative graph state, never by blind replay.
 
-Summary is capped at 2200 Unicode characters. Write it in concise Classical Chinese; preserve material names, identifiers, technical terms, decisions, uncertainty, rationale, jargon, quotations, user-specific wording, and anything that cannot be safely translated without semantic loss. Recent exchange entries are exact raw messages.
+## Completion boundary
+
+Map clarification for an intent is complete when its effective depth/stance has been genuinely explored, no material current question remains unresolved, runtime closure invariants hold, and `closed=true` succeeds.
+
+Sufficient definition is the target, not maximal specification.

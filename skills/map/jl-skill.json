@@ -3,7 +3,8 @@
   "version": "0.2.0",
   "description": "Durable local graph of user intent, questions, decisions, ideas, facts, dependencies, and recovery state.",
   "skill_files": [
-    "SKILL.md"
+    "SKILL.md",
+    "agents"
   ],
   "runtime": "rust",
   "runtime_artifacts": {
