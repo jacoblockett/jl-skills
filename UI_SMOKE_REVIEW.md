@@ -45,14 +45,14 @@ Replace spelled-out key names with compact Unicode key symbols:
 
 ```text
 ↑/↓  navigate
-␠    select        U+2420 SYMBOL FOR SPACE
+␣    select        U+2423 OPEN BOX
 ↵    confirm       U+21B5 DOWNWARDS ARROW WITH CORNER LEFTWARDS
 A    toggle all
 ⌫    back          U+232B ERASE TO THE LEFT
 ␛    exit          U+241B SYMBOL FOR ESCAPE
 ```
 
-`␠` is the preferred space glyph.
+`␣` is the preferred Space glyph.
 
 Required presentation:
 
@@ -66,7 +66,7 @@ Required presentation:
 Multiselect footer shape:
 
 ```text
-↑/↓ navigate • ␠ select • ↵ confirm • A toggle all • ⌫ back • ␛ exit
+↑/↓ navigate • ␣ select • ↵ confirm • A toggle all • ⌫ back • ␛ exit
 ```
 
 Single-select/binary footer shape:
