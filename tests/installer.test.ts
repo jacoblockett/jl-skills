@@ -365,7 +365,7 @@ describe('jl-skills installer scope regressions', () => {
 
     ok(update(s.project, s))
 
-    expect(read(join(skillDir, 'SKILL.md')).toContain(metadata)
+    expect(read(join(skillDir, 'SKILL.md'))).toContain(metadata)
     expect(existsSync(sharedMap(s.home))).toBe(true)
     expect(read(join(s.project, 'AGENTS.md'))).toBe('MANUAL CONTENT\n')
     expect(existsSync(installerRegistry(s))).toBe(false)
@@ -414,7 +414,7 @@ describe('jl-skills installer scope regressions', () => {
     expect(existsSync(join(s.project, '.agents', 'skills', 'map'))).toBe(false)
     expect(existsSync(join(s.project, '.claude', 'skills', 'map', 'SKILL.md'))).toBe(true)
     expect(existsSync(join(s.project, 'AGENTS.md'))).toBe(false)
-    expect(read(join(s.project, 'CLAUDE.md')).toContain(begin)
+    expect(read(join(s.project, 'CLAUDE.md'))).toContain(begin)
     expect(existsSync(installerRegistry(s))).toBe(false)
   })
 })
