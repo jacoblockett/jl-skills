@@ -2,14 +2,17 @@ export type InstalledInstallTarget = {
   skill: string
   agent: string
   version: string
+  instructions: boolean
 }
 
 export type InstallTargetState = {
   skill: string
   agent: string
   availableVersion: string
+  requestedInstructions: boolean
   installedVersion?: string
-  state: 'missing' | 'current' | 'stale'
+  installedInstructions?: boolean
+  state: 'missing' | 'satisfied' | 'configure' | 'stale'
 }
 
 export type StaleSkill = {
@@ -34,7 +37,7 @@ function compareVersions(a: string, b: string): number | undefined {
   return 0
 }
 
-function installedState(installedVersion: string, availableVersion: string): 'current' | 'stale' {
+function versionState(installedVersion: string, availableVersion: string): 'current' | 'stale' {
   if (installedVersion === 'unknown') return 'stale'
   const comparison = compareVersions(installedVersion, availableVersion)
   if (comparison === undefined) return installedVersion === availableVersion ? 'current' : 'stale'
@@ -45,6 +48,7 @@ export function classifyInstallTargets(
   skills: string[],
   agents: string[],
   availableVersions: Record<string, string>,
+  requestedInstructions: Record<string, boolean>,
   installedTargets: InstalledInstallTarget[],
 ): InstallTargetState[] {
   const installed = new Map(
@@ -55,23 +59,54 @@ export function classifyInstallTargets(
   for (const skill of skills) {
     const availableVersion = availableVersions[skill]
     if (!availableVersion) throw new Error(`missing available version for ${skill}`)
+    const wantedInstructions = requestedInstructions[skill] ?? false
+
     for (const agent of agents) {
       const target = installed.get(`${skill}\u0000${agent}`)
       if (!target) {
-        result.push({ skill, agent, availableVersion, state: 'missing' })
+        result.push({
+          skill,
+          agent,
+          availableVersion,
+          requestedInstructions: wantedInstructions,
+          state: 'missing',
+        })
         continue
       }
+
+      const installedVersionState = versionState(target.version, availableVersion)
+      const state = installedVersionState === 'stale'
+        ? 'stale'
+        : target.instructions === wantedInstructions
+          ? 'satisfied'
+          : 'configure'
+
       result.push({
         skill,
         agent,
         availableVersion,
+        requestedInstructions: wantedInstructions,
         installedVersion: target.version,
-        state: installedState(target.version, availableVersion),
+        installedInstructions: target.instructions,
+        state,
       })
     }
   }
 
   return result
+}
+
+export function satisfiedSkills(targets: InstallTargetState[]): string[] {
+  const bySkill = new Map<string, InstallTargetState[]>()
+  for (const target of targets) {
+    const group = bySkill.get(target.skill) ?? []
+    group.push(target)
+    bySkill.set(target.skill, group)
+  }
+  return [...bySkill.entries()]
+    .filter(([, group]) => group.length > 0 && group.every((target) => target.state === 'satisfied'))
+    .map(([skill]) => skill)
+    .sort()
 }
 
 export function staleSkills(targets: InstallTargetState[]): StaleSkill[] {
