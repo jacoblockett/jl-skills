@@ -122,16 +122,19 @@ export async function stageInstallerUpdate(
   }
 }
 
+export function windowsReplacementCommand(staged: string, executable: string): string {
+  const stagedEscaped = staged.replaceAll('"', '""')
+  const executableEscaped = executable.replaceAll('"', '""')
+  return `ping 127.0.0.1 -n 2 >nul & move /y "${stagedEscaped}" "${executableEscaped}" >nul`
+}
+
 export function scheduleInstallerReplacement(staged: string, executable: string): void {
   if (platform() !== 'win32') {
     renameSync(staged, executable)
     return
   }
 
-  const stagedEscaped = staged.replaceAll('"', '""')
-  const executableEscaped = executable.replaceAll('"', '""')
-  const command = `ping 127.0.0.1 -n 2 >nul & move /y "${stagedEscaped}" "${executableEscaped}" >nul`
-  const child = spawn('cmd.exe', ['/d', '/s', '/c', command], {
+  const child = spawn('cmd.exe', ['/d', '/s', '/c', windowsReplacementCommand(staged, executable)], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
