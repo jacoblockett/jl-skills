@@ -68,12 +68,29 @@ describe('exclusive multiselect keyboard policy', () => {
 })
 
 describe('installer option presentation', () => {
-  test('installer source does not use Clack option hints or navigation pseudo-options', () => {
+  test('installer source does not use Clack option hints, pseudo-options, or inline confirmations', () => {
     const repo = resolve(import.meta.dir, '..')
     const source = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8')
     expect(source).not.toContain('hint:')
     expect(source).not.toContain("label: 'All of the above'")
     expect(source).not.toContain("label: 'Go back'")
     expect(source).not.toContain("label: 'Cancel & exit'")
+    expect(source).not.toContain('prompts.confirm(')
+  })
+
+  test('custom prompt footers use the accepted one-line glyph vocabulary', () => {
+    const repo = resolve(import.meta.dir, '..')
+    const multiselect = readFileSync(join(repo, 'src', 'exclusive-multiselect.ts'), 'utf8')
+    const navigation = readFileSync(join(repo, 'src', 'nav-prompts.ts'), 'utf8')
+    for (const glyph of ['↑/↓', '↵', '⌫', '␛']) {
+      expect(multiselect).toContain(glyph)
+      expect(navigation).toContain(glyph)
+    }
+    expect(multiselect).toContain('␠')
+    expect(multiselect).toContain('A')
+    expect(multiselect).not.toContain('Space:')
+    expect(multiselect).not.toContain('Enter:')
+    expect(multiselect).not.toContain('Backspace:')
+    expect(multiselect).not.toContain('Esc:')
   })
 })
