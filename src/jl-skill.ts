@@ -16,6 +16,7 @@ import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:pa
 import { Buffer } from 'node:buffer'
 import { catalog } from './catalog.generated'
 import { exclusiveMultiselect, type ExclusiveOption } from './exclusive-multiselect'
+import { classifyInstallTargets, staleSkills, type InstallTargetState } from './install-preflight'
 import { BACK_SIGNAL, navSelect, navText, type NavOption } from './nav-prompts'
 import {
   checkInstallerUpdate,
@@ -615,6 +616,20 @@ function updateStatus(group: InstallGroup): string {
   return `${installedVersions(group).join(' / ')} → ${available}`
 }
 
+function installPreflight(scope: Scope, skills: string[], agents: string[]): InstallTargetState[] {
+  const availableVersions = Object.fromEntries(skills.map((skill) => [skill, loadManifest(skill).version]))
+  const installedTargets = discoverInstallations(scope).flatMap((group) => group.targets.map((target) => ({
+    skill: group.skill,
+    agent: target.agent,
+    version: target.version,
+  })))
+  return classifyInstallTargets(skills, agents, availableVersions, installedTargets)
+}
+
+function staleInstallLabel(group: ReturnType<typeof staleSkills>[number]): string {
+  return `${displaySkillName(group.skill)}  ${group.installedVersions.join(' / ')} → ${group.availableVersion}`
+}
+
 function runtimePlatformKey(): string {
   if (platform() === 'win32' && arch() === 'x64') return 'windows-x64'
   if (platform() === 'linux' && arch() === 'x64') return 'linux-x64'
@@ -743,11 +758,7 @@ async function chooseInstallSkills(
   stepId: string,
   allowBack = true,
 ): Promise<NavResult<string[]>> {
-  const installed = new Set(
-    discoverInstallations(scope)
-      .filter((group) => agentCatalog.every((agent) => group.targets.some((target) => target.agent === agent.id)))
-      .map((group) => group.skill),
-  )
+  void scope
   return chooseMany(
     state,
     stepId,
@@ -755,8 +766,6 @@ async function chooseInstallSkills(
     catalogManifests().map((item) => ({
       value: item.name,
       label: displaySkillName(item.name),
-      disabled: installed.has(item.name),
-      disabledSuffix: installed.has(item.name) ? ' (installed)' : undefined,
     })),
     { allowBack },
   )
@@ -795,12 +804,10 @@ function instructionFiles(agents: string[], scope: Scope): string[] {
 function instructionExplanation(agents: string[], scope: Scope): { title: string; body: string } {
   const files = instructionFiles(agents, scope)
   const fileText = humanList(files)
-  const noun = files.length === 1 ? 'file contains' : 'files contain'
-  const ending = files.length === 1 ? 'the rest of the file' : 'the rest of those files'
-  return {
-    title: 'About AI Instruction Files',
-    body: `${fileText} ${noun} general instructions that your selected AI tools read automatically. jl-skills can add managed sections for whichever skills you choose below without changing ${ending}.`,
-  }
+  const body = files.length === 1
+    ? `The ${fileText} file contains general instructions that your selected AI tool reads automatically. jl-skills can add managed sections for whichever skills you choose below without changing the rest of the file.`
+    : `${fileText} files contain general instructions that your selected AI tools read automatically. jl-skills can add managed sections for whichever skills you choose below without changing the rest of those files.`
+  return { title: 'About AI Instruction Files', body }
 }
 
 async function chooseInstructionInjection(
@@ -834,9 +841,10 @@ function installationSummary(
   const skillNames = skills.map(displaySkillName)
   const harnessNames = agents.map((id) => agentLabel(id, allAgents))
   const files = instructionFiles(agents, scope)
-  const injection = injectedSkills.length > 0
-    ? `${injectedSkills.map(displaySkillName).join(', ')} → ${files.join(', ')}`
-    : 'None'
+  const injectedNames = injectedSkills.map(displaySkillName)
+  const injectionLines = injectedNames.length > 0
+    ? files.map((file) => `${file} → ${injectedNames.join(', ')}`)
+    : ['None']
   return [
     'Skills to install',
     indentedCommaList(skillNames),
@@ -848,7 +856,7 @@ function installationSummary(
     indentedCommaList(harnessNames),
     '',
     'Instruction injection',
-    indentedLineList([injection]),
+    indentedLineList(injectionLines),
   ].join('\n')
 }
 
@@ -927,55 +935,131 @@ async function installAtScope(
         continue skillStep
       }
 
-      instructionStep:
+      preflightStep:
       while (true) {
-        let injectedSkills: string[]
-        if (instructionOverride === true) injectedSkills = [...selectedSkills]
-        else if (instructionOverride === false) injectedSkills = []
-        else if (askInstructions && process.stdin.isTTY) {
-          const choice = await chooseInstructionInjection(
-            state,
-            `${stepPrefix}.instructions`,
-            agentChoice.values,
-            scope,
-            selectedSkills,
-            true,
-          )
-          if (choice === BACK_SIGNAL) continue agentStep
-          injectedSkills = choice
-        } else injectedSkills = []
+        let plannedStates: InstallTargetState[] | undefined
+        let approvedStaleSkills = new Set<string>()
+        let stalePrompted = false
 
-        const prompted = !!process.stdin.isTTY && (
-          skills.length === 0
-          || explicitAgents.length === 0
-          || (askInstructions && instructionOverride === undefined)
-        )
+        if (process.stdin.isTTY) {
+          plannedStates = installPreflight(scope, selectedSkills, agentChoice.values)
+          const stale = staleSkills(plannedStates)
+          stalePrompted = stale.length > 0
 
-        if (prompted) {
-          prompts.note(
-            installationSummary(scope, selectedSkills, agentChoice.values, injectedSkills, agentChoice.all),
-            'Installation Summary',
-          )
-          const proceed = await chooseConfirmation(state, `${stepPrefix}.confirm`, { allowBack: true })
-          if (proceed === BACK_SIGNAL || !proceed) continue instructionStep
-        } else {
-          console.log(`Scope: ${scope.identity}`)
-          console.log(`Agents: ${agentChoice.values.join(', ')}`)
-          console.log(`Skills: ${selectedSkills.join(', ')}`)
-          console.log(`Instruction skills: ${injectedSkills.join(', ') || 'none'}`)
+          if (stalePrompted) {
+            prompts.log.warn('Some selected skills are already installed but out of date.')
+            const selected = await chooseMany(
+              state,
+              `${stepPrefix}.existing-updates`,
+              'Which would you like to update instead?',
+              stale.map((group) => ({ value: group.skill, label: staleInstallLabel(group) })),
+              { allowBack: true, required: false },
+            )
+            if (selected === BACK_SIGNAL) continue agentStep
+            approvedStaleSkills = new Set(selected)
+          }
+
+          const actionable = plannedStates.filter((target) => (
+            target.state === 'missing'
+            || (target.state === 'stale' && approvedStaleSkills.has(target.skill))
+          ))
+          if (actionable.length === 0) {
+            if (stalePrompted) prompts.log.info('No changes selected.')
+            else prompts.log.info('All requested skill installations are already up to date.')
+            prompts.outro(stalePrompted ? 'No changes made' : 'No changes needed')
+            return 0
+          }
         }
 
-        for (const skill of selectedSkills) {
-          installTargets(
-            loadManifest(skill),
-            scope,
-            targetsForNewInstall(agentChoice.values, injectedSkills.includes(skill)),
-            prompted,
-            'install',
+        instructionStep:
+        while (true) {
+          let injectedSkills: string[]
+          if (instructionOverride === true) injectedSkills = [...selectedSkills]
+          else if (instructionOverride === false) injectedSkills = []
+          else if (askInstructions && process.stdin.isTTY) {
+            const choice = await chooseInstructionInjection(
+              state,
+              `${stepPrefix}.instructions`,
+              agentChoice.values,
+              scope,
+              selectedSkills,
+              true,
+            )
+            if (choice === BACK_SIGNAL) {
+              if (stalePrompted) continue preflightStep
+              continue agentStep
+            }
+            injectedSkills = choice
+          } else injectedSkills = []
+
+          const prompted = !!process.stdin.isTTY && (
+            skills.length === 0
+            || explicitAgents.length === 0
+            || (askInstructions && instructionOverride === undefined)
           )
+
+          if (prompted) {
+            prompts.note(
+              installationSummary(scope, selectedSkills, agentChoice.values, injectedSkills, agentChoice.all),
+              'Installation Summary',
+            )
+            const proceed = await chooseConfirmation(state, `${stepPrefix}.confirm`, { allowBack: true })
+            if (proceed === BACK_SIGNAL) {
+              if (askInstructions && instructionOverride === undefined) continue instructionStep
+              if (stalePrompted) continue preflightStep
+              continue agentStep
+            }
+            if (!proceed) continue instructionStep
+          } else {
+            console.log(`Scope: ${scope.identity}`)
+            console.log(`Agents: ${agentChoice.values.join(', ')}`)
+            console.log(`Skills: ${selectedSkills.join(', ')}`)
+            console.log(`Instruction skills: ${injectedSkills.join(', ') || 'none'}`)
+          }
+
+          for (const skill of selectedSkills) {
+            const manifest = loadManifest(skill)
+            if (!plannedStates) {
+              installTargets(
+                manifest,
+                scope,
+                targetsForNewInstall(agentChoice.values, injectedSkills.includes(skill)),
+                prompted,
+                'install',
+              )
+              continue
+            }
+
+            const skillStates = plannedStates.filter((target) => target.skill === skill)
+            const missingAgents = skillStates
+              .filter((target) => target.state === 'missing')
+              .map((target) => target.agent)
+            const updateAgents = skillStates
+              .filter((target) => target.state === 'stale' && approvedStaleSkills.has(skill))
+              .map((target) => target.agent)
+
+            if (missingAgents.length > 0) {
+              installTargets(
+                manifest,
+                scope,
+                targetsForNewInstall(missingAgents, injectedSkills.includes(skill)),
+                prompted,
+                'install',
+              )
+            }
+            if (updateAgents.length > 0) {
+              installTargets(
+                manifest,
+                scope,
+                targetsForNewInstall(updateAgents, injectedSkills.includes(skill)),
+                prompted,
+                'update',
+              )
+            }
+          }
+          if (prompted) prompts.outro('Installation complete')
+          return 0
         }
-        if (prompted) prompts.outro('Installation complete')
-        return 0
       }
     }
   }
