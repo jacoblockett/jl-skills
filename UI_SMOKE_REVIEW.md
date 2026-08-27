@@ -2,15 +2,141 @@
 
 Status: active review tracker for `spec-installer-lifecycle`.
 
-Purpose: preserve unresolved UX, lifecycle, and regression requirements in priority order. Current-turn requirements are authoritative for the present implementation pass. Older carry-forward material is isolated at the end and should not interrupt the current installer work.
+Purpose: preserve unresolved UX, lifecycle, and regression requirements in priority order. Current interactive-review requirements override older wording where they conflict. Older carry-forward work remains isolated at the end.
 
 Do not mark an item resolved merely because code changed. Current-turn items must survive the relevant automated and manual smoke checks.
 
-# Current-Turn Work, Highest Priority First
+# Current Interactive Follow-Up — Highest Priority
+
+## P0 — Use terminal-safe navigation glyphs
+
+The first Unicode glyph set rendered inconsistently in the user's Windows terminal. In particular, U+232B `⌫` rendered through an unsuitable fallback glyph and U+241B `␛` rendered as a control-picture-style miniature ESC mark rather than the intended keyboard-symbol appearance.
+
+Use this visible vocabulary instead:
+
+```text
+↑/↓  navigate
+␣    select        U+2423 OPEN BOX
+↵    confirm       U+21B5 DOWNWARDS ARROW WITH CORNER LEFTWARDS
+A    toggle all
+←    back          U+2190 LEFTWARDS ARROW
+⎋    exit          U+238B BROKEN CIRCLE WITH NORTHWEST ARROW / keyboard Escape symbol
+```
+
+Required presentation:
+
+- Keep every applicable hint on one line.
+- Use `exit`, not `cancel`, for Escape copy.
+- Keep one blank visual guide line between the final answer/input and the footer.
+- Preserve the native-like Clack dimming pattern and guide/spine.
+- Do not use `⌫` or `␛` in visible footers.
+
+Multiselect footer:
+
+```text
+↑/↓ navigate • ␣ select • ↵ confirm • A toggle all • ← back • ⎋ exit
+```
+
+Single-select/binary footer:
+
+```text
+↑/↓ navigate • ↵ confirm • ← back • ⎋ exit
+```
+
+## P0 — Fix AI instruction-file explanatory English
+
+The informational note remains completely skill-agnostic, but its file-name grammar must read naturally.
+
+For one applicable file, use the grammatical form:
+
+```text
+The AGENTS.md file contains general instructions ...
+```
+
+For multiple applicable files, use the grammatical form:
+
+```text
+AGENTS.md and CLAUDE.md files contain general instructions ...
+```
+
+Do not produce constructions such as `AGENTS.md file contains ...` without the article.
+
+The note still must not reveal which skills were selected.
+
+## P0 — Make Installation Summary instruction injection file-first
+
+The previous summary rendered the selected skills as the left side of one arrow and every affected instruction file on the right side. That does not scale/read as naturally as the file ownership model.
+
+Use one line per affected instruction file, with the file first and the selected injected skill subset second.
+
+One skill, one file:
+
+```text
+Instruction injection
+  AGENTS.md → Map
+```
+
+Multiple skills, one file:
+
+```text
+Instruction injection
+  AGENTS.md → Map, Other Skill
+```
+
+Multiple skills, multiple files:
+
+```text
+Instruction injection
+  AGENTS.md → Map, Other Skill
+  CLAUDE.md → Map, Other Skill
+```
+
+No injection:
+
+```text
+Instruction injection
+  None
+```
+
+The same selected skill subset still applies uniformly across all selected harness instruction files; there is no harness-by-harness injection matrix.
+
+## P0 — Preflight existing installations before interactive Install writes
+
+Interactive Install must not blindly rewrite every requested skill/harness target.
+
+After the user selects skills and harnesses, but before any filesystem writes:
+
+1. Inspect every requested skill × selected-harness target at the selected scope.
+2. Classify each target as:
+   - missing;
+   - installed and current/newer than the bundled catalog version;
+   - installed but stale/unknown-version and therefore update-eligible.
+3. Current targets are skipped rather than reinstalled or downgraded.
+4. Missing targets remain normal installs.
+5. Aggregate stale targets by skill rather than prompting separately for each harness.
+6. If any stale skills exist, show one warning and one optional multiselect such as:
+
+```text
+Some selected skills are already installed but out of date.
+
+Which would you like to update instead?
+
+□ Map  0.1.0 → 0.2.0
+□ Other Skill  unknown → 1.3.0
+```
+
+7. The stale-update multiselect starts empty. A selected skill updates every stale target for that skill among the harnesses already requested. An unselected stale skill is skipped.
+8. Do all detection first, then execute the resulting install/update plan after the normal summary/confirmation. Do not interleave check/write/check/write.
+9. If every requested target is already current, report that no changes are needed and perform no write.
+10. A fully installed skill must remain selectable in the initial Install skill picker so this preflight can make the decision after the harness selection. Do not disable it solely because it exists on every currently supported harness.
+11. A newer installed version must be treated as current for Install preflight purposes; never downgrade it to the bundled version.
+12. Process-local state for the stale-update chooser follows the same Back/restore rules as every other touched step.
+
+The explicit non-interactive CLI may retain its deterministic reapply behavior; this preflight requirement is for the interactive wizard flow unless a separate CLI contract is accepted later.
+
+# Existing Current-Turn Requirements
 
 ## P0 — Generalize instruction injection across selected skills
-
-This is the most important current installer behavior change.
 
 After the user selects skills to install and selects one or more AI harnesses:
 
@@ -35,51 +161,13 @@ Which skills would you like to add to AGENTS.md and CLAUDE.md?
 □ Another Skill
 ```
 
-The final Installation Summary must reflect the selected injection subset and the affected instruction files without assuming Map is the only catalog skill.
-
-Update preserves the actual existing managed-block state of each installed skill/harness target. Uninstall removes only the matching managed block for the selected installed target.
-
-## P0 — Standardize navigation footer glyphs and spacing
-
-Replace spelled-out key names with compact Unicode key symbols:
-
-```text
-↑/↓  navigate
-␣    select        U+2423 OPEN BOX
-↵    confirm       U+21B5 DOWNWARDS ARROW WITH CORNER LEFTWARDS
-A    toggle all
-⌫    back          U+232B ERASE TO THE LEFT
-␛    exit          U+241B SYMBOL FOR ESCAPE
-```
-
-`␣` is the preferred Space glyph.
-
-Required presentation:
-
-- Keep every applicable hint on one line.
-- Do not split hints across two rows.
-- Use `exit`, not `cancel`, for Escape copy.
-- Insert one blank visual line between the final answer choice and the footer.
-- Apply the spacing rule consistently to selects, multiselects, and binary confirmations.
-- Preserve Clack guide/spine styling and the previously corrected native-like dimming pattern.
-
-Multiselect footer shape:
-
-```text
-↑/↓ navigate • ␣ select • ↵ confirm • A toggle all • ⌫ back • ␛ exit
-```
-
-Single-select/binary footer shape:
-
-```text
-↑/↓ navigate • ↵ confirm • ⌫ back • ␛ exit
-```
+Update preserves the actual existing managed-block state of each installed skill/harness target when using the dedicated Update flow. Uninstall removes only the matching managed block for the selected installed target.
 
 ## P0 — Replace inline confirmation controls project-wide
 
 Do not use the inline Clack confirm rendering for final confirmations.
 
-Every confirmation should be a normal vertical single-select:
+Every confirmation is a normal vertical single-select:
 
 ```text
 Continue?
@@ -87,7 +175,7 @@ Continue?
 ● Yes
 ○ No
 
-↑/↓ navigate • ↵ confirm • ⌫ back • ␛ exit
+↑/↓ navigate • ↵ confirm • ← back • ⎋ exit
 ```
 
 Requirements:
@@ -104,28 +192,23 @@ Apply to install, skill update, skill uninstall, generated-data deletion, instal
 
 ## P1 — Simplify installer uninstall UX
 
-Remove the current verbose installer-uninstall summary.
+Remove the verbose installer-uninstall summary.
 
-Do not enumerate:
+Do not enumerate executable paths, installer-owned data paths, absence of installer-owned data, or preserved skill/runtime/project data.
 
-- executable path;
-- installer-owned data paths;
-- absence of installer-owned data;
-- preserved skill/runtime/project data.
-
-Instead show one concise warning such as:
+Show one concise warning:
 
 ```text
 This action will uninstall the jl-skills installer and any associated installer-owned data and tooling.
 ```
 
-Then show the standard `Continue?` vertical Yes/No control.
+Then show the standard `Continue?` control.
 
-The implementation still removes only the installer executable and actual installer-owned data/tooling. Installed skills, skill runtime/tooling, and skill-generated project data remain untouched, but that preservation is not narrated on this screen.
+The implementation removes only the installer executable and actual installer-owned data/tooling. Installed skills, skill runtime/tooling, and skill-generated project data remain untouched, but that preservation is not narrated on this screen.
 
 ## P1 — Normalize note-block titles
 
-The small title at the top of Clack note blocks uses Title Case unless a specific visual reason requires otherwise.
+Clack note titles use Title Case unless a specific visual reason requires otherwise.
 
 Required examples:
 
@@ -137,13 +220,9 @@ Permanent Data Removal
 About AI Instruction Files
 ```
 
-Do not use sentence-case note titles such as `Installation summary`, `Update summary`, or `Installer uninstall summary`.
+## P1 — Update jl-skills installer
 
-Both skill uninstall and installer uninstall use `Uninstall Summary` only when a summary note is actually warranted. The simplified installer-uninstall path may use a warning instead of a summary note.
-
-## P1 — Add `Update jl-skills installer`
-
-Add this home-screen action in this order:
+Home action order includes:
 
 ```text
 Remove skill-generated data
@@ -151,69 +230,40 @@ Update jl-skills installer
 Uninstall jl-skills installer
 ```
 
-Required behavior:
+Required updater behavior remains:
 
-- Check an authoritative published installer release/version source.
-- Compare the running installer version with the newest compatible release.
-- If current, report `No updates found.` and return to the home screen.
-- If newer, show a concise `Update Summary` with current and target versions.
-- Use the standard `Continue?` vertical Yes/No control.
-- Download a replacement to a temporary/sibling path.
-- Verify the artifact before replacement. Prefer a release manifest containing version and SHA-256.
-- On Windows, replace the running executable only after the current process exits.
-- Preserve installed skills, skill runtime/tooling, and skill-generated data.
-- No re-setup should be necessary after updating the installer.
+- compare the running installer against an authoritative release manifest;
+- report `No updates found.` when current;
+- show `Update Summary` when newer;
+- use standard `Continue?`;
+- stage and SHA-256 verify the replacement;
+- replace the running Windows executable after process exit;
+- preserve installed skills, runtimes/tooling, and generated data;
+- automated smoke remains network-independent and does not replace the development executable.
 
-Automated smoke must not depend on the public network or replace the real development executable. Use a deterministic local/fake update source and cover:
+## P1 — Prove the dedicated Update Skills pipeline
 
-- no-update path;
-- newer-version detection;
-- successful download/verification;
-- version/hash rejection;
-- replacement staging;
-- preservation boundaries.
+Regression coverage must prove a deliberately stale installed skill is upgraded to current catalog content/version while preserving unrelated files, generated data, harness boundaries, and existing managed-instruction state unless explicitly overridden.
 
-## P1 — Prove a real `Update Skills` pipeline
+Update never adds a new harness and never initializes/mutates skill-generated semantic data.
 
-A basic skill update path exists, but regression coverage must prove an actual stale installed skill is upgraded rather than merely reapplying the same version.
-
-Required semantics:
-
-- Discover installed skills from selected scope/harness filesystem state.
-- Compare installed self-reported metadata with catalog version.
-- Replace installed `SKILL.md` and every other manifest-declared skill asset for selected installed targets.
-- Update declared runtime/support assets where appropriate.
-- Preserve actual existing managed-instruction state for each installed target.
-- Never add a new harness during Update.
-- Never initialize or mutate skill-generated semantic/project data.
-- Keep update bounded to selected scope and selected skills.
-
-Regression coverage must create a deliberately stale installed representation with older metadata and stale file contents, run Update, and verify current catalog version/content replaces it while unrelated files and generated data remain intact.
-
-Where practical, tests should avoid depending structurally on Map being the only catalog skill.
-
-## P2 — Preserve already-accepted installer invariants
-
-These are regression guards during the current pass:
+## P2 — Preserve accepted installer invariants
 
 - Product/executable remains `jl-skills` / `jl-skills.exe`.
 - Top-level operation selection occurs before scope discovery.
-- Scope is inspected only after operation and scope are chosen.
 - Harness detection never widens installation scope.
 - Harness picker shows all supported harnesses and starts empty.
 - No Clack option `hint` fields for detected/recommended/version clutter.
 - Keyboard Back returns exactly one question backward.
-- Process-local cursor/selection/custom-path state restores for the same operation and same scope.
+- Process-local cursor/selection/custom-path state restores for the same operation and scope.
 - State does not bleed between unrelated operations or scopes.
-- A skill installed on only some harnesses remains available under Install so another harness can be added.
-- Installation summaries remain compact and generalized for multiple skills.
 - Managed instruction blocks preserve unrelated user content and reject malformed/ambiguous boundaries instead of guessing.
 - Skill uninstall preserves skill-generated data and shared runtime/tooling.
 - Generated-data deletion remains a separate user-selected-scope operation with no whole-drive scan.
 - Installer self-uninstall remains installer-only.
 - Custom paths remain normalized before any user-visible redisplay.
 
-## P2 — Reconcile specs and automated/manual smoke
+## P2 — Reconcile specs and smoke
 
 After implementation:
 
@@ -223,8 +273,6 @@ After implementation:
 4. Keep PR #8 draft until checks pass or a remaining item is explicitly deferred.
 
 # Prior Carry-Forward Work — Save for Later
-
-The following predates the current-turn installer fixes. Do not let it block the current implementation pass unless a direct dependency is discovered.
 
 ## Historical Map skill/sub-agent orchestration investigation
 
