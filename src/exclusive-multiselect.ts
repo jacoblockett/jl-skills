@@ -163,7 +163,7 @@ function optionText<Value>(
 function instructionFooter(hasGuide: boolean, allowBack: boolean): string {
   const pieces = [
     `${styleText('dim', '↑/↓')} navigate`,
-    `${styleText('dim', '␠')} select`,
+    `${styleText('dim', '␣')} select`,
     `${styleText('dim', '↵')} confirm`,
     `${styleText('dim', 'A')} toggle all`,
     ...(allowBack ? [`${styleText('dim', '⌫')} back`] : []),
