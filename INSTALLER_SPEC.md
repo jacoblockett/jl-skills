@@ -220,19 +220,21 @@ Accepted keys and visible glyphs:
 
 ```text
 ↑/↓  navigate
-␠    select
+␣    select
 ↵    confirm
 A    toggle all
 ⌫    back
 ␛    exit
 ```
 
+`␣` is U+2423 OPEN BOX and is the accepted visible Space-key glyph.
+
 `I` may remain as an undisclosed invert-selection shortcut.
 
 Multiselect footer shape:
 
 ```text
-↑/↓ navigate • ␠ select • ↵ confirm • A toggle all • ⌫ back • ␛ exit
+↑/↓ navigate • ␣ select • ↵ confirm • A toggle all • ⌫ back • ␛ exit
 ```
 
 Single-select footer shape:
@@ -595,6 +597,21 @@ A manifest contains at least:
 }
 ```
 
+The local Windows build emits both:
+
+```text
+build/jl-skills.exe
+build/jl-skills-manifest.json
+```
+
+The generated manifest's Windows artifact URL follows the release-tag contract:
+
+```text
+https://github.com/jacoblockett/jl-skills/releases/download/v<VERSION>/jl-skills.exe
+```
+
+A manual installer release therefore uses tag `v<VERSION>` and uploads both generated files. The `latest/download` manifest URL then resolves the newest published release while the manifest itself points at the exact versioned executable.
+
 The installer:
 
 1. reports `Checking for updates...`;
@@ -707,6 +724,7 @@ The build produces:
 
 ```text
 build/jl-skills.exe
+build/jl-skills-manifest.json
 ```
 
 and removes stale singular `build/jl-skill.exe` output.
@@ -730,6 +748,7 @@ Regression coverage includes at least:
 - absence of inline Clack lifecycle confirmations;
 - skill-generated-data bounded deletion;
 - offline installer updater metadata/version/hash/staging behavior;
+- release-manifest hash matching the built executable;
 - installer self-uninstall preservation boundaries.
 
 ## Explicit non-goals
