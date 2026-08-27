@@ -63,6 +63,8 @@ For explicit non-interactive install:
 
 For explicit interactive install where instruction choice remains unspecified, the generalized instruction-injection multiselect is still shown.
 
+The interactive existing-installation preflight described below is a wizard UX contract. Explicit non-interactive install may retain deterministic reapply behavior unless a separate CLI contract is accepted later.
+
 Interactive lifecycle actions such as skill-generated-data removal, installer update, and installer self-uninstall live on the bare-executable home screen unless a separate deterministic CLI contract is accepted later.
 
 ## Hard scope invariant
@@ -223,24 +225,26 @@ Accepted keys and visible glyphs:
 ␣    select
 ↵    confirm
 A    toggle all
-⌫    back
-␛    exit
+←    back
+⎋    exit
 ```
 
 `␣` is U+2423 OPEN BOX and is the accepted visible Space-key glyph.
+
+The first attempted Back/Escape control-picture glyphs (`⌫`, `␛`) are not accepted for the current Windows terminal UI because they rendered inconsistently. `←` and `⎋` are the accepted visible replacements.
 
 `I` may remain as an undisclosed invert-selection shortcut.
 
 Multiselect footer shape:
 
 ```text
-↑/↓ navigate • ␣ select • ↵ confirm • A toggle all • ⌫ back • ␛ exit
+↑/↓ navigate • ␣ select • ↵ confirm • A toggle all • ← back • ⎋ exit
 ```
 
 Single-select footer shape:
 
 ```text
-↑/↓ navigate • ↵ confirm • ⌫ back • ␛ exit
+↑/↓ navigate • ↵ confirm • ← back • ⎋ exit
 ```
 
 Text input may omit navigation/select controls that do not apply, but must use the same glyph vocabulary for confirm/back/exit.
@@ -290,7 +294,7 @@ Continue?
 Yes
 No
 
-↑/↓ navigate • ↵ confirm • ⌫ back • ␛ exit
+↑/↓ navigate • ↵ confirm • ← back • ⎋ exit
 ```
 
 Visible order is always Yes then No.
@@ -301,15 +305,7 @@ Use `Continue?` rather than rewriting each confirmation into increasingly explic
 
 ## Install flow
 
-After scope selection, inspect that scope and present the catalog skill picker.
-
-Already-installed skills remain visible. A skill that is installed for every currently supported harness may be disabled in the picker with only the skill name struck through and a normal suffix:
-
-```text
-Map (installed)
-```
-
-A skill installed for only some harnesses remains selectable under Install so the user can add it to another harness.
+After scope selection, present the catalog skill picker. Installed skills remain selectable; do not disable a skill merely because it already exists on every currently supported harness. The actual installability decision happens only after the user chooses the target harnesses.
 
 Nothing is preselected on a never-before-touched skill-selection step.
 
@@ -321,9 +317,44 @@ Which AI harnesses should receive these skills?
 
 Nothing is preselected on first entry. Do not insert an intermediate harness-selection screen.
 
+### Existing-installation preflight
+
+After skill and harness selection, but before any filesystem writes, inspect every requested skill × selected-harness target at the selected scope.
+
+Classify each target as:
+
+- missing;
+- installed and current/newer than the bundled catalog version;
+- installed but stale/unknown-version.
+
+Interactive behavior:
+
+- missing targets remain ordinary installs;
+- current/newer targets are skipped and must never be downgraded;
+- stale targets are grouped by skill;
+- if stale skills exist, show one warning and one optional multiselect asking which stale skills should be updated instead;
+- the stale-update multiselect starts empty;
+- selecting a stale skill updates every stale requested harness target for that skill;
+- leaving a stale skill unselected skips those stale targets;
+- if all requested targets are already current, report that no changes are needed and perform no write;
+- perform all inspection before executing the resulting plan rather than interleaving checks and writes.
+
+Example stale selection:
+
+```text
+Some selected skills are already installed but out of date.
+
+Which would you like to update instead?
+
+Map  0.1.0 → 0.2.0
+Other Skill  unknown → 1.3.0
+```
+
+The stale-selection step follows the same process-local cursor/selection restoration and one-step Back behavior as other wizard steps.
+
 ### Instruction-file explanation and selection
 
-After harness selection, show one informational note with a Title Case title such as:
+After the relevant preflight step, show one informational note with a Title Case title such as:
 
 ```text
 About AI Instruction Files
@@ -338,7 +369,19 @@ The note is deliberately skill-agnostic. It must not mention:
 - the number of selected skills;
 - any wording that reveals which skills were selected.
 
-Immediately after the note, present one multiselect containing every skill the user requested to install:
+File-name grammar must read naturally. For one file, use a form such as:
+
+```text
+The AGENTS.md file contains general instructions ...
+```
+
+For multiple files, use a form such as:
+
+```text
+AGENTS.md and CLAUDE.md files contain general instructions ...
+```
+
+Immediately after the note, present one multiselect containing the selected skills:
 
 ```text
 Which skills would you like to add to AGENTS.md and CLAUDE.md?
@@ -365,6 +408,8 @@ Installation Summary
 
 Section headings inside the note remain sentence case. Use simple indentation, comma-delimited compact lists, and newline-delimited locations. No bullet characters.
 
+Instruction injection is file-first: each affected instruction file gets its own line, followed by the selected injected skill subset.
+
 Example:
 
 ```text
@@ -378,7 +423,15 @@ Affected AI harnesses
   OpenAI Codex, Claude Code
 
 Instruction injection
-  Map → AGENTS.md, CLAUDE.md
+  AGENTS.md → Map, Other Skill
+  CLAUDE.md → Map, Other Skill
+```
+
+With one file:
+
+```text
+Instruction injection
+  AGENTS.md → Map, Other Skill
 ```
 
 If no selected skills receive instruction injection:
@@ -737,6 +790,8 @@ Regression coverage includes at least:
 - custom-path normalization;
 - self-reported skill metadata installation/discovery;
 - manual/filesystem-discovered installation handling;
+- interactive install preflight classification across missing/current/stale targets;
+- no downgrade of newer installed versions during Install preflight;
 - managed instruction opt-in/opt-out and boundary safety;
 - stale installed skill/version/content replacement;
 - preservation of unrelated/generated data during update;
