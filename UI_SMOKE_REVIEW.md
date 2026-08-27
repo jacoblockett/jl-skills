@@ -298,7 +298,11 @@ This action will uninstall the jl-skills installer and any associated installer-
 
 Then show the standard `Continue?` control.
 
-The implementation removes only the installer executable and actual installer-owned data/tooling. Installed skills, skill runtime/tooling, and skill-generated project data remain untouched, but that preservation is not narrated on this screen.
+After the user confirms Yes, the foreground `jl-skills` process delegates all installer-owned cleanup to a silent detached helper and exits immediately. Do not print `scheduled`, `complete`, success, failure, or any other post-confirmation status from the foreground process.
+
+The helper removes the installer executable and actual installer-owned data/tooling after the foreground process has released the executable. It must not inherit visible stdio or open a visible helper shell. The same lifecycle applies on Windows and Unix-like platforms, using the smallest platform-native helper primitive required for self-removal.
+
+Installed skills, skill runtime/tooling, and skill-generated project data remain untouched, but that preservation is not narrated on this screen.
 
 ## P1 — Normalize note-block titles
 
