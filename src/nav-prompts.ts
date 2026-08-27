@@ -60,14 +60,14 @@ function footer(hasGuide: boolean, allowBack: boolean, text = false): string {
   const pieces = text
     ? [
         `${styleText('dim', '↵')} confirm`,
-        ...(allowBack ? [`${styleText('dim', '⌫')} back`] : []),
-        `${styleText('dim', '␛')} exit`,
+        ...(allowBack ? [`${styleText('dim', '←')} back`] : []),
+        `${styleText('dim', '⎋')} exit`,
       ]
     : [
         `${styleText('dim', '↑/↓')} navigate`,
         `${styleText('dim', '↵')} confirm`,
-        ...(allowBack ? [`${styleText('dim', '⌫')} back`] : []),
-        `${styleText('dim', '␛')} exit`,
+        ...(allowBack ? [`${styleText('dim', '←')} back`] : []),
+        `${styleText('dim', '⎋')} exit`,
       ]
   const line = `${hasGuide ? `${styleText('cyan', S_BAR)}  ` : ''}${pieces.join(' • ')}`
   return hasGuide ? `${line}\n${styleText('cyan', S_BAR_END)}` : line
