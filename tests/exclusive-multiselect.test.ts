@@ -82,12 +82,16 @@ describe('installer option presentation', () => {
     const repo = resolve(import.meta.dir, '..')
     const multiselect = readFileSync(join(repo, 'src', 'exclusive-multiselect.ts'), 'utf8')
     const navigation = readFileSync(join(repo, 'src', 'nav-prompts.ts'), 'utf8')
-    for (const glyph of ['↑/↓', '↵', '⌫', '␛']) {
+    for (const glyph of ['↑/↓', '↵', '←', '⎋']) {
       expect(multiselect).toContain(glyph)
       expect(navigation).toContain(glyph)
     }
     expect(multiselect).toContain('␣')
     expect(multiselect).toContain('A')
+    expect(multiselect).not.toContain('⌫')
+    expect(multiselect).not.toContain('␛')
+    expect(navigation).not.toContain('⌫')
+    expect(navigation).not.toContain('␛')
     expect(multiselect).not.toContain('Space:')
     expect(multiselect).not.toContain('Enter:')
     expect(multiselect).not.toContain('Backspace:')
