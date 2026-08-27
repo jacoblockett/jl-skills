@@ -8,19 +8,19 @@ Do not mark an item resolved merely because code changed. Current-turn items mus
 
 # Current Interactive Follow-Up — Highest Priority
 
-## P0 — Use terminal-safe navigation glyphs
+## P0 — Use explicit key names in navigation footers
 
-The first Unicode glyph set rendered inconsistently in the user's Windows terminal. In particular, U+232B `⌫` rendered through an unsuitable fallback glyph and U+241B `␛` rendered as a control-picture-style miniature ESC mark rather than the intended keyboard-symbol appearance.
+Unicode key symbols other than the navigation arrows rendered inconsistently or were ambiguous in the user's Windows terminal. Keep only `↑/↓` as a symbolic key hint. Spell out every other visible key name.
 
-Use this visible vocabulary instead:
+Use this visible vocabulary:
 
 ```text
-↑/↓  navigate
-␣    select        U+2423 OPEN BOX
-↵    confirm       U+21B5 DOWNWARDS ARROW WITH CORNER LEFTWARDS
-A    toggle all
-←    back          U+2190 LEFTWARDS ARROW
-⎋    exit          U+238B BROKEN CIRCLE WITH NORTHWEST ARROW / keyboard Escape symbol
+↑/↓      navigate
+Space    select
+Enter    confirm
+A        toggle all
+Backspace back
+Esc      exit
 ```
 
 Required presentation:
@@ -29,18 +29,18 @@ Required presentation:
 - Use `exit`, not `cancel`, for Escape copy.
 - Keep one blank visual guide line between the final answer/input and the footer.
 - Preserve the native-like Clack dimming pattern and guide/spine.
-- Do not use `⌫` or `␛` in visible footers.
+- Do not use symbolic substitutes for Space, Enter, Backspace, or Escape.
 
 Multiselect footer:
 
 ```text
-↑/↓ navigate • ␣ select • ↵ confirm • A toggle all • ← back • ⎋ exit
+↑/↓ navigate • Space select • Enter confirm • A toggle all • Backspace back • Esc exit
 ```
 
 Single-select/binary footer:
 
 ```text
-↑/↓ navigate • ↵ confirm • ← back • ⎋ exit
+↑/↓ navigate • Enter confirm • Backspace back • Esc exit
 ```
 
 ## P0 — Fix AI instruction-file explanatory English
@@ -175,7 +175,7 @@ Continue?
 ● Yes
 ○ No
 
-↑/↓ navigate • ↵ confirm • ← back • ⎋ exit
+↑/↓ navigate • Enter confirm • Backspace back • Esc exit
 ```
 
 Requirements:
