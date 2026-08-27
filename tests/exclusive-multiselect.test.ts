@@ -86,7 +86,7 @@ describe('installer option presentation', () => {
       expect(multiselect).toContain(glyph)
       expect(navigation).toContain(glyph)
     }
-    expect(multiselect).toContain('␠')
+    expect(multiselect).toContain('␣')
     expect(multiselect).toContain('A')
     expect(multiselect).not.toContain('Space:')
     expect(multiselect).not.toContain('Enter:')
