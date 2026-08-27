@@ -208,7 +208,7 @@ There are no visible `Go back` or `Cancel & exit` rows. Backspace goes back wher
 
 Custom-path input is validated. Empty submission must produce a validation message such as `Please provide a path.` rather than throwing. Returning to the custom-path step retains its entered text.
 
-### Selection controls and footer glyphs
+### Selection controls and footer labels
 
 Multiselect menus contain only substantive choices. Do not add pseudo-options for:
 
@@ -218,42 +218,40 @@ Go back
 Cancel & exit
 ```
 
-Accepted keys and visible glyphs:
+Accepted keys and visible labels:
 
 ```text
-↑/↓  navigate
-␣    select
-↵    confirm
-A    toggle all
-←    back
-⎋    exit
+↑/↓       navigate
+Space     select
+Enter     confirm
+A         toggle all
+Backspace back
+Esc       exit
 ```
 
-`␣` is U+2423 OPEN BOX and is the accepted visible Space-key glyph.
-
-The first attempted Back/Escape control-picture glyphs (`⌫`, `␛`) are not accepted for the current Windows terminal UI because they rendered inconsistently. `←` and `⎋` are the accepted visible replacements.
+Only the up/down navigation keys use symbolic arrows. Space, Enter, Backspace, and Escape are written by name so the footer remains unambiguous across terminal fonts.
 
 `I` may remain as an undisclosed invert-selection shortcut.
 
 Multiselect footer shape:
 
 ```text
-↑/↓ navigate • ␣ select • ↵ confirm • A toggle all • ← back • ⎋ exit
+↑/↓ navigate • Space select • Enter confirm • A toggle all • Backspace back • Esc exit
 ```
 
 Single-select footer shape:
 
 ```text
-↑/↓ navigate • ↵ confirm • ← back • ⎋ exit
+↑/↓ navigate • Enter confirm • Backspace back • Esc exit
 ```
 
-Text input may omit navigation/select controls that do not apply, but must use the same glyph vocabulary for confirm/back/exit.
+Text input may omit navigation/select controls that do not apply, but must use the same explicit key-name vocabulary for confirm/back/exit.
 
 All applicable hints remain on one line. Do not split the multiselect footer into a second shortcut row.
 
 There is one blank visual guide line between the final answer/input line and the footer so the control does not feel cramped.
 
-The custom renderer must preserve the Clack guide/spine and native-like styling. Key/control glyphs are dimmed while explanatory words and separators remain normal intensity.
+The custom renderer must preserve the Clack guide/spine and native-like styling. Key/control labels are dimmed while explanatory words and separators remain normal intensity.
 
 ### Prompt state retention
 
@@ -294,7 +292,7 @@ Continue?
 Yes
 No
 
-↑/↓ navigate • ↵ confirm • ← back • ⎋ exit
+↑/↓ navigate • Enter confirm • Backspace back • Esc exit
 ```
 
 Visible order is always Yes then No.
@@ -799,7 +797,7 @@ Regression coverage includes at least:
 - uninstall preservation of generated data and shared tooling;
 - keyboard multiselect/back/select-all behavior;
 - removal of visible navigation pseudo-options;
-- one-line Unicode navigation-footer vocabulary;
+- one-line navigation-footer key labels;
 - absence of inline Clack lifecycle confirmations;
 - skill-generated-data bounded deletion;
 - offline installer updater metadata/version/hash/staging behavior;
