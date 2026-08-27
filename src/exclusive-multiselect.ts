@@ -161,20 +161,16 @@ function optionText<Value>(
 }
 
 function instructionFooter(hasGuide: boolean, allowBack: boolean): string {
-  const lines = [
-    [
-      `${styleText('dim', '↑/↓')} to navigate`,
-      `${styleText('dim', 'Space:')} select`,
-      `${styleText('dim', 'Enter:')} confirm`,
-    ].join(' • '),
-    [
-      `${styleText('dim', 'A:')} toggle all`,
-      ...(allowBack ? [`${styleText('dim', 'Backspace:')} back`] : []),
-      `${styleText('dim', 'Esc:')} cancel`,
-    ].join(' • '),
+  const pieces = [
+    `${styleText('dim', '↑/↓')} navigate`,
+    `${styleText('dim', '␠')} select`,
+    `${styleText('dim', '↵')} confirm`,
+    `${styleText('dim', 'A')} toggle all`,
+    ...(allowBack ? [`${styleText('dim', '⌫')} back`] : []),
+    `${styleText('dim', '␛')} exit`,
   ]
-  if (!hasGuide) return lines.join('\n')
-  return `${styleText('cyan', S_BAR)}  ${lines[0]}\n${styleText('cyan', S_BAR)}  ${lines[1]}\n${styleText('cyan', S_BAR_END)}`
+  const line = `${hasGuide ? `${styleText('cyan', S_BAR)}  ` : ''}${pieces.join(' • ')}`
+  return hasGuide ? `${line}\n${styleText('cyan', S_BAR_END)}` : line
 }
 
 export function exclusiveMultiselect<Value>(
@@ -239,7 +235,8 @@ export function exclusiveMultiselect<Value>(
       const footer = this.state === 'error'
         ? `${hasGuide ? `${styleText('yellow', S_BAR_END)}  ` : ''}${styleText('yellow', this.error)}`
         : instructionFooter(hasGuide, allowBack)
-      return `${title}${prefix}${lines.join(`\n${prefix}`)}\n${footer}\n`
+      const blank = hasGuide ? styleText(this.state === 'error' ? 'yellow' : 'cyan', S_BAR) : ''
+      return `${title}${prefix}${lines.join(`\n${prefix}`)}\n${blank}\n${footer}\n`
     },
   })
 
