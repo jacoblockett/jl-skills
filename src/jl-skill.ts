@@ -1069,7 +1069,9 @@ async function installAtScope(
             return HOME
           }
 
-          prompts.log.info(`Installation will continue for: ${continuingSkills.map(displaySkillName).join(', ')}.`)
+          if (alreadyInstalled.length > 0) {
+            prompts.log.info(`Installation will continue for: ${continuingSkills.map(displaySkillName).join(', ')}.`)
+          }
 
           for (const skill of continuingSkills) {
             const manifest = loadManifest(skill)
@@ -1177,8 +1179,8 @@ async function updateAtScope(
       prompts.log.step('Checking for updates...')
       const available = installed.filter(updateAvailable)
       if (available.length === 0) {
-        prompts.log.warn('No updates found.')
-        return HOME
+        prompts.log.warn('All skills are already up to date. Choose a different scope or path.')
+        return BACK_SIGNAL
       }
 
       const skillWidth = Math.max(...available.map((group) => displaySkillName(group.skill).length))
