@@ -4,7 +4,7 @@ Status: accepted installer lifecycle contract aligned to the Bun/Clack implement
 
 ## Product goal
 
-`jl-skills` is the user-facing installer, updater, uninstaller, and lifecycle utility for the `jl-skills` catalog. Consumers should not need to know where skill discovery files, harness-specific resources, runtimes, instruction fragments, or support assets belong.
+`jl-skills` is the user-facing installer, updater, uninstaller, and lifecycle utility for the `jl-skills` catalog. Consumers should not need to know where skill discovery files, harness-specific resources, runtimes, instruction fragments, support assets, or installer update mechanics belong.
 
 The public distribution target is one self-contained executable:
 
@@ -27,7 +27,7 @@ Interactive UI uses exactly:
 @clack/core    1.4.3
 ```
 
-The custom controls required by the accepted UX are JL-owned wrappers over Clack core. Do not replace the prompt stack with a different TUI framework, fork Clack, or globally monkey-patch it.
+JL-owned custom controls may wrap Clack core only where the accepted navigation/state behavior requires it. Do not replace the prompt stack with a different TUI framework, fork Clack, or globally monkey-patch it.
 
 Release compilation is conceptually:
 
@@ -53,9 +53,17 @@ A skill-first invocation may continue to mean install:
 jl-skills map --scope cwd
 ```
 
-`--agent` is repeatable. Complete explicit commands are deterministic and must not add unnecessary interactive questions.
+`--agent` is repeatable.
 
-Interactive-only lifecycle actions such as skill-generated-data removal and installer self-uninstall live on the bare-executable home screen unless a separate deterministic CLI contract is accepted later.
+For explicit non-interactive install:
+
+- `--instructions` means inject managed instructions for every selected skill into every selected harness instruction file;
+- `--no-instructions` means inject none;
+- if neither flag is supplied, instruction injection defaults to none.
+
+For explicit interactive install where instruction choice remains unspecified, the generalized instruction-injection multiselect is still shown.
+
+Interactive lifecycle actions such as skill-generated-data removal, installer update, and installer self-uninstall live on the bare-executable home screen unless a separate deterministic CLI contract is accepted later.
 
 ## Hard scope invariant
 
@@ -96,9 +104,9 @@ Explicit paths normalize:
 - Windows drive-letter casing;
 - existing filesystem casing where safely available.
 
-The canonicalized path is the value used by the UI whenever a concrete path is displayed. For example, an input such as `c:/programming/example` should display in normalized Windows form such as `C:\Programming\example` where the filesystem can establish that casing.
+The canonicalized path is the value used by the UI whenever a concrete path is displayed. An input such as `c:/programming/example` should therefore display in normalized Windows form such as `C:\Programming\example` where the filesystem can establish that casing.
 
-The target may be uninitialized. Install may create the requested target directory and only the non-semantic structures required for discovery, harness resources, managed instructions, runtime placement, and declared support assets.
+Install may create an uninitialized requested target directory and only the non-semantic structures required for discovery, harness resources, managed instructions, runtime placement, and declared support assets.
 
 ## Harness adapters
 
@@ -111,7 +119,7 @@ Each adapter owns its user/project discovery paths, instruction-file convention,
 
 Detection remains internal. Do not put `detected`, `not detected`, `recommended`, or similar status hints on picker options.
 
-No Clack option `hint` is used anywhere unless a future requirement explicitly calls for one specific hint.
+No Clack option `hint` is used unless a future requirement explicitly calls for one specific hint.
 
 ## Filesystem-first installation discovery
 
@@ -119,9 +127,9 @@ There is no authoritative central installer receipt registry.
 
 The selected scope's actual harness filesystem state is the source of truth for whether catalog skills are installed there.
 
-For each supported harness at the selected scope, the installer checks the expected skill-discovery location. A catalog skill is recognized from its installed `SKILL.md` and its self-reported jl-skills metadata.
+For each supported harness at the selected scope, the installer checks the expected skill-discovery location. A catalog skill is recognized from its installed `SKILL.md` and self-reported jl-skills metadata.
 
-Every catalog skill must self-report enough installed metadata to identify at least:
+Every catalog skill must self-report at least:
 
 ```text
 name
@@ -129,15 +137,15 @@ version
 metadata format version
 ```
 
-The current representation is a machine-readable marker in `SKILL.md`, for example:
+Current representation:
 
 ```html
 <!-- jl-skills-meta: {"name":"map","version":"0.2.0","format":1} -->
 ```
 
-The manifest version and source `SKILL.md` self-report must agree at build/runtime validation time.
+The manifest version and source `SKILL.md` self-report must agree at build/catalog-generation time and runtime validation time.
 
-This design deliberately permits jl-skills to discover a compatible skill that was copied or installed by another agent instead of requiring that jl-skills itself performed the original installation.
+This deliberately permits jl-skills to discover a compatible skill that was copied or installed by another agent instead of requiring that jl-skills performed the original installation.
 
 If a recognizable catalog skill exists but usable version metadata is absent or malformed, presence may still be detected, but its installed version is unknown. Never fabricate a version.
 
@@ -160,10 +168,11 @@ Install skills
 Update skills
 Uninstall skills
 Remove skill-generated data
+Update jl-skills installer
 Uninstall jl-skills installer
 ```
 
-There is no visible `Cancel & exit` option. Escape performs cancellation.
+There is no visible Cancel row. Escape exits.
 
 ### Scope questions
 
@@ -185,7 +194,7 @@ After Uninstall:
 Where would you like to uninstall skills?
 ```
 
-Scope choices are:
+Scope choices:
 
 ```text
 Current directory
@@ -193,11 +202,11 @@ User account
 Custom path
 ```
 
-There are no visible `Go back` or `Cancel & exit` rows. Backspace goes back where a previous interactive step exists. Escape cancels/exits.
+There are no visible `Go back` or `Cancel & exit` rows. Backspace goes back where a previous interactive step exists. Escape exits.
 
 Custom-path input is validated. Empty submission must produce a validation message such as `Please provide a path.` rather than throwing. Returning to the custom-path step retains its entered text.
 
-### Selection controls
+### Selection controls and footer glyphs
 
 Multiselect menus contain only substantive choices. Do not add pseudo-options for:
 
@@ -207,26 +216,44 @@ Go back
 Cancel & exit
 ```
 
-Accepted keyboard behavior:
+Accepted keys and visible glyphs:
 
 ```text
-↑/↓         navigate
-Space       toggle highlighted item
-Enter       confirm
-A           toggle all selectable normal items
-Backspace   go back
-Esc         cancel and exit
+↑/↓  navigate
+␠    select
+↵    confirm
+A    toggle all
+⌫    back
+␛    exit
 ```
 
-The existing `I` invert-selection behavior may remain undisclosed.
+`I` may remain as an undisclosed invert-selection shortcut.
 
-The navigation footer is part of the custom renderer and must visually match native Clack styling. Key/control portions are dimmed while explanatory text and separators remain normal intensity. The guide/spine prefix must remain intact on every footer line.
+Multiselect footer shape:
+
+```text
+↑/↓ navigate • ␠ select • ↵ confirm • A toggle all • ⌫ back • ␛ exit
+```
+
+Single-select footer shape:
+
+```text
+↑/↓ navigate • ↵ confirm • ⌫ back • ␛ exit
+```
+
+Text input may omit navigation/select controls that do not apply, but must use the same glyph vocabulary for confirm/back/exit.
+
+All applicable hints remain on one line. Do not split the multiselect footer into a second shortcut row.
+
+There is one blank visual guide line between the final answer/input line and the footer so the control does not feel cramped.
+
+The custom renderer must preserve the Clack guide/spine and native-like styling. Key/control glyphs are dimmed while explanatory words and separators remain normal intensity.
 
 ### Prompt state retention
 
-Wizard state is process-local and explicitly scoped by operation/step identity.
+Wizard state is process-local and explicitly scoped by operation, selected scope, and step identity.
 
-When a user returns to a previously touched step, retain the prior state where still valid:
+When a user returns to a previously touched step, retain prior state where still valid:
 
 - single-select cursor/choice;
 - multiselect cursor;
@@ -235,11 +262,11 @@ When a user returns to a previously touched step, retain the prior state where s
 
 Selections that no longer exist or become disabled are discarded rather than restored incorrectly.
 
-State must not bleed between unrelated operations. Install, Update, Uninstall, generated-data removal, and installer-uninstall are distinct state namespaces.
+State must not bleed between unrelated operations or scopes.
 
 A new jl-skills process starts clean.
 
-Destructive confirmations use their safe default rather than remembering a prior affirmative answer.
+Destructive confirmations use their safe initial cursor rather than remembering a prior affirmative answer.
 
 ### Prompt punctuation
 
@@ -247,47 +274,100 @@ Interactive prompt copy follows ordinary punctuation:
 
 - interrogative questions end in `?`;
 - imperative/statement prompts end in `.`;
-- headings/note titles do not receive artificial terminal punctuation merely because they are headings.
+- note titles/headings are not sentence prompts and do not receive artificial punctuation.
+
+### Standard confirmation control
+
+Do not use Clack's inline binary confirm rendering for lifecycle confirmations.
+
+Every lifecycle confirmation is a normal vertical single-select:
+
+```text
+Continue?
+
+Yes
+No
+
+↑/↓ navigate • ↵ confirm • ⌫ back • ␛ exit
+```
+
+Visible order is always Yes then No.
+
+Normal install/update may begin on Yes. Destructive uninstall/data-removal operations may begin on No. Back returns exactly one interactive question backward.
+
+Use `Continue?` rather than rewriting each confirmation into increasingly explicit action-specific prose after the user already selected the operation.
 
 ## Install flow
 
 After scope selection, inspect that scope and present the catalog skill picker.
 
-Already-installed skills remain visible. When a skill cannot be installed again in the selected context, render only the skill name struck through and append a normal, non-struck suffix:
+Already-installed skills remain visible. A skill that is installed for every currently supported harness may be disabled in the picker with only the skill name struck through and a normal suffix:
 
 ```text
 Map (installed)
 ```
 
-Do not render the entire line struck through and do not use `Map - already installed`.
+A skill installed for only some harnesses remains selectable under Install so the user can add it to another harness.
 
-Nothing is preselected on a never-before-touched install-selection step.
+Nothing is preselected on a never-before-touched skill-selection step.
 
-After skill selection, present all supported AI harnesses on one multiselect screen:
+After skill selection, present all supported AI harnesses on one multiselect:
 
 ```text
 Which AI harnesses should receive these skills?
 ```
 
-Do not insert an intermediate `Choose specific harnesses` question.
+Nothing is preselected on first entry. Do not insert an intermediate harness-selection screen.
 
-Instruction injection is optional. The explanatory note comes first, followed by a concise Yes/No question whose same-line supporting pointer is exactly:
+### Instruction-file explanation and selection
+
+After harness selection, show one informational note with a Title Case title such as:
 
 ```text
-(See above for more information.)
+About AI Instruction Files
 ```
 
-The parenthetical is visually dimmed.
+The note explains the applicable instruction files (`AGENTS.md`, `CLAUDE.md`, or future equivalents) and managed instruction integration.
 
-### Installation summary
+The note is deliberately skill-agnostic. It must not mention:
 
-Use a sectioned note with sentence-case headings, simple indentation, comma-delimited compact lists, and newline-delimited locations:
+- Map;
+- any selected skill name;
+- the number of selected skills;
+- any wording that reveals which skills were selected.
+
+Immediately after the note, present one multiselect containing every skill the user requested to install:
 
 ```text
-Installation summary
+Which skills would you like to add to AGENTS.md and CLAUDE.md?
 
+Map
+Other Skill
+```
+
+Nothing is selected by default on first entry.
+
+The selected subset is applied uniformly to every applicable instruction file for the already-selected harnesses. There is no harness-by-harness matrix.
+
+Even when only one skill was selected for installation, retain this same generalized multiselect flow rather than changing control type or writing skill-specific explanatory copy.
+
+Returning to the instruction-selection step restores the prior submitted subset.
+
+### Installation Summary
+
+The note title is exactly Title Case:
+
+```text
+Installation Summary
+```
+
+Section headings inside the note remain sentence case. Use simple indentation, comma-delimited compact lists, and newline-delimited locations. No bullet characters.
+
+Example:
+
+```text
 Skills to install
-  Map, Other skill
+  Map, Other Skill
 
 Installation location
   C:\Programming\example
@@ -296,25 +376,23 @@ Affected AI harnesses
   OpenAI Codex, Claude Code
 
 Instruction injection
-  AGENTS.md, CLAUDE.md
+  Map → AGENTS.md, CLAUDE.md
 ```
 
-If instruction injection is disabled:
+If no selected skills receive instruction injection:
 
 ```text
 Instruction injection
   None
 ```
 
-No bullet characters are used.
-
-After confirmation, interactive per-target results use Clack's in-flow logging primitive rather than raw `console.log`, preserving the visual spine. Do not repeat an unnecessarily long destination path in each interactive result line when the summary already established the destination.
+After confirmation, interactive per-target results use Clack's in-flow logging primitive rather than raw `console.log` so the visual spine remains intact.
 
 Non-interactive output may retain concrete paths for automation/debugging.
 
-## Update flow
+## Update Skills flow
 
-After selecting scope, discover installed catalog skills directly from the supported harness locations at that scope.
+After selecting scope, discover installed catalog skills directly from supported harness locations at that scope.
 
 If none are found:
 
@@ -324,7 +402,7 @@ No skills were detected. Choose a different scope or path.
 
 Then return to the scope question with its prior cursor retained.
 
-When installations are found, show an in-flow step:
+When installations are found, show:
 
 ```text
 Checking for updates...
@@ -332,7 +410,7 @@ Checking for updates...
 
 Compare each installed self-reported version against the bundled catalog version.
 
-Only skills with an actual applicable update are shown in the update multiselect. Up-to-date skills are not offered merely as a repair path in the normal interactive Update flow.
+Only skills with an applicable update appear in the normal interactive update multiselect.
 
 If no updates exist:
 
@@ -340,7 +418,7 @@ If no updates exist:
 No updates found.
 ```
 
-Then return to the home `What would you like to do?` screen.
+Then return to the home screen.
 
 Update choices render aligned skill/version columns where practical:
 
@@ -349,25 +427,36 @@ Map       0.2.0 → 0.3.0
 Other     1.4.1 → 1.5.0
 ```
 
-Unknown installed version metadata must be labeled as unknown rather than invented.
+Unknown installed version metadata is labeled unknown rather than invented.
 
-Interactive update carries forward the harnesses actually discovered for that skill at the selected scope. Instruction injection state is inferred from whether the installer-managed instruction block currently exists for each discovered harness unless an explicit CLI override is supplied.
+`Update Skills` owns the complete manifest-declared skill representation for the selected installed targets. A real update must replace/update:
 
-Update must not initialize or mutate skill-generated semantic/project data.
+- installed `SKILL.md`;
+- other manifest-declared skill files;
+- declared runtime artifacts/support files where appropriate;
+- managed instruction fragments only according to actual existing instruction state or an explicit CLI override.
 
-## Uninstall flow
+Update never adds a newly selected harness. Adding another harness belongs to Install.
 
-After selecting scope, discover installed catalog skills directly from the supported harness locations at that scope.
+Update never initializes or mutates skill-generated semantic/project data.
 
-If none are found, use the same warning:
+Regression coverage must deliberately create a stale installed skill/version/content representation and prove that the current catalog contents replace it while unrelated files and generated data remain intact.
+
+The confirmation note title is `Update Summary`.
+
+## Uninstall Skills flow
+
+After selecting scope, discover installed catalog skills directly from supported harness locations at that scope.
+
+If none are found:
 
 ```text
 No skills were detected. Choose a different scope or path.
 ```
 
-Otherwise show only the installed skills as substantive multiselect choices.
+Otherwise show only installed skills as substantive choices.
 
-Uninstall removes the selected skill integration from the discovered/explicit harness targets at that scope:
+Uninstall removes the selected skill integration from discovered/explicit harness targets at that scope:
 
 - skill discovery/resource directory;
 - matching installer-managed instruction block if present.
@@ -379,7 +468,13 @@ It preserves:
 - skill-generated project data such as `.map/`;
 - shared skill runtime/tooling such as Map's shared CLI/schema.
 
-The confirmation note follows the same professional sectioned style as the installation summary.
+The confirmation note title is:
+
+```text
+Uninstall Summary
+```
+
+The note follows the same compact sectioned aesthetic as Installation Summary.
 
 ## Managed instruction integration
 
@@ -405,7 +500,7 @@ Required behavior:
 - uninstall removes only the matching managed block;
 - opting out leaves an unrelated existing instruction file untouched.
 
-Instruction fragments must render actual provisioned CLI paths when a skill uses a shared runtime rather than assuming the CLI is on `PATH`.
+Instruction fragments render actual provisioned CLI paths when a skill uses a shared runtime rather than assuming the CLI is on `PATH`.
 
 ## Package model
 
@@ -432,7 +527,7 @@ Semantic project initialization is never an installer hook.
 
 Skills may declare generated project data in their manifest. Each declaration is a relative path beneath the user-selected scope and may include a narrow marker used to verify that the path is actually that skill's generated data.
 
-Declarations must reject absolute paths and parent traversal (`..`).
+Declarations reject absolute paths and parent traversal (`..`).
 
 Example for Map:
 
@@ -447,24 +542,78 @@ Example for Map:
 
 ### Remove skill-generated data
 
-This is intentionally separate from skill uninstall and installer uninstall.
+This remains intentionally separate from skill uninstall and installer uninstall.
 
 Flow:
 
-1. `Where would you like to remove skill-generated data?`
+1. ask `Where would you like to remove skill-generated data?`;
 2. inspect only that selected scope/path;
 3. if none is detected, warn `No skill-generated data was detected. Choose a different scope or path.` and return to scope selection;
 4. show only skills whose declared generated data is detected there;
 5. ask `Which skills would you like to remove generated data for?`;
-6. show the exact generated-data paths in a destructive summary;
-7. require an explicit safe-default confirmation;
+6. show exact generated-data paths in a note titled `Permanent Data Removal`;
+7. require the standard safe-default `Continue?` confirmation;
 8. permanently delete only those declared generated-data paths.
 
-Deletion is recursive and unrecoverable. The confirmation must explicitly state that the selected data cannot be recovered.
+Deletion is recursive and unrecoverable. The note explicitly states that selected data cannot be recovered.
 
 For Map, selecting Map removes the selected project's `.map` directory. Neighboring project files are untouched.
 
 No registry or whole-drive scan is used to find generated data. The user supplies the scope/path and the installer performs narrow declarative detection there.
+
+## Update jl-skills installer
+
+Home-screen `Update jl-skills installer` manages only the compiled installer executable.
+
+It is available only from the compiled `jl-skills` executable, not from an arbitrary development Bun process that cannot correctly replace itself as the installed product.
+
+### Published update contract
+
+Default public manifest location:
+
+```text
+https://github.com/jacoblockett/jl-skills/releases/latest/download/jl-skills-manifest.json
+```
+
+The URL may be overridden for deterministic development/testing with:
+
+```text
+JL_SKILLS_UPDATE_MANIFEST_URL
+```
+
+A manifest contains at least:
+
+```json
+{
+  "version": "0.6.0",
+  "artifacts": {
+    "windows-x64": {
+      "url": "https://.../jl-skills.exe",
+      "sha256": "<64 hex characters>"
+    }
+  }
+}
+```
+
+The installer:
+
+1. reports `Checking for updates...`;
+2. fetches/parses the manifest;
+3. treats a missing published manifest (HTTP 404) as no available update;
+4. compares semantic versions;
+5. reports `No updates found.` and returns home when the running version is current/newer;
+6. requires a current-platform artifact for a newer release;
+7. shows an `Update Summary` containing current and available versions;
+8. uses the standard `Continue?` confirmation;
+9. downloads the replacement to a sibling staging path;
+10. validates SHA-256 before replacement;
+11. leaves the currently running executable untouched while staging;
+12. on Windows, starts the smallest detached post-exit replacement command;
+13. preserves installed skills, skill runtime/tooling, and skill-generated data.
+
+A failed hash/version/manifest check must fail rather than install an unverifiable executable.
+
+Automated smoke is entirely offline through a fake fetch/update source and must never replace the real development executable.
 
 ## Uninstall jl-skills installer
 
@@ -472,30 +621,41 @@ This action is intentionally installer-only.
 
 It must not uninstall skills, remove skill runtimes/tooling, or remove skill-generated project data.
 
-Before mutation, show an explicit summary containing:
+Do not show a verbose uninstall summary enumerating executable paths, installer-data paths, absent data, or preserved skill state.
+
+Instead show one concise warning:
 
 ```text
-Installer executable
-  <exact jl-skills executable path>
-
-Installer-owned data
-  <exact installer-owned data path, or None detected.>
-
-Preserved
-  Installed skills, skill runtime/tooling, skill-generated data
+This action will uninstall the jl-skills installer and any associated installer-owned data and tooling.
 ```
 
-The action is available only from the compiled `jl-skills` executable, not from a development `bun` process that cannot correctly self-delete as the product.
+Then use the standard safe-default `Continue?` confirmation.
 
 After confirmation:
 
-- remove the installer-owned data directory if present;
+- remove actual installer-owned data if present;
 - schedule deletion of the running Windows executable after it exits;
-- preserve installed skills and their self-reported metadata;
+- preserve installed skills and self-reported metadata;
 - preserve skill-specific shared support/runtime directories such as `~/.jl-skills/map/...`;
 - preserve all generated project data.
 
 Do not describe or delete a nonexistent central installer registry.
+
+## Note-title convention
+
+Clack note titles use Title Case unless a future specific visual decision says otherwise.
+
+Required current titles include:
+
+```text
+About AI Instruction Files
+Installation Summary
+Update Summary
+Uninstall Summary
+Permanent Data Removal
+```
+
+Section headings inside those notes may remain sentence case.
 
 ## Map runtime integration
 
@@ -518,7 +678,7 @@ The shared default schema lives at:
 
 There is no SurrealDB daemon/listening port.
 
-Installing Map must not:
+Installing/updating Map must not:
 
 - create `.map/`;
 - create/open an embedded project database;
@@ -527,13 +687,13 @@ Installing Map must not:
 - create a recovery session;
 - overwrite unrelated harness configuration or unmanaged instruction content.
 
-`map init` alone creates Map project state, including the Map-local `.map/project.json` identity metadata.
+`map init` alone creates Map project state, including Map-local `.map/project.json` identity metadata.
 
 There is no machine-level Map project registry in the accepted lifecycle.
 
 ## Build and smoke pipeline
 
-The current Windows x64 local pipeline is conceptually:
+The current Windows x64 local pipeline is:
 
 ```text
 cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map
@@ -551,20 +711,25 @@ build/jl-skills.exe
 
 and removes stale singular `build/jl-skill.exe` output.
 
-The build must validate each catalog skill's source self-report metadata against its manifest before shipping the catalog.
+Catalog generation validates each source skill's self-report metadata against its manifest before shipping the catalog.
 
-Installer regression coverage should include at least:
+Regression coverage includes at least:
 
 - hard scope isolation;
-- path normalization;
+- custom-path normalization;
 - self-reported skill metadata installation/discovery;
 - manual/filesystem-discovered installation handling;
-- instruction injection opt-in/opt-out and managed-block safety;
+- managed instruction opt-in/opt-out and boundary safety;
+- stale installed skill/version/content replacement;
+- preservation of unrelated/generated data during update;
 - update discovery/version comparison;
 - uninstall preservation of generated data and shared tooling;
-- keyboard multiselect behavior;
-- removal of pseudo-navigation choices;
-- skill-generated-data detection and bounded deletion;
+- keyboard multiselect/back/select-all behavior;
+- removal of visible navigation pseudo-options;
+- one-line Unicode navigation-footer vocabulary;
+- absence of inline Clack lifecycle confirmations;
+- skill-generated-data bounded deletion;
+- offline installer updater metadata/version/hash/staging behavior;
 - installer self-uninstall preservation boundaries.
 
 ## Explicit non-goals
@@ -577,6 +742,7 @@ Do not add without a demonstrated need:
 - automatic semantic project initialization;
 - another TUI framework;
 - Clack fork/monkey patch;
+- harness-by-harness instruction-injection matrices;
 - speculative plugin/package-manager abstractions beyond the current manifest model;
 - automatic deletion of skill-generated data during ordinary skill uninstall;
 - automatic deletion of installed skills or skill runtime/tooling during installer self-uninstall.
