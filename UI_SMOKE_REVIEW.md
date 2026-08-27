@@ -178,13 +178,13 @@ The stale-update multiselect starts empty. Selecting a skill updates every stale
 
 After already-satisfied/configuration/stale classification and any stale-update selection, compute the remaining actionable skills.
 
-If anything remains to install, configure, or approved-update, show one ordinary status line:
+Only show the continuation status when at least one whole requested skill was removed from the work list because it was already satisfied and at least one other skill still has work remaining:
 
 ```text
 Installation will continue for: Map, Other Skill.
 ```
 
-Then execute only those remaining targets.
+Do not show that status for an ordinary one-skill installation or when no requested skill was removed from the work list.
 
 If nothing remains:
 
@@ -197,6 +197,36 @@ Do not show `No changes needed`, `No changes made`, or update-oriented meta narr
 All inspection happens before any resulting filesystem writes. Do not interleave check/write/check/write.
 
 The explicit non-interactive CLI may retain deterministic reapply behavior; this post-confirm inspection requirement is for the interactive wizard flow unless a separate CLI contract is accepted later.
+
+## P0 — Keep Update Skills inside the chosen-scope loop when everything is current
+
+Update Skills starts by asking:
+
+```text
+Where would you like to update skills?
+```
+
+After the user chooses a scope/path:
+
+- if no skills are installed there, retain the existing warning:
+
+```text
+No skills were detected. Choose a different scope or path.
+```
+
+- if installed skills are present but none have an available update, show:
+
+```text
+All skills are already up to date. Choose a different scope or path.
+```
+
+Then return to the **same** `Where would you like to update skills?` scope question with prior local cursor/state retained.
+
+Do not return to the home screen merely because the chosen update scope has no applicable updates. Do not use the generic `No updates found.` copy for the Update Skills flow.
+
+A scope with available updates continues into the existing update-selection multiselect and normal Update Summary/confirmation lifecycle.
+
+A manual smoke path must be available without publishing a real release: install the current bundled skill into the isolated UI-smoke project, deliberately lower only the installed skill metadata version, then launch the compiled installer and choose Update Skills for that project. This should expose the real update picker with an older-installed → bundled-current version transition and allow the user to exercise the real interactive update flow end to end.
 
 # Existing Current-Turn Requirements
 
