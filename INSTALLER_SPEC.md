@@ -63,7 +63,7 @@ For explicit non-interactive install:
 
 For explicit interactive install where instruction choice remains unspecified, the generalized instruction-injection multiselect is still shown.
 
-The interactive existing-installation preflight described below is a wizard UX contract. Explicit non-interactive install may retain deterministic reapply behavior unless a separate CLI contract is accepted later.
+The interactive existing-installation inspection described below is a wizard UX contract. Explicit non-interactive install may retain deterministic reapply behavior unless a separate CLI contract is accepted later.
 
 Interactive lifecycle actions such as skill-generated-data removal, installer update, and installer self-uninstall live on the bare-executable home screen unless a separate deterministic CLI contract is accepted later.
 
@@ -208,7 +208,7 @@ There are no visible `Go back` or `Cancel & exit` rows. Backspace goes back wher
 
 Custom-path input is validated. Empty submission must produce a validation message such as `Please provide a path.` rather than throwing. Returning to the custom-path step retains its entered text.
 
-### Selection controls and footer labels
+### Selection controls and footer hints
 
 Multiselect menus contain only substantive choices. Do not add pseudo-options for:
 
@@ -218,18 +218,16 @@ Go back
 Cancel & exit
 ```
 
-Accepted keys and visible labels:
+Accepted visible key hints:
 
 ```text
-↑/↓       navigate
-Space     select
-Enter     confirm
-A         toggle all
+↑/↓      navigate
+Space    select
+Enter    confirm
+A        toggle all
 Backspace back
-Esc       exit
+Esc      exit
 ```
-
-Only the up/down navigation keys use symbolic arrows. Space, Enter, Backspace, and Escape are written by name so the footer remains unambiguous across terminal fonts.
 
 `I` may remain as an undisclosed invert-selection shortcut.
 
@@ -245,7 +243,7 @@ Single-select footer shape:
 ↑/↓ navigate • Enter confirm • Backspace back • Esc exit
 ```
 
-Text input may omit navigation/select controls that do not apply, but must use the same explicit key-name vocabulary for confirm/back/exit.
+Text input may omit navigation/select controls that do not apply, but must use the same explicit key names for confirm/back/exit.
 
 All applicable hints remain on one line. Do not split the multiselect footer into a second shortcut row.
 
@@ -303,7 +301,7 @@ Use `Continue?` rather than rewriting each confirmation into increasingly explic
 
 ## Install flow
 
-After scope selection, present the catalog skill picker. Installed skills remain selectable; do not disable a skill merely because it already exists on every currently supported harness. The actual installability decision happens only after the user chooses the target harnesses.
+After scope selection, present the catalog skill picker. Installed skills remain selectable; do not disable a skill merely because it already exists on every currently supported harness. The actual existing-installation decision happens only after the complete requested configuration has been confirmed.
 
 Nothing is preselected on a never-before-touched skill-selection step.
 
@@ -315,44 +313,9 @@ Which AI harnesses should receive these skills?
 
 Nothing is preselected on first entry. Do not insert an intermediate harness-selection screen.
 
-### Existing-installation preflight
-
-After skill and harness selection, but before any filesystem writes, inspect every requested skill × selected-harness target at the selected scope.
-
-Classify each target as:
-
-- missing;
-- installed and current/newer than the bundled catalog version;
-- installed but stale/unknown-version.
-
-Interactive behavior:
-
-- missing targets remain ordinary installs;
-- current/newer targets are skipped and must never be downgraded;
-- stale targets are grouped by skill;
-- if stale skills exist, show one warning and one optional multiselect asking which stale skills should be updated instead;
-- the stale-update multiselect starts empty;
-- selecting a stale skill updates every stale requested harness target for that skill;
-- leaving a stale skill unselected skips those stale targets;
-- if all requested targets are already current, report that no changes are needed and perform no write;
-- perform all inspection before executing the resulting plan rather than interleaving checks and writes.
-
-Example stale selection:
-
-```text
-Some selected skills are already installed but out of date.
-
-Which would you like to update instead?
-
-Map  0.1.0 → 0.2.0
-Other Skill  unknown → 1.3.0
-```
-
-The stale-selection step follows the same process-local cursor/selection restoration and one-step Back behavior as other wizard steps.
-
 ### Instruction-file explanation and selection
 
-After the relevant preflight step, show one informational note with a Title Case title such as:
+After harness selection, show one informational note with a Title Case title such as:
 
 ```text
 About AI Instruction Files
@@ -396,7 +359,7 @@ Even when only one skill was selected for installation, retain this same general
 
 Returning to the instruction-selection step restores the prior submitted subset.
 
-### Installation Summary
+### Installation Summary and confirmation boundary
 
 The note title is exactly Title Case:
 
@@ -439,7 +402,109 @@ Instruction injection
   None
 ```
 
-After confirmation, interactive per-target results use Clack's in-flow logging primitive rather than raw `console.log` so the visual spine remains intact.
+The standard `Continue?` confirmation follows this summary.
+
+For the interactive wizard, **do not inspect existing skill installations before the user confirms Yes**. The complete request is collected and summarized first. Yes is the boundary after which jl-skills may inspect current installation state and execute/adapt the confirmed request.
+
+No confirmed request means no existing-install inspection and no filesystem mutation from this install operation.
+
+### Post-confirm existing-installation inspection
+
+After Yes, inspect every requested skill × selected-harness target at the selected scope before making any resulting filesystem writes.
+
+For each target, compare the actual installation against the complete requested configuration. The requested configuration includes:
+
+- skill;
+- harness;
+- installed/catalog version relationship;
+- requested managed instruction-injection state for that skill;
+- actual presence/absence of that skill's managed block in that harness instruction file.
+
+Classify each target as:
+
+- missing;
+- already satisfied in the requested configuration;
+- installed at the current/newer version but instruction configuration differs;
+- stale/unknown-version and update-eligible.
+
+A current or newer installed version alone does not make the request satisfied. The managed instruction state must also match what the user just confirmed.
+
+If a current/newer Map installation has no managed `AGENTS.md` block and the confirmed request includes Map instruction injection, add the managed block as configuration work.
+
+If a current/newer Map installation has a managed `AGENTS.md` block and the confirmed request excludes Map instruction injection, remove only that managed block as configuration work.
+
+Configuration-only work must not rewrite or downgrade the installed skill/runtime simply to change the instruction setting.
+
+A newer installed skill version must never be downgraded to the bundled version.
+
+### Already-satisfied skills
+
+A skill is considered wholly already installed only when every requested harness target for that skill is satisfied in the confirmed configuration.
+
+A mixed request such as Map already satisfied for Codex but missing for Claude remains a continuing Map installation and is not presented as wholly already installed.
+
+When one or more whole requested skills are already satisfied, show one note block:
+
+```text
+The Following Skills Have Already Been Installed
+
+Map, Other Skill
+```
+
+The body is a single comma-delimited skill list. Do not enumerate harnesses, versions, explanations, or internal state in this note.
+
+### Stale installations encountered during Install
+
+Stale/unknown-version requested targets are grouped by skill after confirmation.
+
+Show one warning followed by one optional multiselect:
+
+```text
+Some selected skills are already installed but out of date.
+
+Which would you like to update instead?
+
+Map  0.1.0 → 0.2.0
+Other Skill  unknown → 1.3.0
+```
+
+The selection starts empty.
+
+Selecting a skill updates every stale requested harness target for that skill. Leaving it unselected skips those stale targets.
+
+Back from this post-confirm update choice returns to the final confirmation rather than skipping backward past it.
+
+### Continue or return home
+
+After classification and any stale-update selection, compute the remaining actionable skills.
+
+If at least one skill still has missing targets, instruction-configuration work, or approved stale updates, show one ordinary status line:
+
+```text
+Installation will continue for: Map, Other Skill.
+```
+
+Then perform only that remaining work.
+
+If nothing remains:
+
+```text
+There is nothing to install.
+```
+
+Do not emit `No changes needed`, `No changes made`, or similar internal/meta narration.
+
+In the bare wizard, return to the primary:
+
+```text
+What would you like to do?
+```
+
+screen.
+
+All post-confirm inspection occurs before any resulting filesystem write. Do not interleave check/write/check/write.
+
+After actual installation/configuration/update work completes, interactive per-target results use Clack's in-flow logging primitive rather than raw `console.log` so the visual spine remains intact.
 
 Non-interactive output may retain concrete paths for automation/debugging.
 
@@ -788,8 +853,10 @@ Regression coverage includes at least:
 - custom-path normalization;
 - self-reported skill metadata installation/discovery;
 - manual/filesystem-discovered installation handling;
-- interactive install preflight classification across missing/current/stale targets;
-- no downgrade of newer installed versions during Install preflight;
+- interactive install inspection only after final confirmation;
+- install satisfaction including requested managed-instruction state;
+- configuration-only managed-block changes without rewriting current/newer skill content;
+- no downgrade of newer installed versions during Install handling;
 - managed instruction opt-in/opt-out and boundary safety;
 - stale installed skill/version/content replacement;
 - preservation of unrelated/generated data during update;
@@ -797,7 +864,7 @@ Regression coverage includes at least:
 - uninstall preservation of generated data and shared tooling;
 - keyboard multiselect/back/select-all behavior;
 - removal of visible navigation pseudo-options;
-- one-line navigation-footer key labels;
+- one-line explicit navigation-footer vocabulary;
 - absence of inline Clack lifecycle confirmations;
 - skill-generated-data bounded deletion;
 - offline installer updater metadata/version/hash/staging behavior;
