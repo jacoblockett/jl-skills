@@ -1431,17 +1431,33 @@ function installerExecutable(): string {
   return executable
 }
 
-function scheduleExecutableRemoval(executable: string): void {
-  if (!isWindows) {
-    rmSync(executable, { force: true })
+function scheduleInstallerUninstall(executable: string, dataRoot: string): void {
+  if (isWindows) {
+    const escapedExecutable = executable.replaceAll('"', '""')
+    const escapedDataRoot = dataRoot.replaceAll('"', '""')
+    const command = [
+      'ping 127.0.0.1 -n 2 >nul',
+      `if exist "${escapedDataRoot}" rmdir /s /q "${escapedDataRoot}"`,
+      `del /f /q "${escapedExecutable}"`,
+    ].join(' & ')
+    const child = spawn('cmd.exe', ['/d', '/s', '/c', command], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    child.unref()
     return
   }
-  const escaped = executable.replaceAll('"', '""')
-  const command = `ping 127.0.0.1 -n 2 >nul & del /f /q "${escaped}"`
-  const child = spawn('cmd.exe', ['/d', '/s', '/c', command], {
+
+  const child = spawn('/bin/sh', [
+    '-c',
+    'sleep 1; rm -rf -- "$1"; rm -f -- "$2"',
+    'jl-skills-uninstall',
+    dataRoot,
+    executable,
+  ], {
     detached: true,
     stdio: 'ignore',
-    windowsHide: true,
   })
   child.unref()
 }
@@ -1481,9 +1497,7 @@ async function uninstallInstallerWizard(state: WizardState): Promise<NavResult<n
   const proceed = await chooseConfirmation(state, 'installer-uninstall.confirm', { allowBack: true, safeDefault: true })
   if (proceed === BACK_SIGNAL || !proceed) return BACK_SIGNAL
 
-  rmSync(installerDataRoot(), { recursive: true, force: true })
-  scheduleExecutableRemoval(executable)
-  prompts.outro('jl-skills installer uninstall scheduled')
+  scheduleInstallerUninstall(executable, installerDataRoot())
   return 0
 }
 
