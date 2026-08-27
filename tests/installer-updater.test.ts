@@ -139,4 +139,25 @@ describe('installer update artifact staging', () => {
     expect(command).toContain('.jl-skills.exe.update-1')
     expect(command).toContain('jl-skills.exe')
   })
+
+  test('installer self-uninstall delegates silent cleanup and exits without an outro', () => {
+    const source = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8').replace(/\r\n/g, '\n')
+
+    const helperStart = source.indexOf('function scheduleInstallerUninstall(')
+    const helperEnd = source.indexOf('\nasync function updateInstallerWizard(', helperStart)
+    const helper = source.slice(helperStart, helperEnd)
+    expect(helper).toContain("spawn('cmd.exe'")
+    expect(helper).toContain("spawn('/bin/sh'")
+    expect(helper).toContain("stdio: 'ignore'")
+    expect(helper).toContain('rmdir /s /q')
+    expect(helper).toContain('rm -rf --')
+
+    const wizardStart = source.indexOf('async function uninstallInstallerWizard(')
+    const wizardEnd = source.indexOf('\nasync function bareWizard(', wizardStart)
+    const wizard = source.slice(wizardStart, wizardEnd)
+    expect(wizard).toContain('scheduleInstallerUninstall(executable, installerDataRoot())')
+    expect(wizard).not.toContain('rmSync(installerDataRoot()')
+    expect(wizard).not.toContain('prompts.outro(')
+    expect(wizard).not.toContain('scheduled')
+  })
 })
