@@ -8,19 +8,17 @@ Do not mark an item resolved merely because code changed. Current-turn items mus
 
 # Current Interactive Follow-Up — Highest Priority
 
-## P0 — Use explicit key names in navigation footers
+## P0 — Keep navigation hints explicit and single-line
 
-Unicode key symbols other than the navigation arrows rendered inconsistently or were ambiguous in the user's Windows terminal. Keep only `↑/↓` as a symbolic key hint. Spell out every other visible key name.
-
-Use this visible vocabulary:
+Use ordinary key names except for the unambiguous arrow-navigation glyph:
 
 ```text
-↑/↓      navigate
-Space    select
-Enter    confirm
-A        toggle all
+↑/↓  navigate
+Space select
+Enter confirm
+A     toggle all
 Backspace back
-Esc      exit
+Esc   exit
 ```
 
 Required presentation:
@@ -65,8 +63,6 @@ The note still must not reveal which skills were selected.
 
 ## P0 — Make Installation Summary instruction injection file-first
 
-The previous summary rendered the selected skills as the left side of one arrow and every affected instruction file on the right side. That does not scale/read as naturally as the file ownership model.
-
 Use one line per affected instruction file, with the file first and the selected injected skill subset second.
 
 One skill, one file:
@@ -100,39 +96,107 @@ Instruction injection
 
 The same selected skill subset still applies uniformly across all selected harness instruction files; there is no harness-by-harness injection matrix.
 
-## P0 — Preflight existing installations before interactive Install writes
+## P0 — Inspect existing installations only after final confirmation
 
-Interactive Install must not blindly rewrite every requested skill/harness target.
+The interactive Install wizard must collect the complete requested configuration first:
 
-After the user selects skills and harnesses, but before any filesystem writes:
+1. scope;
+2. skills;
+3. harnesses;
+4. instruction-injection subset;
+5. Installation Summary;
+6. final `Continue?` confirmation.
 
-1. Inspect every requested skill × selected-harness target at the selected scope.
-2. Classify each target as:
-   - missing;
-   - installed and current/newer than the bundled catalog version;
-   - installed but stale/unknown-version and therefore update-eligible.
-3. Current targets are skipped rather than reinstalled or downgraded.
-4. Missing targets remain normal installs.
-5. Aggregate stale targets by skill rather than prompting separately for each harness.
-6. If any stale skills exist, show one warning and one optional multiselect such as:
+Do not inspect or warn about existing skill installations before the user answers Yes to that final confirmation. Confirmation is the boundary between planning and execution.
+
+After Yes, inspect every requested skill × selected-harness target at the selected scope and compare the actual installation against the complete requested configuration.
+
+The requested configuration includes at least:
+
+- requested skill;
+- requested harness;
+- installed/catalog version relationship;
+- whether managed instruction injection was requested for that skill and whether the matching managed block currently exists for that harness.
+
+Classify each target as:
+
+- missing;
+- already satisfied in the requested configuration;
+- current/newer version but instruction configuration differs;
+- stale/unknown-version and update-eligible.
+
+A current/newer installation is **not** already satisfied when its instruction-injection state differs from the newly confirmed request. Adding or removing the managed instruction block is real configuration work.
+
+Examples:
+
+```text
+Existing: Map current for Codex, no AGENTS.md block
+Requested: Map current for Codex, inject into AGENTS.md
+Result: configuration work; add the managed block
+```
+
+```text
+Existing: Map current for Codex, AGENTS.md block present
+Requested: Map current for Codex, no instruction injection
+Result: configuration work; remove only the managed block
+```
+
+Do not rewrite/downgrade the installed skill merely to change this instruction configuration. Configuration-only work changes only the matching managed instruction block.
+
+### Already-satisfied warning
+
+A skill belongs in the already-installed warning only when **every requested harness target for that skill** is already satisfied in the requested configuration.
+
+A mixed skill, such as Map already satisfied for Codex but missing for Claude, remains a continuing-install skill and is not listed as wholly already installed.
+
+If one or more whole requested skills are already satisfied, show one note block:
+
+```text
+The Following Skills Have Already Been Installed
+
+Map, Other Skill
+```
+
+The body is one comma-delimited line. Do not enumerate harnesses, versions, explanations, or internal state in that note.
+
+### Stale installations
+
+Stale/unknown-version targets remain grouped by skill. If stale skills exist, show the existing optional update selection after confirmation:
 
 ```text
 Some selected skills are already installed but out of date.
 
 Which would you like to update instead?
 
-□ Map  0.1.0 → 0.2.0
-□ Other Skill  unknown → 1.3.0
+Map  0.1.0 → 0.2.0
+Other Skill  unknown → 1.3.0
 ```
 
-7. The stale-update multiselect starts empty. A selected skill updates every stale target for that skill among the harnesses already requested. An unselected stale skill is skipped.
-8. Do all detection first, then execute the resulting install/update plan after the normal summary/confirmation. Do not interleave check/write/check/write.
-9. If every requested target is already current, report that no changes are needed and perform no write.
-10. A fully installed skill must remain selectable in the initial Install skill picker so this preflight can make the decision after the harness selection. Do not disable it solely because it exists on every currently supported harness.
-11. A newer installed version must be treated as current for Install preflight purposes; never downgrade it to the bundled version.
-12. Process-local state for the stale-update chooser follows the same Back/restore rules as every other touched step.
+The stale-update multiselect starts empty. Selecting a skill updates every stale requested harness target for that skill. Leaving it unselected skips those stale targets.
 
-The explicit non-interactive CLI may retain its deterministic reapply behavior; this preflight requirement is for the interactive wizard flow unless a separate CLI contract is accepted later.
+### Continue or return home
+
+After already-satisfied/configuration/stale classification and any stale-update selection, compute the remaining actionable skills.
+
+If anything remains to install, configure, or approved-update, show one ordinary status line:
+
+```text
+Installation will continue for: Map, Other Skill.
+```
+
+Then execute only those remaining targets.
+
+If nothing remains:
+
+```text
+There is nothing to install.
+```
+
+Do not show `No changes needed`, `No changes made`, or update-oriented meta narration. In the bare wizard, return directly to the primary `What would you like to do?` screen.
+
+All inspection happens before any resulting filesystem writes. Do not interleave check/write/check/write.
+
+The explicit non-interactive CLI may retain deterministic reapply behavior; this post-confirm inspection requirement is for the interactive wizard flow unless a separate CLI contract is accepted later.
 
 # Existing Current-Turn Requirements
 
