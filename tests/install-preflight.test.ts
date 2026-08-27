@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { classifyInstallTargets, satisfiedSkills, staleSkills } from '../src/install-preflight'
 
 describe('install preflight classification', () => {
@@ -135,5 +137,21 @@ describe('install preflight classification', () => {
     )
     expect(satisfiedSkills(mixed)).toEqual([])
     expect(mixed[1]?.state).toBe('missing')
+  })
+
+  test('interactive install inspection happens only after Continue confirmation', () => {
+    const repo = resolve(import.meta.dir, '..')
+    const source = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8')
+    const start = source.indexOf('async function installAtScope(')
+    const end = source.indexOf('\nasync function installWizard(', start)
+    const installFlow = source.slice(start, end)
+    const confirmation = installFlow.indexOf('chooseConfirmation(')
+    const inspection = installFlow.indexOf('installPreflight(')
+
+    expect(confirmation).toBeGreaterThan(-1)
+    expect(inspection).toBeGreaterThan(confirmation)
+    expect(installFlow).not.toContain('All requested skill installations are already up to date.')
+    expect(installFlow).not.toContain('No changes needed')
+    expect(installFlow).toContain('There is nothing to install.')
   })
 })
