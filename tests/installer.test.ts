@@ -323,6 +323,39 @@ describe('jl-skills installer scope regressions', () => {
     expect(existsSync(installerRegistry(s))).toBe(false)
   })
 
+  test('update replaces stale skill/runtime support while preserving generated and unrelated data', () => {
+    const s = sandbox('update-replaces-stale-assets')
+    ok(install(s.project, s))
+
+    const skill = join(s.project, '.agents', 'skills', 'map', 'SKILL.md')
+    const staleMetadata = '<!-- jl-skills-meta: {"name":"map","version":"0.1.0","format":1} -->'
+    writeFileSync(skill, `${read(sourceSkill).replace(metadata, staleMetadata)}\nSTALE_INSTALL_MARKER\n`)
+
+    const agents = join(s.project, 'AGENTS.md')
+    const agentsBefore = read(agents)
+    const unrelated = join(s.project, 'unrelated.txt')
+    writeFileSync(unrelated, 'KEEP UNRELATED\n')
+
+    const mapDir = join(s.project, '.map')
+    mkdirSync(mapDir, { recursive: true })
+    writeFileSync(join(mapDir, 'project.json'), '{"projectId":"aaaaaaaaaaaaaaaaaaaa","createdAtMs":1}\n')
+    writeFileSync(join(mapDir, 'keep.txt'), 'KEEP GENERATED\n')
+
+    writeFileSync(sharedSchema(s.home), 'STALE SCHEMA\n')
+
+    ok(update(s.project, s))
+
+    const updatedSkill = read(skill)
+    expect(updatedSkill).toContain(metadata)
+    expect(updatedSkill).not.toContain(staleMetadata)
+    expect(updatedSkill).not.toContain('STALE_INSTALL_MARKER')
+    expect(read(agents)).toBe(agentsBefore)
+    expect(read(unrelated)).toBe('KEEP UNRELATED\n')
+    expect(read(join(mapDir, 'keep.txt'))).toBe('KEEP GENERATED\n')
+    expect(read(join(mapDir, 'project.json'))).toContain('aaaaaaaaaaaaaaaaaaaa')
+    expect(read(sharedSchema(s.home))).toBe(read(schema))
+  })
+
   test('manual self-describing skill installation is discoverable without receipts', () => {
     const s = sandbox('manual-install-discovery')
     const skillDir = join(s.project, '.agents', 'skills', 'map')
@@ -332,7 +365,7 @@ describe('jl-skills installer scope regressions', () => {
 
     ok(update(s.project, s))
 
-    expect(read(join(skillDir, 'SKILL.md'))).toContain(metadata)
+    expect(read(join(skillDir, 'SKILL.md')).toContain(metadata)
     expect(existsSync(sharedMap(s.home))).toBe(true)
     expect(read(join(s.project, 'AGENTS.md'))).toBe('MANUAL CONTENT\n')
     expect(existsSync(installerRegistry(s))).toBe(false)
@@ -381,7 +414,7 @@ describe('jl-skills installer scope regressions', () => {
     expect(existsSync(join(s.project, '.agents', 'skills', 'map'))).toBe(false)
     expect(existsSync(join(s.project, '.claude', 'skills', 'map', 'SKILL.md'))).toBe(true)
     expect(existsSync(join(s.project, 'AGENTS.md'))).toBe(false)
-    expect(read(join(s.project, 'CLAUDE.md'))).toContain(begin)
+    expect(read(join(s.project, 'CLAUDE.md')).toContain(begin)
     expect(existsSync(installerRegistry(s))).toBe(false)
   })
 })
