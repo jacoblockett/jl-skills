@@ -163,11 +163,11 @@ function optionText<Value>(
 function instructionFooter(hasGuide: boolean, allowBack: boolean): string {
   const pieces = [
     `${styleText('dim', '↑/↓')} navigate`,
-    `${styleText('dim', '␣')} select`,
-    `${styleText('dim', '↵')} confirm`,
+    `${styleText('dim', 'Space')} select`,
+    `${styleText('dim', 'Enter')} confirm`,
     `${styleText('dim', 'A')} toggle all`,
-    ...(allowBack ? [`${styleText('dim', '←')} back`] : []),
-    `${styleText('dim', '⎋')} exit`,
+    ...(allowBack ? [`${styleText('dim', 'Backspace')} back`] : []),
+    `${styleText('dim', 'Esc')} exit`,
   ]
   const line = `${hasGuide ? `${styleText('cyan', S_BAR)}  ` : ''}${pieces.join(' • ')}`
   return hasGuide ? `${line}\n${styleText('cyan', S_BAR_END)}` : line
