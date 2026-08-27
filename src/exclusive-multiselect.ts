@@ -166,8 +166,8 @@ function instructionFooter(hasGuide: boolean, allowBack: boolean): string {
     `${styleText('dim', '␣')} select`,
     `${styleText('dim', '↵')} confirm`,
     `${styleText('dim', 'A')} toggle all`,
-    ...(allowBack ? [`${styleText('dim', '⌫')} back`] : []),
-    `${styleText('dim', '␛')} exit`,
+    ...(allowBack ? [`${styleText('dim', '←')} back`] : []),
+    `${styleText('dim', '⎋')} exit`,
   ]
   const line = `${hasGuide ? `${styleText('cyan', S_BAR)}  ` : ''}${pieces.join(' • ')}`
   return hasGuide ? `${line}\n${styleText('cyan', S_BAR_END)}` : line
