@@ -14,10 +14,14 @@ import {
 import { arch, homedir, platform } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path'
 import { Buffer } from 'node:buffer'
-import { styleText } from 'node:util'
 import { catalog } from './catalog.generated'
 import { exclusiveMultiselect, type ExclusiveOption } from './exclusive-multiselect'
 import { BACK_SIGNAL, navSelect, navText, type NavOption } from './nav-prompts'
+import {
+  checkInstallerUpdate,
+  scheduleInstallerReplacement,
+  stageInstallerUpdate,
+} from './installer-updater'
 
 const VERSION = '0.5.0'
 const PROMPTS_VERSION = '1.7.0'
@@ -187,6 +191,31 @@ async function chooseMany(
   if (selected === BACK_SIGNAL) return BACK_SIGNAL
   step.values = [...(selected as string[])]
   return selected as string[]
+}
+
+async function chooseConfirmation(
+  state: WizardState,
+  stepId: string,
+  {
+    allowBack = true,
+    safeDefault = false,
+  }: { allowBack?: boolean; safeDefault?: boolean } = {},
+): Promise<NavResult<boolean>> {
+  const step = memory(state, stepId)
+  step.value = undefined
+  step.cursor = undefined
+  const choice = await chooseOne(
+    state,
+    stepId,
+    'Continue?',
+    [
+      { value: 'yes', label: 'Yes' },
+      { value: 'no', label: 'No' },
+    ],
+    { allowBack, initialValue: safeDefault ? 'no' : 'yes' },
+  )
+  if (choice === BACK_SIGNAL) return BACK_SIGNAL
+  return choice === 'yes'
 }
 
 function rawUserHome(): string {
@@ -763,24 +792,15 @@ function instructionFiles(agents: string[], scope: Scope): string[] {
   return [...new Set(agents.map((agent) => basename(agentPaths(agent, scope).instruction)))]
 }
 
-function instructionQuestion(agents: string[], scope: Scope, skills: string[]): string {
-  const fileText = humanList(instructionFiles(agents, scope))
-  const skillText = humanList(skills.map(displaySkillName))
-  return `Add ${skillText} instructions to ${fileText}?`
-}
-
-function instructionExplanation(
-  agents: string[],
-  scope: Scope,
-  skills: string[],
-): { title: string; body: string } {
+function instructionExplanation(agents: string[], scope: Scope): { title: string; body: string } {
   const files = instructionFiles(agents, scope)
   const fileText = humanList(files)
-  const skillText = humanList(skills.map(displaySkillName))
-  const body = files.length === 1 && agents.length === 1
-    ? `${fileText} contains general instructions that ${agentLabel(agents[0])} reads automatically. jl-skills can add a small section explaining how to use ${skillText} without changing the rest of the file.`
-    : `${fileText} contain general instructions that your selected AI tools read automatically. jl-skills can add a small section explaining how to use ${skillText} without changing the rest of those files.`
-  return { title: `About ${fileText}`, body }
+  const noun = files.length === 1 ? 'file contains' : 'files contain'
+  const ending = files.length === 1 ? 'the rest of the file' : 'the rest of those files'
+  return {
+    title: 'About AI Instruction Files',
+    body: `${fileText} ${noun} general instructions that your selected AI tools read automatically. jl-skills can add managed sections for whichever skills you choose below without changing ${ending}.`,
+  }
 }
 
 async function chooseInstructionInjection(
@@ -790,34 +810,33 @@ async function chooseInstructionInjection(
   scope: Scope,
   skills: string[],
   allowBack = true,
-): Promise<NavResult<boolean>> {
+): Promise<NavResult<string[]>> {
   ensureIntro(state)
-  const explanation = instructionExplanation(agents, scope, skills)
+  const explanation = instructionExplanation(agents, scope)
   prompts.note(explanation.body, explanation.title)
-  const choice = await chooseOne(
+  const files = humanList(instructionFiles(agents, scope))
+  return chooseMany(
     state,
     stepId,
-    `${instructionQuestion(agents, scope, skills)} ${styleText('dim', '(See above for more information.)')}`,
-    [
-      { value: 'yes', label: 'Yes' },
-      { value: 'no', label: 'No' },
-    ],
-    { allowBack, initialValue: 'yes' },
+    `Which skills would you like to add to ${files}?`,
+    skills.map((skill) => ({ value: skill, label: displaySkillName(skill) })),
+    { allowBack, required: false },
   )
-  if (choice === BACK_SIGNAL) return BACK_SIGNAL
-  return choice === 'yes'
 }
 
 function installationSummary(
   scope: Scope,
   skills: string[],
   agents: string[],
-  instructions: boolean,
+  injectedSkills: string[],
   allAgents: AgentSpec[],
 ): string {
   const skillNames = skills.map(displaySkillName)
   const harnessNames = agents.map((id) => agentLabel(id, allAgents))
   const files = instructionFiles(agents, scope)
+  const injection = injectedSkills.length > 0
+    ? `${injectedSkills.map(displaySkillName).join(', ')} → ${files.join(', ')}`
+    : 'None'
   return [
     'Skills to install',
     indentedCommaList(skillNames),
@@ -829,7 +848,7 @@ function installationSummary(
     indentedCommaList(harnessNames),
     '',
     'Instruction injection',
-    indentedCommaList(instructions ? files : ['None']),
+    indentedLineList([injection]),
   ].join('\n')
 }
 
@@ -910,8 +929,10 @@ async function installAtScope(
 
       instructionStep:
       while (true) {
-        let instructions = instructionOverride
-        if (instructions === undefined && askInstructions && process.stdin.isTTY) {
+        let injectedSkills: string[]
+        if (instructionOverride === true) injectedSkills = [...selectedSkills]
+        else if (instructionOverride === false) injectedSkills = []
+        else if (askInstructions && process.stdin.isTTY) {
           const choice = await chooseInstructionInjection(
             state,
             `${stepPrefix}.instructions`,
@@ -921,9 +942,8 @@ async function installAtScope(
             true,
           )
           if (choice === BACK_SIGNAL) continue agentStep
-          instructions = choice
-        }
-        if (instructions === undefined) instructions = true
+          injectedSkills = choice
+        } else injectedSkills = []
 
         const prompted = !!process.stdin.isTTY && (
           skills.length === 0
@@ -933,22 +953,23 @@ async function installAtScope(
 
         if (prompted) {
           prompts.note(
-            installationSummary(scope, selectedSkills, agentChoice.values, instructions, agentChoice.all),
-            'Installation summary',
+            installationSummary(scope, selectedSkills, agentChoice.values, injectedSkills, agentChoice.all),
+            'Installation Summary',
           )
-          const proceed = checked(await prompts.confirm({ message: 'Continue?', initialValue: true })) as boolean
-          if (!proceed) continue instructionStep
+          const proceed = await chooseConfirmation(state, `${stepPrefix}.confirm`, { allowBack: true })
+          if (proceed === BACK_SIGNAL || !proceed) continue instructionStep
         } else {
           console.log(`Scope: ${scope.identity}`)
           console.log(`Agents: ${agentChoice.values.join(', ')}`)
           console.log(`Skills: ${selectedSkills.join(', ')}`)
+          console.log(`Instruction skills: ${injectedSkills.join(', ') || 'none'}`)
         }
 
         for (const skill of selectedSkills) {
           installTargets(
             loadManifest(skill),
             scope,
-            targetsForNewInstall(agentChoice.values, instructions),
+            targetsForNewInstall(agentChoice.values, injectedSkills.includes(skill)),
             prompted,
             'install',
           )
@@ -967,13 +988,12 @@ async function installWizard(args: string[]): Promise<number> {
   if (parsed.scope) {
     const scope = resolveScope(parsed.scope)
     if (parsed.skills.length === 0 && !process.stdin.isTTY) throw new Error('no skills selected')
-    const askInstructions = parsed.skills.length === 0 || parsed.agents.length === 0
-    const instructionMode = parsed.instructions ?? (askInstructions ? undefined : true)
+    const askInstructions = parsed.instructions === undefined && process.stdin.isTTY
     const result = await installAtScope(
       scope,
       parsed.skills,
       parsed.agents,
-      instructionMode,
+      parsed.instructions,
       state,
       `install.${scope.kind}:${scope.identity}`,
       false,
@@ -1045,9 +1065,9 @@ async function updateAtScope(
     if (groups.length === 0) throw new Error('no installations match update filters')
 
     if (process.stdin.isTTY) {
-      prompts.note(updateSummary(groups), 'Update summary')
-      const proceed = checked(await prompts.confirm({ message: 'Continue?', initialValue: true })) as boolean
-      if (!proceed) {
+      prompts.note(updateSummary(groups), 'Update Summary')
+      const proceed = await chooseConfirmation(state, `${stepPrefix}.confirm`, { allowBack: true })
+      if (proceed === BACK_SIGNAL || !proceed) {
         if (skills.length > 0) return BACK_SIGNAL
         continue
       }
@@ -1144,9 +1164,9 @@ async function uninstallAtScope(
     if (groups.length === 0) throw new Error('no installations match uninstall filters')
 
     if (process.stdin.isTTY) {
-      prompts.note(uninstallSummary(groups), 'Uninstall summary')
-      const proceed = checked(await prompts.confirm({ message: 'Continue?', initialValue: false })) as boolean
-      if (!proceed) {
+      prompts.note(uninstallSummary(groups), 'Uninstall Summary')
+      const proceed = await chooseConfirmation(state, `${stepPrefix}.confirm`, { allowBack: true, safeDefault: true })
+      if (proceed === BACK_SIGNAL || !proceed) {
         if (skills.length > 0) return BACK_SIGNAL
         continue
       }
@@ -1248,12 +1268,13 @@ async function removeSkillGeneratedDataWizard(state: WizardState): Promise<NavRe
       )
       if (selected === BACK_SIGNAL) break
       const groups = available.filter((group) => selected.includes(group.skill))
-      prompts.note(generatedDataSummary(groups), 'Permanent data removal')
-      const proceed = checked(await prompts.confirm({
-        message: 'Permanently delete the selected skill-generated data?',
-        initialValue: false,
-      })) as boolean
-      if (!proceed) continue
+      prompts.note(generatedDataSummary(groups), 'Permanent Data Removal')
+      const proceed = await chooseConfirmation(
+        state,
+        `generated-data.${scope.kind}:${scope.identity}.confirm`,
+        { allowBack: true, safeDefault: true },
+      )
+      if (proceed === BACK_SIGNAL || !proceed) continue
 
       for (const group of groups) {
         for (const path of group.paths) rmSync(path, { recursive: true, force: true })
@@ -1270,23 +1291,9 @@ function installerExecutable(): string {
   const name = basename(executable).toLowerCase()
   const expected = isWindows ? 'jl-skills.exe' : 'jl-skills'
   if (name !== expected) {
-    throw new Error('installer self-uninstall is only available from the compiled jl-skills executable')
+    throw new Error('installer management is only available from the compiled jl-skills executable')
   }
   return executable
-}
-
-function installerUninstallSummary(executable: string): string {
-  const dataRoot = installerDataRoot()
-  return [
-    'Installer executable',
-    indentedLineList([executable]),
-    '',
-    'Installer-owned data',
-    existsSync(dataRoot) ? indentedLineList([dataRoot]) : indentedLineList(['None detected.']),
-    '',
-    'Preserved',
-    indentedCommaList(['Installed skills', 'skill runtime/tooling', 'skill-generated data']),
-  ].join('\n')
 }
 
 function scheduleExecutableRemoval(executable: string): void {
@@ -1304,15 +1311,40 @@ function scheduleExecutableRemoval(executable: string): void {
   child.unref()
 }
 
+async function updateInstallerWizard(state: WizardState): Promise<UpdateResult> {
+  ensureIntro(state)
+  const executable = installerExecutable()
+  prompts.log.step('Checking for updates...')
+  const update = await checkInstallerUpdate(VERSION)
+  if (!update) {
+    prompts.log.warn('No updates found.')
+    return HOME
+  }
+
+  prompts.note([
+    'Current version',
+    indentedLineList([VERSION]),
+    '',
+    'Available version',
+    indentedLineList([update.version]),
+  ].join('\n'), 'Update Summary')
+
+  const proceed = await chooseConfirmation(state, 'installer-update.confirm', { allowBack: true })
+  if (proceed === BACK_SIGNAL || !proceed) return BACK_SIGNAL
+
+  prompts.log.step('Downloading update...')
+  const staged = await stageInstallerUpdate(executable, update)
+  scheduleInstallerReplacement(staged, executable)
+  prompts.outro('jl-skills installer update scheduled')
+  return 0
+}
+
 async function uninstallInstallerWizard(state: WizardState): Promise<NavResult<number>> {
   ensureIntro(state)
   const executable = installerExecutable()
-  prompts.note(installerUninstallSummary(executable), 'Installer uninstall summary')
-  const proceed = checked(await prompts.confirm({
-    message: 'Permanently uninstall the jl-skills installer?',
-    initialValue: false,
-  })) as boolean
-  if (!proceed) return BACK_SIGNAL
+  prompts.log.warn('This action will uninstall the jl-skills installer and any associated installer-owned data and tooling.')
+  const proceed = await chooseConfirmation(state, 'installer-uninstall.confirm', { allowBack: true, safeDefault: true })
+  if (proceed === BACK_SIGNAL || !proceed) return BACK_SIGNAL
 
   rmSync(installerDataRoot(), { recursive: true, force: true })
   scheduleExecutableRemoval(executable)
@@ -1335,13 +1367,19 @@ async function bareWizard(): Promise<number> {
         { value: 'update', label: 'Update skills' },
         { value: 'uninstall', label: 'Uninstall skills' },
         { value: 'generated-data', label: 'Remove skill-generated data' },
-        { value: 'installer', label: 'Uninstall jl-skills installer' },
+        { value: 'installer-update', label: 'Update jl-skills installer' },
+        { value: 'installer-uninstall', label: 'Uninstall jl-skills installer' },
       ],
       { allowBack: false, initialValue: 'install' },
     )
     if (choice === BACK_SIGNAL) continue
 
-    if (choice === 'installer') {
+    if (choice === 'installer-update') {
+      const result = await updateInstallerWizard(state)
+      if (result === BACK_SIGNAL || result === HOME) continue
+      return result
+    }
+    if (choice === 'installer-uninstall') {
       const result = await uninstallInstallerWizard(state)
       if (result === BACK_SIGNAL) continue
       return result
