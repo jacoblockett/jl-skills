@@ -1,26 +1,99 @@
 import { describe, expect, test } from 'bun:test'
-import { classifyInstallTargets, staleSkills } from '../src/install-preflight'
+import { classifyInstallTargets, satisfiedSkills, staleSkills } from '../src/install-preflight'
 
 describe('install preflight classification', () => {
-  test('classifies missing, current, stale, unknown, and newer targets without downgrading', () => {
+  test('classifies missing, satisfied, stale, configure, unknown, and newer targets without downgrading', () => {
     const targets = classifyInstallTargets(
       ['map', 'other'],
       ['codex', 'claude'],
       { map: '0.2.0', other: '1.0.0' },
+      { map: true, other: false },
       [
-        { skill: 'map', agent: 'codex', version: '0.2.0' },
-        { skill: 'map', agent: 'claude', version: '0.1.0' },
-        { skill: 'other', agent: 'codex', version: 'unknown' },
-        { skill: 'other', agent: 'claude', version: '1.1.0' },
+        { skill: 'map', agent: 'codex', version: '0.2.0', instructions: true },
+        { skill: 'map', agent: 'claude', version: '0.1.0', instructions: true },
+        { skill: 'other', agent: 'codex', version: 'unknown', instructions: false },
+        { skill: 'other', agent: 'claude', version: '1.1.0', instructions: true },
       ],
     )
 
     expect(targets).toEqual([
-      { skill: 'map', agent: 'codex', availableVersion: '0.2.0', installedVersion: '0.2.0', state: 'current' },
-      { skill: 'map', agent: 'claude', availableVersion: '0.2.0', installedVersion: '0.1.0', state: 'stale' },
-      { skill: 'other', agent: 'codex', availableVersion: '1.0.0', installedVersion: 'unknown', state: 'stale' },
-      { skill: 'other', agent: 'claude', availableVersion: '1.0.0', installedVersion: '1.1.0', state: 'current' },
+      {
+        skill: 'map',
+        agent: 'codex',
+        availableVersion: '0.2.0',
+        requestedInstructions: true,
+        installedVersion: '0.2.0',
+        installedInstructions: true,
+        state: 'satisfied',
+      },
+      {
+        skill: 'map',
+        agent: 'claude',
+        availableVersion: '0.2.0',
+        requestedInstructions: true,
+        installedVersion: '0.1.0',
+        installedInstructions: true,
+        state: 'stale',
+      },
+      {
+        skill: 'other',
+        agent: 'codex',
+        availableVersion: '1.0.0',
+        requestedInstructions: false,
+        installedVersion: 'unknown',
+        installedInstructions: false,
+        state: 'stale',
+      },
+      {
+        skill: 'other',
+        agent: 'claude',
+        availableVersion: '1.0.0',
+        requestedInstructions: false,
+        installedVersion: '1.1.0',
+        installedInstructions: true,
+        state: 'configure',
+      },
     ])
+  })
+
+  test('current installation with different instruction injection is configuration work', () => {
+    const add = classifyInstallTargets(
+      ['map'],
+      ['codex'],
+      { map: '0.2.0' },
+      { map: true },
+      [{ skill: 'map', agent: 'codex', version: '0.2.0', instructions: false }],
+    )
+    expect(add[0]?.state).toBe('configure')
+
+    const remove = classifyInstallTargets(
+      ['map'],
+      ['codex'],
+      { map: '0.2.0' },
+      { map: false },
+      [{ skill: 'map', agent: 'codex', version: '0.2.0', instructions: true }],
+    )
+    expect(remove[0]?.state).toBe('configure')
+  })
+
+  test('newer installation is satisfied only when requested configuration also matches', () => {
+    const matching = classifyInstallTargets(
+      ['map'],
+      ['codex'],
+      { map: '0.2.0' },
+      { map: false },
+      [{ skill: 'map', agent: 'codex', version: '0.3.0', instructions: false }],
+    )
+    expect(matching[0]?.state).toBe('satisfied')
+
+    const changed = classifyInstallTargets(
+      ['map'],
+      ['codex'],
+      { map: '0.2.0' },
+      { map: true },
+      [{ skill: 'map', agent: 'codex', version: '0.3.0', instructions: false }],
+    )
+    expect(changed[0]?.state).toBe('configure')
   })
 
   test('groups stale targets by skill for one update choice per skill', () => {
@@ -28,9 +101,10 @@ describe('install preflight classification', () => {
       ['map'],
       ['codex', 'claude'],
       { map: '0.2.0' },
+      { map: true },
       [
-        { skill: 'map', agent: 'codex', version: '0.1.0' },
-        { skill: 'map', agent: 'claude', version: 'unknown' },
+        { skill: 'map', agent: 'codex', version: '0.1.0', instructions: false },
+        { skill: 'map', agent: 'claude', version: 'unknown', instructions: true },
       ],
     )
 
@@ -39,17 +113,27 @@ describe('install preflight classification', () => {
     ])
   })
 
-  test('missing selected harness targets remain installable independently of existing harness targets', () => {
-    const targets = classifyInstallTargets(
+  test('a skill is already installed only when every requested harness target is satisfied', () => {
+    const complete = classifyInstallTargets(
       ['map'],
       ['codex', 'claude'],
       { map: '0.2.0' },
-      [{ skill: 'map', agent: 'codex', version: '0.2.0' }],
+      { map: false },
+      [
+        { skill: 'map', agent: 'codex', version: '0.2.0', instructions: false },
+        { skill: 'map', agent: 'claude', version: '0.3.0', instructions: false },
+      ],
     )
+    expect(satisfiedSkills(complete)).toEqual(['map'])
 
-    expect(targets).toEqual([
-      { skill: 'map', agent: 'codex', availableVersion: '0.2.0', installedVersion: '0.2.0', state: 'current' },
-      { skill: 'map', agent: 'claude', availableVersion: '0.2.0', state: 'missing' },
-    ])
+    const mixed = classifyInstallTargets(
+      ['map'],
+      ['codex', 'claude'],
+      { map: '0.2.0' },
+      { map: false },
+      [{ skill: 'map', agent: 'codex', version: '0.2.0', instructions: false }],
+    )
+    expect(satisfiedSkills(mixed)).toEqual([])
+    expect(mixed[1]?.state).toBe('missing')
   })
 })
