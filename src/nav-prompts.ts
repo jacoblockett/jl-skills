@@ -59,17 +59,22 @@ function symbolBar(state: State): string {
 function footer(hasGuide: boolean, allowBack: boolean, text = false): string {
   const pieces = text
     ? [
-        ...(allowBack ? [`${styleText('dim', 'Backspace:')} back`] : []),
-        `${styleText('dim', 'Esc:')} cancel`,
+        `${styleText('dim', '↵')} confirm`,
+        ...(allowBack ? [`${styleText('dim', '⌫')} back`] : []),
+        `${styleText('dim', '␛')} exit`,
       ]
     : [
-        `${styleText('dim', '↑/↓')} to navigate`,
-        `${styleText('dim', 'Enter:')} confirm`,
-        ...(allowBack ? [`${styleText('dim', 'Backspace:')} back`] : []),
-        `${styleText('dim', 'Esc:')} cancel`,
+        `${styleText('dim', '↑/↓')} navigate`,
+        `${styleText('dim', '↵')} confirm`,
+        ...(allowBack ? [`${styleText('dim', '⌫')} back`] : []),
+        `${styleText('dim', '␛')} exit`,
       ]
   const line = `${hasGuide ? `${styleText('cyan', S_BAR)}  ` : ''}${pieces.join(' • ')}`
   return hasGuide ? `${line}\n${styleText('cyan', S_BAR_END)}` : line
+}
+
+function blankGuide(hasGuide: boolean): string {
+  return hasGuide ? styleText('cyan', S_BAR) : ''
 }
 
 class BackSelectPrompt<Value> extends SelectPrompt<NavOption<Value>> {
@@ -141,7 +146,7 @@ export async function navSelect<Value>(opts: NavSelectOptions<Value>): Promise<V
         option,
         option.disabled ? 'disabled' : index === this.cursor ? 'active' : 'inactive',
       ))
-      return `${title}${prefix}${lines.join(`\n${prefix}`)}\n${footer(hasGuide, allowBack)}\n`
+      return `${title}${prefix}${lines.join(`\n${prefix}`)}\n${blankGuide(hasGuide)}\n${footer(hasGuide, allowBack)}\n`
     },
   }, allowBack, opts.onCursor)
 
@@ -203,7 +208,7 @@ export async function navText(opts: NavTextOptions): Promise<string | symbol> {
       if (this.state === 'cancel') {
         return `${title}${hasGuide ? styleText('gray', S_BAR) : ''}${value ? `  ${styleText(['strikethrough', 'dim'], value)}` : ''}`
       }
-      return `${title}${hasGuide ? `${styleText('cyan', S_BAR)}  ` : ''}${userInput}\n${footer(hasGuide, allowBack, true)}\n`
+      return `${title}${hasGuide ? `${styleText('cyan', S_BAR)}  ` : ''}${userInput}\n${blankGuide(hasGuide)}\n${footer(hasGuide, allowBack, true)}\n`
     },
   }, allowBack, opts.onInput)
 
