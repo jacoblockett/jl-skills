@@ -478,13 +478,15 @@ Back from this post-confirm update choice returns to the final confirmation rath
 
 After classification and any stale-update selection, compute the remaining actionable skills.
 
-If at least one skill still has missing targets, instruction-configuration work, or approved stale updates, show one ordinary status line:
+Only when one or more whole requested skills were removed from the work list as already satisfied and at least one other requested skill still has missing targets, instruction-configuration work, or approved stale updates, show one ordinary status line:
 
 ```text
 Installation will continue for: Map, Other Skill.
 ```
 
-Then perform only that remaining work.
+Do not show this continuation status for an ordinary one-skill installation or when no whole requested skill was removed from the work list.
+
+Then perform only the remaining work.
 
 If nothing remains:
 
@@ -530,13 +532,13 @@ Compare each installed self-reported version against the bundled catalog version
 
 Only skills with an applicable update appear in the normal interactive update multiselect.
 
-If no updates exist:
+If installed skills are present but no updates exist:
 
 ```text
-No updates found.
+All skills are already up to date. Choose a different scope or path.
 ```
 
-Then return to the home screen.
+Then return to the same `Where would you like to update skills?` scope question with its prior cursor/state retained. Do not return to the home screen merely because the selected update scope has no applicable updates, and do not use the generic `No updates found.` copy for this flow.
 
 Update choices render aligned skill/version columns where practical:
 
@@ -857,10 +859,12 @@ Regression coverage includes at least:
 - install satisfaction including requested managed-instruction state;
 - configuration-only managed-block changes without rewriting current/newer skill content;
 - no downgrade of newer installed versions during Install handling;
+- install continuation status only when whole requested skills were skipped;
 - managed instruction opt-in/opt-out and boundary safety;
 - stale installed skill/version/content replacement;
 - preservation of unrelated/generated data during update;
 - update discovery/version comparison;
+- Update Skills no-update return to the chosen-scope picker;
 - uninstall preservation of generated data and shared tooling;
 - keyboard multiselect/back/select-all behavior;
 - removal of visible navigation pseudo-options;
@@ -870,6 +874,8 @@ Regression coverage includes at least:
 - offline installer updater metadata/version/hash/staging behavior;
 - release-manifest hash matching the built executable;
 - installer self-uninstall preservation boundaries.
+
+Manual UI smoke may exercise a real-looking skill update without publishing a new release by installing the current bundled skill into the isolated UI-smoke project, deliberately lowering only that installed copy's self-reported metadata version, and then running the compiled installer Update Skills flow against the same project.
 
 ## Explicit non-goals
 
