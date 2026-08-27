@@ -154,4 +154,26 @@ describe('install preflight classification', () => {
     expect(installFlow).not.toContain('No changes needed')
     expect(installFlow).toContain('There is nothing to install.')
   })
+
+  test('install continuation status is only shown after whole skills were skipped', () => {
+    const repo = resolve(import.meta.dir, '..')
+    const source = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8')
+    const start = source.indexOf('async function installAtScope(')
+    const end = source.indexOf('\nasync function installWizard(', start)
+    const installFlow = source.slice(start, end)
+
+    expect(installFlow).toContain('if (alreadyInstalled.length > 0) {\n            prompts.log.info(`Installation will continue for:')
+  })
+
+  test('Update Skills stays at scope selection when installed skills are current', () => {
+    const repo = resolve(import.meta.dir, '..')
+    const source = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8')
+    const start = source.indexOf('async function updateAtScope(')
+    const end = source.indexOf('\nasync function updateWizard(', start)
+    const updateFlow = source.slice(start, end)
+
+    expect(updateFlow).toContain('All skills are already up to date. Choose a different scope or path.')
+    expect(updateFlow).toContain("prompts.log.warn('All skills are already up to date. Choose a different scope or path.')\n        return BACK_SIGNAL")
+    expect(updateFlow).not.toContain("prompts.log.warn('No updates found.')")
+  })
 })
