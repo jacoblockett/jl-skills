@@ -25,6 +25,7 @@ import {
 import { BACK_SIGNAL, navSelect, navText, type NavOption } from './nav-prompts'
 import {
   checkInstallerUpdate,
+  fetchStableReleaseManifest,
   scheduleInstallerReplacement,
   stageInstallerUpdate,
 } from './installer-updater'
@@ -98,6 +99,7 @@ type WizardState = {
 type NavResult<T> = T | typeof BACK_SIGNAL
 type InstallResult = NavResult<number> | typeof HOME
 type UpdateResult = NavResult<number> | typeof HOME
+type AvailableSkillVersions = Record<string, string>
 
 type InstallTarget = { agent: string; instructions: boolean }
 
@@ -608,8 +610,14 @@ function compareSemver(a: string, b: string): number | undefined {
   return 0
 }
 
-function updateAvailable(group: InstallGroup): boolean {
-  const available = loadManifest(group.skill).version
+function availableSkillVersion(group: InstallGroup, stable?: AvailableSkillVersions): string | undefined {
+  if (stable) return stable[group.skill]
+  return loadManifest(group.skill).version
+}
+
+function updateAvailable(group: InstallGroup, stable?: AvailableSkillVersions): boolean {
+  const available = availableSkillVersion(group, stable)
+  if (!available) return false
   return installedVersions(group).some((installed) => {
     if (installed === 'unknown') return true
     const comparison = compareSemver(installed, available)
@@ -617,8 +625,9 @@ function updateAvailable(group: InstallGroup): boolean {
   })
 }
 
-function updateStatus(group: InstallGroup): string {
-  const available = loadManifest(group.skill).version
+function updateStatus(group: InstallGroup, stable?: AvailableSkillVersions): string {
+  const available = availableSkillVersion(group, stable)
+  if (!available) throw new Error(`stable release does not contain ${group.skill}`)
   return `${installedVersions(group).join(' / ')} → ${available}`
 }
 
@@ -906,8 +915,8 @@ function installationSummary(
   ].join('\n')
 }
 
-function updateSummary(groups: InstallGroup[]): string {
-  const skillLines = groups.map((group) => `${displaySkillName(group.skill)}  ${updateStatus(group)}`)
+function updateSummary(groups: InstallGroup[], stable?: AvailableSkillVersions): string {
+  const skillLines = groups.map((group) => `${displaySkillName(group.skill)}  ${updateStatus(group, stable)}`)
   const harnesses = [...new Set(groups.flatMap((group) => group.targets.map((target) => agentLabel(target.agent))))]
   return [
     'Skills to update',
@@ -1168,6 +1177,7 @@ async function updateAtScope(
   const parsed: ParsedAction = { skills, scope: scope.identity, agents: explicitAgents, instructions: instructionOverride }
   while (true) {
     let groups = matchingGroups(parsed, scope)
+    let stableVersions: AvailableSkillVersions | undefined
     if (skills.length === 0) {
       if (!process.stdin.isTTY) throw new Error('no skills selected for update')
       const installed = discoverInstallations(scope)
@@ -1177,7 +1187,11 @@ async function updateAtScope(
       }
 
       prompts.log.step('Checking for updates...')
-      const available = installed.filter(updateAvailable)
+      const stableRelease = await fetchStableReleaseManifest()
+      stableVersions = Object.fromEntries(
+        Object.entries(stableRelease?.skills ?? {}).map(([name, skill]) => [name, skill.version]),
+      )
+      const available = installed.filter((group) => updateAvailable(group, stableVersions))
       if (available.length === 0) {
         prompts.log.warn('All skills are already up to date. Choose a different scope or path.')
         return BACK_SIGNAL
@@ -1190,17 +1204,26 @@ async function updateAtScope(
         'The following skill updates were found. Which would you like to install?',
         available.map((group) => ({
           value: group.skill,
-          label: `${displaySkillName(group.skill).padEnd(skillWidth)}  ${updateStatus(group)}`,
+          label: `${displaySkillName(group.skill).padEnd(skillWidth)}  ${updateStatus(group, stableVersions)}`,
         })),
         { allowBack: true },
       )
       if (selected === BACK_SIGNAL) return BACK_SIGNAL
       groups = available.filter((group) => selected.includes(group.skill))
+
+      const unavailableLocally = groups.filter((group) => (
+        stableVersions?.[group.skill] !== undefined
+        && loadManifest(group.skill).version !== stableVersions[group.skill]
+      ))
+      if (unavailableLocally.length > 0) {
+        prompts.log.warn('Update jl-skills installer first, then retry the skill update.')
+        return HOME
+      }
     }
     if (groups.length === 0) throw new Error('no installations match update filters')
 
     if (process.stdin.isTTY) {
-      prompts.note(updateSummary(groups), 'Update Summary')
+      prompts.note(updateSummary(groups, stableVersions), 'Update Summary')
       const proceed = await chooseConfirmation(state, `${stepPrefix}.confirm`, { allowBack: true })
       if (proceed === BACK_SIGNAL || !proceed) {
         if (skills.length > 0) return BACK_SIGNAL

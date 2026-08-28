@@ -6,6 +6,7 @@ import {
   checkInstallerUpdate,
   compareVersions,
   downloadVerifiedInstaller,
+  fetchStableReleaseManifest,
   installerPlatformKey,
   parseInstallerUpdateManifest,
   stageInstallerUpdate,
@@ -46,27 +47,51 @@ describe('installer update metadata', () => {
     expect(compareVersions('0.5.0', '0.5.0')).toBe(0)
     expect(compareVersions('0.5.0', '0.6.0')).toBe(-1)
     expect(compareVersions('1.0.0', '0.99.99')).toBe(1)
+    expect(() => compareVersions('0.5.0-nightly', '0.5.0')).toThrow('invalid installer version comparison')
   })
 
-  test('manifest requires valid version and SHA-256 metadata', () => {
+  test('manifest requires stable semver and SHA-256 metadata', () => {
     expect(() => parseInstallerUpdateManifest({ version: 'wat', artifacts: {} })).toThrow('invalid installer update version')
+    expect(() => parseInstallerUpdateManifest({ version: '0.6.0-nightly', artifacts: {} })).toThrow('invalid installer update version')
     expect(() => parseInstallerUpdateManifest({
       version: '0.6.0',
       artifacts: { 'windows-x64': { url: 'x', sha256: 'bad' } },
     })).toThrow('invalid SHA-256')
   })
 
-  test('release build emits a manifest matching the built executable', () => {
+  test('stable release manifest exposes skill versions and runtime hashes', async () => {
+    const manifest = {
+      format: 1,
+      version: '0.6.0',
+      artifacts: { 'windows-x64': { url: 'https://fixture.invalid/jl-skills.exe', sha256: '0'.repeat(64) } },
+      skills: {
+        map: {
+          version: '0.3.0',
+          artifacts: { 'windows-x64': { url: 'https://fixture.invalid/map.exe', sha256: '1'.repeat(64) } },
+        },
+      },
+    }
+    const parsed = await fetchStableReleaseManifest('https://fixture.invalid/manifest.json', fixtureFetcher(manifest))
+    expect(parsed?.version).toBe('0.6.0')
+    expect(parsed?.skills.map.version).toBe('0.3.0')
+  })
+
+  test('release build emits a manifest matching all built binaries', () => {
     const executable = join(repo, 'build', 'jl-skills.exe')
+    const mapExecutable = join(repo, 'build', 'map.exe')
     const manifestPath = join(repo, 'build', 'jl-skills-manifest.json')
     expect(existsSync(executable)).toBe(true)
+    expect(existsSync(mapExecutable)).toBe(true)
     expect(existsSync(manifestPath)).toBe(true)
 
     const manifest = parseInstallerUpdateManifest(JSON.parse(readFileSync(manifestPath, 'utf8')))
     const artifact = manifest.artifacts['windows-x64']
+    const mapArtifact = manifest.skills.map.artifacts['windows-x64']
     expect(artifact).toBeDefined()
     expect(artifact.sha256).toBe(sha256(readFileSync(executable)))
     expect(artifact.url).toContain(`/releases/download/v${manifest.version}/jl-skills.exe`)
+    expect(mapArtifact.sha256).toBe(sha256(readFileSync(mapExecutable)))
+    expect(mapArtifact.url).toContain(`/releases/download/v${manifest.version}/map.exe`)
   })
 
   test('no-update path returns null for equal or older releases', async () => {
