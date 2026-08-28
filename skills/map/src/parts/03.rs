@@ -13,6 +13,7 @@ async fn run() -> Result<()> {
         _ => {
             let map_dir = resolve_existing_map(cli.path.as_deref(), cli.config.as_deref())?;
             let store = Store::open(map_dir).await?;
+            ensure_project_identity(&store.map_dir)?;
             dispatch(&store, cli.command).await
         }
     }
@@ -99,12 +100,22 @@ async fn init_map(cli: &Cli, schema_arg: Option<PathBuf>) -> Result<()> {
         return Err(error);
     }
 
+    let identity = match create_project_identity(&selection) {
+        Ok(identity) => identity,
+        Err(error) => {
+            drop(store);
+            let _ = fs::remove_dir_all(&selection);
+            return Err(error).context("creating new Map project identity");
+        }
+    };
+
     emit(json!({
         "ok": true,
         "path": selection,
         "schema": schema_path,
         "schemaVersion": SCHEMA_VERSION,
         "runtimeVersion": env!("CARGO_PKG_VERSION"),
+        "projectId": identity.project_id,
     }))
 }
 

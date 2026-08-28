@@ -1,60 +1,71 @@
-# jl-skill
+# jl-skills installer
 
-Status: accepted installer contract aligned to the Bun/Clack implementation and native Map runtime.
+Status: accepted installer lifecycle contract aligned to the Bun/Clack implementation and native Map runtime.
 
 ## Product goal
 
-`jl-skill` is the user-facing installer/updater for the `jl-skills` catalog. Consumers should not need to know where skill discovery files, harness-specific resources, runtimes, instruction fragments, or support assets belong.
+`jl-skills` is the user-facing installer, updater, uninstaller, and lifecycle utility for the `jl-skills` catalog. Consumers should not need to know where skill discovery files, harness-specific resources, runtimes, instruction fragments, support assets, or installer update mechanics belong.
 
-The public distribution target is one self-contained executable such as `jl-skill.exe`. A consumer machine should need only the AI harness(es) the user intends to target. Consumers must not need Python, Node, npm, pnpm, Bun, Go, Rust, Cargo, or a SurrealDB server merely to install/use a released skill.
+The public distribution target is one self-contained executable:
 
-Build dependencies belong only to development/release infrastructure, never consumer machines. The current canonical development and smoke-build path is local on the release/developer machine. GitHub Actions is not required by the product contract and may be reintroduced later only if useful.
+```text
+jl-skills.exe
+```
+
+Consumers must not need Python, Node, npm, pnpm, Bun, Go, Rust, Cargo, or a SurrealDB server merely to install or use a released skill.
+
+Build dependencies belong only to development/release infrastructure.
 
 ## Installer implementation
 
-`jl-skill` is implemented as one **TypeScript + Bun** codebase.
+The installer is one TypeScript + Bun codebase.
 
-The interactive installer uses exactly **`@clack/prompts` 1.7.0**, matching the accepted create-vite prompt stack. This is a product requirement, not an implementation suggestion. Do not replace it with line-oriented numbered menus, `fmt.Scanln`, Huh, Bubble Tea, survey, or another lookalike TUI.
-
-Release compilation uses:
+Interactive UI uses exactly:
 
 ```text
-Bun --compile -> jl-skill.exe
+@clack/prompts 1.7.0
+@clack/core    1.4.3
 ```
 
-Do not introduce a Go installer core, Node SEA packaging layer, or a second runtime boundary unless the contract is explicitly changed.
+JL-owned custom controls may wrap Clack core only where the accepted navigation/state behavior requires it. Do not replace the prompt stack with a different TUI framework, fork Clack, or globally monkey-patch it.
 
-## Interactive UX contract
+Release compilation is conceptually:
 
-Use Clack controls according to the choice being made:
+```text
+Bun --compile -> jl-skills.exe
+```
 
-- `multiselect` for skills, harnesses, and update targets;
-- `select` for mutually exclusive scope choices;
-- `text` only for inherently free-form input such as a custom path;
-- `confirm` for final confirmation;
-- Clack `intro` / `note` / `outro` presentation for plan and completion state.
-
-Bare `jl-skill` starts the install wizard. Bare `jl-skill update` starts the update wizard. Incomplete interactive invocations fill only missing choices. Explicit complete CLI invocations remain deterministic and do not add unnecessary prompts.
+The product and executable name are always plural: `jl-skills`, never `jl-skill`.
 
 ## Public CLI
 
+Primary deterministic forms:
+
 ```text
-jl-skill [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
-jl-skill update [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
+jl-skills install [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]
+jl-skills update [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]
+jl-skills uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
 ```
 
-Examples:
+A skill-first invocation may continue to mean install:
 
-```bash
-jl-skill.exe map --scope user
-jl-skill.exe map --scope cwd
-jl-skill.exe map --scope "C:\Programming\my-project"
-jl-skill.exe map --scope cwd --agent codex
-jl-skill.exe map --scope cwd --agent codex --agent claude
-jl-skill.exe update map --scope user
+```text
+jl-skills map --scope cwd
 ```
 
-`--agent` is repeatable. If omitted on an otherwise explicit non-interactive install, select all detected supported harnesses. If none are detected, fail precisely and tell the user to specify `--agent`.
+`--agent` is repeatable.
+
+For explicit non-interactive install:
+
+- `--instructions` means inject managed instructions for every selected skill into every selected harness instruction file;
+- `--no-instructions` means inject none;
+- if neither flag is supplied, instruction injection defaults to none.
+
+For explicit interactive install where instruction choice remains unspecified, the generalized instruction-injection multiselect is still shown.
+
+The interactive existing-installation inspection described below is a wizard UX contract. Explicit non-interactive install may retain deterministic reapply behavior unless a separate CLI contract is accepted later.
+
+Interactive lifecycle actions such as skill-generated-data removal, installer update, and installer self-uninstall live on the bare-executable home screen unless a separate deterministic CLI contract is accepted later.
 
 ## Hard scope invariant
 
@@ -62,129 +73,743 @@ Scope and harness selection are orthogonal:
 
 ```text
 WHERE?  --scope user|cwd|PATH
-WHO?    detected/default harnesses or explicit --agent values
+WHO?    selected harnesses / explicit --agent values
 ```
 
-The requested scope is authoritative. Harness detection determines available adapters; it must never widen, relocate, or duplicate installation into another scope.
+The requested scope is authoritative. Harness detection or availability must never widen, relocate, or duplicate installation into another scope.
 
-For `jl-skill.exe map --scope cwd`, detection of a user-installed Codex or Claude only permits those harnesses to be targeted at the current project. It does not authorize user-scope skill copies or instruction injection.
+For a project/path install, a machine-level Codex or Claude installation permits those harness adapters to target only the requested project. It does not authorize user-scope skill copies or user-scope instruction injection.
 
-The only permitted user-level data for a project/path install is installer-owned bookkeeping and explicitly declared narrow scope-independent support artifacts. Neither may make the skill discoverable at user scope or inject user-scope instructions. Map's shared CLI and schema are such support artifacts.
+Scope-independent runtime/support artifacts explicitly declared by a skill may still be provisioned at their declared destination. Map's shared CLI and schema are examples. They are support infrastructure, not user-scope skill discovery.
 
-## Scope semantics
+## Scope semantics and path normalization
 
-`--scope` accepts exactly one value: `user`, `cwd`, or a path string.
+`--scope` accepts one value:
 
-`user` and `cwd` are reserved logical tokens. A literal directory with either name must be expressed unambiguously, e.g. `./user`.
+```text
+user
+cwd
+PATH
+```
 
-`cwd` resolves to the invocation working directory. Explicit paths normalize `~`, supported environment variables, relative components, separators, and `.`/`..`; they become absolute/canonical where safely available while preserving Windows drive/UNC semantics.
+`user` and `cwd` are reserved logical tokens. A literal directory with one of those names must be expressed as a path such as `./user`.
 
-The target may be completely uninitialized. The installer recursively creates the requested target path when needed, then creates only the non-semantic structures required for discovery, harness resources, managed instructions, runtime placement, and declared support assets.
+`cwd` resolves to the invocation working directory.
+
+Explicit paths normalize:
+
+- `~`;
+- supported environment variables;
+- relative components;
+- `.` and `..`;
+- Windows separator style;
+- Windows drive-letter casing;
+- existing filesystem casing where safely available.
+
+The canonicalized path is the value used by the UI whenever a concrete path is displayed. An input such as `c:/programming/example` should therefore display in normalized Windows form such as `C:\Programming\example` where the filesystem can establish that casing.
+
+Install may create an uninitialized requested target directory and only the non-semantic structures required for discovery, harness resources, managed instructions, runtime placement, and declared support assets.
 
 ## Harness adapters
 
-Supported harnesses initially include Codex and Claude.
+Initial supported harnesses:
 
-Each adapter owns machine detection, user/project discovery paths, skill-resource placement, custom agent/subagent placement when declared, instruction-file conventions, validation, and future migration behavior.
+- OpenAI Codex
+- Claude Code
 
-Detection is not permission to change scope. If a harness cannot support the requested scope/resource type, report that limitation; never silently fall back.
+Each adapter owns its user/project discovery paths, instruction-file convention, skill-resource placement, and detection logic.
+
+Detection remains internal. Do not put `detected`, `not detected`, `recommended`, or similar status hints on picker options.
+
+No Clack option `hint` is used unless a future requirement explicitly calls for one specific hint.
+
+## Filesystem-first installation discovery
+
+There is no authoritative central installer receipt registry.
+
+The selected scope's actual harness filesystem state is the source of truth for whether catalog skills are installed there.
+
+For each supported harness at the selected scope, the installer checks the expected skill-discovery location. A catalog skill is recognized from its installed `SKILL.md` and self-reported jl-skills metadata.
+
+Every catalog skill must self-report at least:
+
+```text
+name
+version
+metadata format version
+```
+
+Current representation:
+
+```html
+<!-- jl-skills-meta: {"name":"map","version":"0.2.0","format":1} -->
+```
+
+The manifest version and source `SKILL.md` self-report must agree at build/catalog-generation time and runtime validation time.
+
+This deliberately permits jl-skills to discover a compatible skill that was copied or installed by another agent instead of requiring that jl-skills performed the original installation.
+
+If a recognizable catalog skill exists but usable version metadata is absent or malformed, presence may still be detected, but its installed version is unknown. Never fabricate a version.
+
+## Interactive navigation contract
+
+### Home screen
+
+Bare:
+
+```text
+jl-skills.exe
+```
+
+starts with:
+
+```text
+What would you like to do?
+
+Install skills
+Update skills
+Uninstall skills
+Remove skill-generated data
+Update jl-skills installer
+Uninstall jl-skills installer
+```
+
+There is no visible Cancel row. Escape exits.
+
+### Scope questions
+
+After Install:
+
+```text
+Where would you like to install skills?
+```
+
+After Update:
+
+```text
+Where would you like to update skills?
+```
+
+After Uninstall:
+
+```text
+Where would you like to uninstall skills?
+```
+
+Scope choices:
+
+```text
+Current directory
+User account
+Custom path
+```
+
+There are no visible `Go back` or `Cancel & exit` rows. Backspace goes back where a previous interactive step exists. Escape exits.
+
+Custom-path input is validated. Empty submission must produce a validation message such as `Please provide a path.` rather than throwing. Returning to the custom-path step retains its entered text.
+
+### Selection controls and footer hints
+
+Multiselect menus contain only substantive choices. Do not add pseudo-options for:
+
+```text
+All of the above
+Go back
+Cancel & exit
+```
+
+Accepted visible key hints:
+
+```text
+↑/↓      navigate
+Space    select
+Enter    confirm
+A        toggle all
+Backspace back
+Esc      exit
+```
+
+`I` may remain as an undisclosed invert-selection shortcut.
+
+Multiselect footer shape:
+
+```text
+↑/↓ navigate • Space select • Enter confirm • A toggle all • Backspace back • Esc exit
+```
+
+Single-select footer shape:
+
+```text
+↑/↓ navigate • Enter confirm • Backspace back • Esc exit
+```
+
+Text input may omit navigation/select controls that do not apply, but must use the same explicit key names for confirm/back/exit.
+
+All applicable hints remain on one line. Do not split the multiselect footer into a second shortcut row.
+
+There is one blank visual guide line between the final answer/input line and the footer so the control does not feel cramped.
+
+The custom renderer must preserve the Clack guide/spine and native-like styling. Key/control labels are dimmed while explanatory words and separators remain normal intensity.
+
+### Prompt state retention
+
+Wizard state is process-local and explicitly scoped by operation, selected scope, and step identity.
+
+When a user returns to a previously touched step, retain prior state where still valid:
+
+- single-select cursor/choice;
+- multiselect cursor;
+- multiselect selected values;
+- custom-path text.
+
+Selections that no longer exist or become disabled are discarded rather than restored incorrectly.
+
+State must not bleed between unrelated operations or scopes.
+
+A new jl-skills process starts clean.
+
+Destructive confirmations use their safe initial cursor rather than remembering a prior affirmative answer.
+
+### Prompt punctuation
+
+Interactive prompt copy follows ordinary punctuation:
+
+- interrogative questions end in `?`;
+- imperative/statement prompts end in `.`;
+- note titles/headings are not sentence prompts and do not receive artificial punctuation.
+
+### Standard confirmation control
+
+Do not use Clack's inline binary confirm rendering for lifecycle confirmations.
+
+Every lifecycle confirmation is a normal vertical single-select:
+
+```text
+Continue?
+
+Yes
+No
+
+↑/↓ navigate • Enter confirm • Backspace back • Esc exit
+```
+
+Visible order is always Yes then No.
+
+Normal install/update may begin on Yes. Destructive uninstall/data-removal operations may begin on No. Back returns exactly one interactive question backward.
+
+Use `Continue?` rather than rewriting each confirmation into increasingly explicit action-specific prose after the user already selected the operation.
+
+## Install flow
+
+After scope selection, present the catalog skill picker. Installed skills remain selectable; do not disable a skill merely because it already exists on every currently supported harness. The actual existing-installation decision happens only after the complete requested configuration has been confirmed.
+
+Nothing is preselected on a never-before-touched skill-selection step.
+
+After skill selection, present all supported AI harnesses on one multiselect:
+
+```text
+Which AI harnesses should receive these skills?
+```
+
+Nothing is preselected on first entry. Do not insert an intermediate harness-selection screen.
+
+### Instruction-file explanation and selection
+
+After harness selection, show one informational note with a Title Case title such as:
+
+```text
+About AI Instruction Files
+```
+
+The note explains the applicable instruction files (`AGENTS.md`, `CLAUDE.md`, or future equivalents) and managed instruction integration.
+
+The note is deliberately skill-agnostic. It must not mention:
+
+- Map;
+- any selected skill name;
+- the number of selected skills;
+- any wording that reveals which skills were selected.
+
+File-name grammar must read naturally. For one file, use a form such as:
+
+```text
+The AGENTS.md file contains general instructions ...
+```
+
+For multiple files, use a form such as:
+
+```text
+AGENTS.md and CLAUDE.md files contain general instructions ...
+```
+
+Immediately after the note, present one multiselect containing the selected skills:
+
+```text
+Which skills would you like to add to AGENTS.md and CLAUDE.md?
+
+Map
+Other Skill
+```
+
+Nothing is selected by default on first entry.
+
+The selected subset is applied uniformly to every applicable instruction file for the already-selected harnesses. There is no harness-by-harness matrix.
+
+Even when only one skill was selected for installation, retain this same generalized multiselect flow rather than changing control type or writing skill-specific explanatory copy.
+
+Returning to the instruction-selection step restores the prior submitted subset.
+
+### Installation Summary and confirmation boundary
+
+The note title is exactly Title Case:
+
+```text
+Installation Summary
+```
+
+Section headings inside the note remain sentence case. Use simple indentation, comma-delimited compact lists, and newline-delimited locations. No bullet characters.
+
+Instruction injection is file-first: each affected instruction file gets its own line, followed by the selected injected skill subset.
+
+Example:
+
+```text
+Skills to install
+  Map, Other Skill
+
+Installation location
+  C:\Programming\example
+
+Affected AI harnesses
+  OpenAI Codex, Claude Code
+
+Instruction injection
+  AGENTS.md → Map, Other Skill
+  CLAUDE.md → Map, Other Skill
+```
+
+With one file:
+
+```text
+Instruction injection
+  AGENTS.md → Map, Other Skill
+```
+
+If no selected skills receive instruction injection:
+
+```text
+Instruction injection
+  None
+```
+
+The standard `Continue?` confirmation follows this summary.
+
+For the interactive wizard, **do not inspect existing skill installations before the user confirms Yes**. The complete request is collected and summarized first. Yes is the boundary after which jl-skills may inspect current installation state and execute/adapt the confirmed request.
+
+No confirmed request means no existing-install inspection and no filesystem mutation from this install operation.
+
+### Post-confirm existing-installation inspection
+
+After Yes, inspect every requested skill × selected-harness target at the selected scope before making any resulting filesystem writes.
+
+For each target, compare the actual installation against the complete requested configuration. The requested configuration includes:
+
+- skill;
+- harness;
+- installed/catalog version relationship;
+- requested managed instruction-injection state for that skill;
+- actual presence/absence of that skill's managed block in that harness instruction file.
+
+Classify each target as:
+
+- missing;
+- already satisfied in the requested configuration;
+- installed at the current/newer version but instruction configuration differs;
+- stale/unknown-version and update-eligible.
+
+A current or newer installed version alone does not make the request satisfied. The managed instruction state must also match what the user just confirmed.
+
+If a current/newer Map installation has no managed `AGENTS.md` block and the confirmed request includes Map instruction injection, add the managed block as configuration work.
+
+If a current/newer Map installation has a managed `AGENTS.md` block and the confirmed request excludes Map instruction injection, remove only that managed block as configuration work.
+
+Configuration-only work must not rewrite or downgrade the installed skill/runtime simply to change the instruction setting.
+
+A newer installed skill version must never be downgraded to the bundled version.
+
+### Already-satisfied skills
+
+A skill is considered wholly already installed only when every requested harness target for that skill is satisfied in the confirmed configuration.
+
+A mixed request such as Map already satisfied for Codex but missing for Claude remains a continuing Map installation and is not presented as wholly already installed.
+
+When one or more whole requested skills are already satisfied, show one note block:
+
+```text
+The Following Skills Have Already Been Installed
+
+Map, Other Skill
+```
+
+The body is a single comma-delimited skill list. Do not enumerate harnesses, versions, explanations, or internal state in this note.
+
+### Stale installations encountered during Install
+
+Stale/unknown-version requested targets are grouped by skill after confirmation.
+
+Show one warning followed by one optional multiselect:
+
+```text
+Some selected skills are already installed but out of date.
+
+Which would you like to update instead?
+
+Map  0.1.0 → 0.2.0
+Other Skill  unknown → 1.3.0
+```
+
+The selection starts empty.
+
+Selecting a skill updates every stale requested harness target for that skill. Leaving it unselected skips those stale targets.
+
+Back from this post-confirm update choice returns to the final confirmation rather than skipping backward past it.
+
+### Continue or return home
+
+After classification and any stale-update selection, compute the remaining actionable skills.
+
+Only when one or more whole requested skills were removed from the work list as already satisfied and at least one other requested skill still has missing targets, instruction-configuration work, or approved stale updates, show one ordinary status line:
+
+```text
+Installation will continue for: Map, Other Skill.
+```
+
+Do not show this continuation status for an ordinary one-skill installation or when no whole requested skill was removed from the work list.
+
+Then perform only the remaining work.
+
+If nothing remains:
+
+```text
+There is nothing to install.
+```
+
+Do not emit `No changes needed`, `No changes made`, or similar internal/meta narration.
+
+In the bare wizard, return to the primary:
+
+```text
+What would you like to do?
+```
+
+screen.
+
+All post-confirm inspection occurs before any resulting filesystem write. Do not interleave check/write/check/write.
+
+After actual installation/configuration/update work completes, interactive per-target results use Clack's in-flow logging primitive rather than raw `console.log` so the visual spine remains intact.
+
+Non-interactive output may retain concrete paths for automation/debugging.
+
+## Update Skills flow
+
+After selecting scope, discover installed catalog skills directly from supported harness locations at that scope.
+
+If none are found:
+
+```text
+No skills were detected. Choose a different scope or path.
+```
+
+Then return to the scope question with its prior cursor retained.
+
+When installations are found, show:
+
+```text
+Checking for updates...
+```
+
+Compare each installed self-reported version against the bundled catalog version.
+
+Only skills with an applicable update appear in the normal interactive update multiselect.
+
+If installed skills are present but no updates exist:
+
+```text
+All skills are already up to date. Choose a different scope or path.
+```
+
+Then return to the same `Where would you like to update skills?` scope question with its prior cursor/state retained. Do not return to the home screen merely because the selected update scope has no applicable updates, and do not use the generic `No updates found.` copy for this flow.
+
+Update choices render aligned skill/version columns where practical:
+
+```text
+Map       0.2.0 → 0.3.0
+Other     1.4.1 → 1.5.0
+```
+
+Unknown installed version metadata is labeled unknown rather than invented.
+
+`Update Skills` owns the complete manifest-declared skill representation for the selected installed targets. A real update must replace/update:
+
+- installed `SKILL.md`;
+- other manifest-declared skill files;
+- declared runtime artifacts/support files where appropriate;
+- managed instruction fragments only according to actual existing instruction state or an explicit CLI override.
+
+Update never adds a newly selected harness. Adding another harness belongs to Install.
+
+Update never initializes or mutates skill-generated semantic/project data.
+
+Regression coverage must deliberately create a stale installed skill/version/content representation and prove that the current catalog contents replace it while unrelated files and generated data remain intact.
+
+The confirmation note title is `Update Summary`.
+
+## Uninstall Skills flow
+
+After selecting scope, discover installed catalog skills directly from supported harness locations at that scope.
+
+If none are found:
+
+```text
+No skills were detected. Choose a different scope or path.
+```
+
+Otherwise show only installed skills as substantive choices.
+
+Uninstall removes the selected skill integration from discovered/explicit harness targets at that scope:
+
+- skill discovery/resource directory;
+- matching installer-managed instruction block if present.
+
+It preserves:
+
+- unrelated `AGENTS.md` / `CLAUDE.md` content;
+- unrelated harness configuration and user files;
+- skill-generated project data such as `.map/`;
+- shared skill runtime/tooling such as Map's shared CLI/schema.
+
+The confirmation note title is:
+
+```text
+Uninstall Summary
+```
+
+The note follows the same compact sectioned aesthetic as Installation Summary.
 
 ## Managed instruction integration
 
-The generic installer owns instruction-file lifecycle. Skills declare fragments instead of appending arbitrary prose themselves.
+The installer owns deterministic instruction-block lifecycle, not the surrounding instruction file.
 
-Managed content uses deterministic markers such as:
+Managed content uses markers such as:
 
 ```md
 <!-- jl-skill:begin map -->
-...installer-owned Map instructions...
+...managed Map instructions...
 <!-- jl-skill:end map -->
 ```
 
 Required behavior:
 
 - preserve unmanaged/user-authored content;
-- create files only when needed;
+- create instruction files only when needed;
 - repeated install/update is idempotent;
 - update only the matching owned block;
 - allow independent blocks from multiple skills;
 - use safe/atomic writes;
-- reject malformed/duplicate/conflicting markers rather than guessing;
-- clearly identify the interior as installer-managed content;
-- future uninstall removes only installer-owned content.
+- reject malformed/duplicate/conflicting boundaries rather than guessing;
+- uninstall removes only the matching managed block;
+- opting out leaves an unrelated existing instruction file untouched.
 
-Instruction fragments should give ordinary agents enough immediately useful CLI guidance to operate safely without reproducing the full skill manual. Map's fragment includes a short set of common read-only commands plus `--help` / `<command> --help` discovery and must render the actual installer-provisioned CLI path rather than assuming `map` is on `PATH`.
-
-Instruction integration always follows requested scope.
+Instruction fragments render actual provisioned CLI paths when a skill uses a shared runtime rather than assuming the CLI is on `PATH`.
 
 ## Package model
 
-Installation is manifest-driven. A package may declare name/version/description, skill resources, runtime kind, platform runtime artifacts, runtime support files, a scope-independent CLI destination, scope-independent support artifacts, harness agent/subagent resources, instruction fragment, supported scopes/capabilities, validation, and migration metadata.
+Installation is manifest-driven.
 
-A manifest-declared scope-independent CLI destination is support infrastructure, not skill discovery. Its presence must not cause user-scope skill copies or user-scope instruction injection for a project/path install.
+A package may declare:
 
-Harness filesystem knowledge belongs in adapters, not every skill package. Semantic project initialization is not an installer hook.
+- name/version/description;
+- skill files;
+- runtime kind;
+- platform runtime artifacts;
+- runtime support files;
+- scope-independent CLI destination;
+- scope-independent support artifacts;
+- instruction fragment;
+- generated-data locations;
+- future harness/subagent resources or migrations when explicitly needed.
 
-## Build and release pipeline
+Harness filesystem knowledge belongs in adapters, not duplicated in every skill package.
 
-The current Windows x64 build/smoke pipeline is local and conceptually:
+Semantic project initialization is never an installer hook.
+
+## Skill-generated data contract
+
+Skills may declare generated project data in their manifest. Each declaration is a relative path beneath the user-selected scope and may include a narrow marker used to verify that the path is actually that skill's generated data.
+
+Declarations reject absolute paths and parent traversal (`..`).
+
+Example for Map:
+
+```json
+"generated_data": [
+  {
+    "path": ".map",
+    "marker": "project.json"
+  }
+]
+```
+
+### Remove skill-generated data
+
+This remains intentionally separate from skill uninstall and installer uninstall.
+
+Flow:
+
+1. ask `Where would you like to remove skill-generated data?`;
+2. inspect only that selected scope/path;
+3. if none is detected, warn `No skill-generated data was detected. Choose a different scope or path.` and return to scope selection;
+4. show only skills whose declared generated data is detected there;
+5. ask `Which skills would you like to remove generated data for?`;
+6. show exact generated-data paths in a note titled `Permanent Data Removal`;
+7. require the standard safe-default `Continue?` confirmation;
+8. permanently delete only those declared generated-data paths.
+
+Deletion is recursive and unrecoverable. The note explicitly states that selected data cannot be recovered.
+
+For Map, selecting Map removes the selected project's `.map` directory. Neighboring project files are untouched.
+
+No registry or whole-drive scan is used to find generated data. The user supplies the scope/path and the installer performs narrow declarative detection there.
+
+## Update jl-skills installer
+
+Home-screen `Update jl-skills installer` manages only the compiled installer executable.
+
+It is available only from the compiled `jl-skills` executable, not from an arbitrary development Bun process that cannot correctly replace itself as the installed product.
+
+### Published update contract
+
+Default public manifest location:
 
 ```text
-Map Rust source
-  -> cargo test
-  -> cargo build --release
-  -> map.exe
-
-TypeScript installer + @clack/prompts
-  + package catalog / prebuilt payload references
-  -> Bun --compile
-  -> jl-skill.exe
-
-local smoke test
-  -> run compiled jl-skill.exe in isolated fake homes/projects
-  -> exercise cwd, user, and explicit-path scope
-  -> assert installer did not create or mutate .map
-  -> assert skill/support/instruction files exist at the requested scope
-  -> assert existing instruction content is preserved and managed blocks are idempotent
-  -> assert malformed managed boundaries reject rather than guess
-  -> assert user-scope installation preserves unrelated harness/user files
-  -> assert Map CLI is ~/.jl-skills/map/bin/map.exe for every scope
-  -> run installed map.exe against preserved/new Map state
+https://github.com/jacoblockett/jl-skills/releases/latest/download/jl-skills-manifest.json
 ```
 
-A release builder may have Bun, Rust, Cargo, and other build dependencies installed. Those dependencies remain completely outside the consumer contract.
+The URL may be overridden for deterministic development/testing with:
 
-The checked-in Windows regression entry point is:
-
-```bash
-bun run smoke
+```text
+JL_SKILLS_UPDATE_MANIFEST_URL
 ```
 
-## Package transport
+A manifest contains at least:
 
-The public consumer model is one downloaded `jl-skill.exe`. The installer resolves selected skills and installs **already-built** skill/runtime payloads. It never compiles a skill on the consumer machine.
+```json
+{
+  "version": "0.6.0",
+  "artifacts": {
+    "windows-x64": {
+      "url": "https://.../jl-skills.exe",
+      "sha256": "<64 hex characters>"
+    }
+  }
+}
+```
 
-Package acquisition/transport must remain separable from installation semantics. Public distribution should fetch versioned prebuilt payloads from a release endpoint accessible to the standalone installer.
+The local Windows build emits both:
 
-While `jl-skills` is private, a development smoke build may embed the exact prebuilt payload so the standalone EXE can be exercised without requiring private GitHub credentials. That is a temporary transport convenience only. It must not alter scope, harness placement, receipts, runtime paths, or the zero-toolchain consumer contract.
+```text
+build/jl-skills.exe
+build/jl-skills-manifest.json
+```
 
-## Map runtime
+The generated manifest's Windows artifact URL follows the release-tag contract:
 
-Map is a native Rust CLI application backed by embedded **SurrealKV** through the pinned SurrealDB/SurrealKV storage stack.
+```text
+https://github.com/jacoblockett/jl-skills/releases/download/v<VERSION>/jl-skills.exe
+```
 
-For Windows x64:
+A manual installer release therefore uses tag `v<VERSION>` and uploads both generated files. The `latest/download` manifest URL then resolves the newest published release while the manifest itself points at the exact versioned executable.
+
+The installer:
+
+1. reports `Checking for updates...`;
+2. fetches/parses the manifest;
+3. treats a missing published manifest (HTTP 404) as no available update;
+4. compares semantic versions;
+5. reports `No updates found.` and returns home when the running version is current/newer;
+6. requires a current-platform artifact for a newer release;
+7. shows an `Update Summary` containing current and available versions;
+8. uses the standard `Continue?` confirmation;
+9. downloads the replacement to a sibling staging path;
+10. validates SHA-256 before replacement;
+11. leaves the currently running executable untouched while staging;
+12. on Windows, starts the smallest detached post-exit replacement command;
+13. preserves installed skills, skill runtime/tooling, and skill-generated data.
+
+A failed hash/version/manifest check must fail rather than install an unverifiable executable.
+
+Automated smoke is entirely offline through a fake fetch/update source and must never replace the real development executable.
+
+## Uninstall jl-skills installer
+
+This action is intentionally installer-only.
+
+It must not uninstall skills, remove skill runtimes/tooling, or remove skill-generated project data.
+
+Do not show a verbose uninstall summary enumerating executable paths, installer-data paths, absent data, or preserved skill state.
+
+Instead show one concise warning:
+
+```text
+This action will uninstall the jl-skills installer and any associated installer-owned data and tooling.
+```
+
+Then use the standard safe-default `Continue?` confirmation.
+
+After the user confirms Yes, the foreground `jl-skills` process delegates the entire installer-owned cleanup request to a silent detached helper and exits immediately. The foreground process must not print `scheduled`, `complete`, success, failure, or any other post-confirmation status.
+
+The helper waits long enough for the foreground process to release the executable, then removes:
+
+- actual installer-owned data if present;
+- the installer executable itself.
+
+The helper must use ignored stdio and must not present a visible helper shell/window. The same lifecycle applies on Windows and Unix-like platforms, with platform-native cleanup commands hidden behind the same user-visible behavior.
+
+The helper must preserve:
+
+- installed skills and self-reported metadata;
+- skill-specific shared support/runtime directories such as `~/.jl-skills/map/...`;
+- all generated project data.
+
+Do not describe or delete a nonexistent central installer registry.
+
+## Note-title convention
+
+Clack note titles use Title Case unless a future specific visual decision says otherwise.
+
+Required current titles include:
+
+```text
+About AI Instruction Files
+Installation Summary
+Update Summary
+Uninstall Summary
+Permanent Data Removal
+```
+
+Section headings inside those notes may remain sentence case.
+
+## Map runtime integration
+
+Map is a native Rust CLI using embedded SurrealKV through the pinned SurrealDB/SurrealKV stack.
+
+Windows x64 release flow:
 
 ```text
 Map Rust source
   -> release map.exe
-  -> prebuilt package payload
+  -> bundled installer payload
   -> ~/.jl-skills/map/bin/map.exe
-```
-
-The Map CLI destination is deliberately scope-independent. User, cwd, and explicit-path installs all provision/update the same executable:
-
-```text
-~/.jl-skills/map/bin/map.exe
 ```
 
 The shared default schema lives at:
@@ -193,78 +818,84 @@ The shared default schema lives at:
 ~/.jl-skills/map/schema.surql
 ```
 
-There is no SurrealDB daemon/listening port. The runtime owns embedded database access directly.
+There is no SurrealDB daemon/listening port.
 
-The shared executable and schema do not widen harness discovery or instruction scope and do not create authoritative semantic state. Project `.map/` state remains project-local and runtime-owned.
-
-## Installation responsibilities
-
-For an install request, `jl-skill` should:
-
-1. resolve requested skill packages and versions;
-2. parse/normalize scope;
-3. detect supported harnesses;
-4. resolve selected harnesses from defaults or explicit flags;
-5. acquire already-built package payloads;
-6. compute the skill × harness plan at the requested scope only;
-7. show/confirm that plan in interactive mode;
-8. create only required non-semantic structures;
-9. install skill discovery/resources and declared harness/subagent resources;
-10. provision prebuilt runtime/support assets;
-11. update managed instruction blocks;
-12. validate selected harness targets;
-13. write/update installer receipts;
-14. report exact per-target results.
-
-Re-running an identical install must converge without duplicate skills, instructions, runtimes, or receipts. A selected-target failure must remain visible and produce a failing overall exit status.
-
-## Registry and update
-
-Use an OS-appropriate installer-owned registry with at least skill/version, normalized scope identity, harness adapter, managed skill/runtime paths, instruction ownership, timestamp, and source/catalog identity when available.
-
-This bookkeeping must not make a project-scoped skill globally discoverable. Missing recorded resources are stale/missing installations, not permission to recreate elsewhere.
-
-`update` uses the same manifest/adapter machinery, never relocates an installation's discovery/instruction scope, preserves unrelated content, and may update owned skill files, harness resources, shared or scope-local runtimes, support assets, managed instructions, receipts, and migrations.
-
-Bare interactive `jl-skill update` uses Clack multiselect to choose installer-managed installations before confirmation.
-
-## Map-specific contract
-
-Installing Map installs/configures the skill, prebuilt native runtime, declared support assets, managed ordinary-agent instructions, and declared Map harness/subagent resources.
-
-Map always provisions its CLI to:
-
-```text
-~/.jl-skills/map/bin/map.exe
-```
-
-Installing Map must **not**:
+Installing/updating Map must not:
 
 - create `.map/`;
-- create/open an embedded Map database;
+- create/open an embedded project database;
 - invoke `map init`;
-- apply the Map schema to project semantic state;
-- create semantic nodes/relations;
+- create semantic graph nodes/relations;
 - create a recovery session;
-- overwrite unrelated user/project harness configuration or unmanaged instruction content.
+- overwrite unrelated harness configuration or unmanaged instruction content.
 
-Map state is runtime-owned. Explicit `map init` creates `.map` only when Map is actually started for a target project. A user-scope skill install therefore makes Map available across projects but never creates one global authoritative graph.
+`map init` alone creates Map project state, including Map-local `.map/project.json` identity metadata.
 
-The default schema and shared CLI are scope-independent runtime support artifacts; installing them is not project-state initialization.
+There is no machine-level Map project registry in the accepted lifecycle.
 
-## Deferred commands
+## Build and smoke pipeline
 
-`list`, `status`, `repair`, and `uninstall` may follow. Ownership/registry design must remain sufficient to add them without replacing the installation model.
+The current Windows x64 local pipeline is:
 
-## Non-goals
+```text
+cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map
+bun run build
+bun run test:installer
+```
 
-- marketplace/account system;
-- arbitrary untrusted third-party hooks;
-- universal environment manager;
-- elaborate GUI;
-- silently modifying unknown harnesses;
-- per-skill bespoke installers where a manifest suffices;
-- treating harness detection as permission to widen scope;
-- installer-created semantic project state;
-- consumer-side compilation;
-- replacing the accepted Vite/Clack interactive UX with another TUI library.
+`bun run smoke` runs that pipeline.
+
+The build produces:
+
+```text
+build/jl-skills.exe
+build/jl-skills-manifest.json
+```
+
+and removes stale singular `build/jl-skill.exe` output.
+
+Catalog generation validates each source skill's self-report metadata against its manifest before shipping the catalog.
+
+Regression coverage includes at least:
+
+- hard scope isolation;
+- custom-path normalization;
+- self-reported skill metadata installation/discovery;
+- manual/filesystem-discovered installation handling;
+- interactive install inspection only after final confirmation;
+- install satisfaction including requested managed-instruction state;
+- configuration-only managed-block changes without rewriting current/newer skill content;
+- no downgrade of newer installed versions during Install handling;
+- install continuation status only when whole requested skills were skipped;
+- managed instruction opt-in/opt-out and boundary safety;
+- stale installed skill/version/content replacement;
+- preservation of unrelated/generated data during update;
+- update discovery/version comparison;
+- Update Skills no-update return to the chosen-scope picker;
+- uninstall preservation of generated data and shared tooling;
+- keyboard multiselect/back/select-all behavior;
+- removal of visible navigation pseudo-options;
+- one-line explicit navigation-footer vocabulary;
+- absence of inline Clack lifecycle confirmations;
+- skill-generated-data bounded deletion;
+- offline installer updater metadata/version/hash/staging behavior;
+- release-manifest hash matching the built executable;
+- installer self-uninstall preservation boundaries;
+- installer self-uninstall silent delegated cleanup with no post-confirmation foreground status.
+
+Manual UI smoke may exercise a real-looking skill update without publishing a new release by installing the current bundled skill into the isolated UI-smoke project, deliberately lowering only that installed copy's self-reported metadata version, and then running the compiled installer Update Skills flow against the same project.
+
+## Explicit non-goals
+
+Do not add without a demonstrated need:
+
+- authoritative central installer receipts;
+- whole-drive scanning for installed skills or generated data;
+- hidden widening from project scope to user scope;
+- automatic semantic project initialization;
+- another TUI framework;
+- Clack fork/monkey patch;
+- harness-by-harness instruction-injection matrices;
+- speculative plugin/package-manager abstractions beyond the current manifest model;
+- automatic deletion of skill-generated data during ordinary skill uninstall;
+- automatic deletion of installed skills or skill runtime/tooling during installer self-uninstall.

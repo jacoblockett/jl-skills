@@ -1,10 +1,11 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { basename, join, relative, sep } from 'node:path'
 
 const repo = join(import.meta.dir, '..')
 const skillsRoot = join(repo, 'skills')
 const stagedRuntimeRoot = join(repo, 'build', 'runtime-assets')
 const output = join(repo, 'src', 'catalog.generated.ts')
+const skillMetaPrefix = 'jl-skills-meta:'
 
 function addDeclared(files: Record<string, string>, skillRoot: string, rel: string): void {
   const full = join(skillRoot, rel)
@@ -17,6 +18,28 @@ function addDeclared(files: Record<string, string>, skillRoot: string, rel: stri
   files[key] = readFileSync(full).toString('base64')
 }
 
+function validateSkillMetadata(skillRoot: string, manifest: any): void {
+  const skillFile = (manifest.skill_files ?? []).find((rel: string) => basename(rel).toLowerCase() === 'skill.md')
+  if (!skillFile) throw new Error(`${manifest.name ?? basename(skillRoot)} manifest must include SKILL.md`)
+
+  const text = readFileSync(join(skillRoot, skillFile), 'utf8')
+  const line = text.split(/\r?\n/).find((candidate) => candidate.includes(skillMetaPrefix))
+  if (!line) throw new Error(`${manifest.name} SKILL.md is missing jl-skills metadata`)
+  const marker = line.indexOf(skillMetaPrefix)
+  const end = line.lastIndexOf('-->')
+  if (marker < 0 || end < marker) throw new Error(`${manifest.name} SKILL.md has malformed jl-skills metadata`)
+
+  let metadata: any
+  try {
+    metadata = JSON.parse(line.slice(marker + skillMetaPrefix.length, end).trim())
+  } catch {
+    throw new Error(`${manifest.name} SKILL.md has invalid jl-skills metadata JSON`)
+  }
+  if (metadata?.name !== manifest.name || metadata?.version !== manifest.version || metadata?.format !== 1) {
+    throw new Error(`${manifest.name} SKILL.md metadata must match manifest name/version and format 1`)
+  }
+}
+
 const catalog: Record<string, { manifest: unknown; files: Record<string, string> }> = {}
 
 for (const entry of readdirSync(skillsRoot)) {
@@ -26,6 +49,7 @@ for (const entry of readdirSync(skillsRoot)) {
   if (!existsSync(manifestPath)) continue
 
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  validateSkillMetadata(skillRoot, manifest)
   const files: Record<string, string> = {}
   const declared = new Set<string>([
     ...(manifest.skill_files ?? []),

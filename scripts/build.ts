@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { arch, platform } from 'node:os'
 
@@ -46,7 +47,8 @@ if (suppliedMap) {
 
 await import('./generate-catalog')
 
-const output = join(out, 'jl-skill.exe')
+const output = join(out, 'jl-skills.exe')
+rmSync(join(out, 'jl-skill.exe'), { force: true })
 rmSync(output, { force: true })
 const installerBuild = Bun.spawnSync([
   process.execPath,
@@ -63,4 +65,22 @@ const installerBuild = Bun.spawnSync([
 })
 if (installerBuild.exitCode !== 0) process.exit(installerBuild.exitCode)
 
+const installerSource = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8')
+const versionMatch = installerSource.match(/const VERSION = ['"]([^'"]+)['"]/)
+if (!versionMatch) throw new Error('could not determine jl-skills installer version from src/jl-skill.ts')
+const version = versionMatch[1]
+const sha256 = createHash('sha256').update(readFileSync(output)).digest('hex')
+const releaseManifest = {
+  version,
+  artifacts: {
+    'windows-x64': {
+      url: `https://github.com/jacoblockett/jl-skills/releases/download/v${version}/jl-skills.exe`,
+      sha256,
+    },
+  },
+}
+const manifestOutput = join(out, 'jl-skills-manifest.json')
+writeFileSync(manifestOutput, `${JSON.stringify(releaseManifest, null, 2)}\n`)
+
 console.log(`Built ${output}`)
+console.log(`Built ${manifestOutput}`)

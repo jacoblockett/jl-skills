@@ -24,6 +24,22 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn test_home() -> PathBuf {
+    let name = std::thread::current()
+        .name()
+        .unwrap_or("runtime")
+        .replace("::", "-");
+    let path = repo_root().join("test").join("map-rust-v2-homes").join(name);
+    fs::create_dir_all(&path).expect("create test home");
+    path
+}
+
+fn reset_test_home() {
+    let path = test_home();
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).expect("reset test home");
+}
+
 fn scratch(name: &str) -> PathBuf {
     let path = repo_root().join("test").join("map-rust-v2").join(name);
     let _ = fs::remove_dir_all(&path);
@@ -32,7 +48,10 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn run(root: &Path, args: &[&str]) -> Output {
+    let home = test_home();
     Command::new(bin())
+        .env("USERPROFILE", &home)
+        .env("HOME", &home)
         .arg("--path")
         .arg(root)
         .args(args)
@@ -73,10 +92,25 @@ fn sorted(mut ids: Vec<String>) -> Vec<String> {
 }
 
 fn new_map(name: &str) -> PathBuf {
+    reset_test_home();
     let root = scratch(name);
     let schema = schema();
     ok(&root, &["init", "--schema", &schema]);
     root
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).expect("create copied project root");
+    for entry in fs::read_dir(src).expect("read source directory") {
+        let entry = entry.expect("source entry");
+        let ty = entry.file_type().expect("source entry type");
+        let target = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).expect("copy project file");
+        }
+    }
 }
 
 #[test]
@@ -89,6 +123,68 @@ fn init_refuses_existing_map_and_ids_use_native_shape() {
     let intent = id(&ok(&root, &["create", "intent", "Build a government"]));
     assert_eq!(intent.len(), 20);
     assert!(intent.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+}
+
+#[test]
+fn map_init_creates_local_project_identity_without_registry() {
+    let root = new_map("runtime-project-identity");
+    let identity: Value = serde_json::from_str(
+        &fs::read_to_string(root.join(".map").join("project.json")).expect("project identity"),
+    )
+    .expect("identity JSON");
+    let project_id = identity["projectId"].as_str().expect("project ID");
+    assert_eq!(project_id.len(), 20);
+    assert!(project_id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+    assert!(identity["createdAtMs"].is_number());
+    assert!(!test_home().join(".jl-skills").join("map").join("registry.json").exists());
+}
+
+#[test]
+fn moving_a_map_preserves_local_identity() {
+    let root = new_map("runtime-project-move-source");
+    let identity_before: Value = serde_json::from_str(
+        &fs::read_to_string(root.join(".map").join("project.json")).unwrap(),
+    )
+    .unwrap();
+
+    let moved = scratch("runtime-project-move-destination");
+    fs::remove_dir_all(&moved).unwrap();
+    fs::rename(&root, &moved).expect("move project");
+
+    ok(&moved, &["status"]);
+    let identity_after: Value = serde_json::from_str(
+        &fs::read_to_string(moved.join(".map").join("project.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(identity_after["projectId"], identity_before["projectId"]);
+}
+
+#[test]
+fn copied_map_is_self_contained() {
+    let root = new_map("runtime-project-copy-source");
+    let original_identity: Value = serde_json::from_str(
+        &fs::read_to_string(root.join(".map").join("project.json")).unwrap(),
+    )
+    .unwrap();
+    let copy = scratch("runtime-project-copy-destination");
+    fs::remove_dir_all(&copy).unwrap();
+    copy_dir_all(&root, &copy);
+
+    ok(&copy, &["status"]);
+    let copied_identity: Value = serde_json::from_str(
+        &fs::read_to_string(copy.join(".map").join("project.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(copied_identity["projectId"], original_identity["projectId"]);
+}
+
+#[test]
+fn damaged_project_identity_is_rejected() {
+    let root = new_map("runtime-project-identity-damaged");
+    fs::write(root.join(".map").join("project.json"), "{}\n").unwrap();
+    let message = err(&root, &["status"]);
+    assert!(message.contains("identity"));
+    assert!(!message.contains("interactive user"));
 }
 
 #[test]
