@@ -126,7 +126,7 @@ If installed version metadata is missing or malformed, presence may still be rec
 
 ## Compatibility
 
-Each released skill version declares a minimum installer version through `min_installer` in the top-level release manifest.
+Each released skill version declares a minimum installer version through `min_installer` in its source/package `manifest.json`. The build copies that value into the corresponding top-level release-manifest entry; it is authored once rather than maintained separately.
 
 If the running installer satisfies that minimum, the skill may install/update even when a newer installer exists.
 
@@ -142,11 +142,59 @@ There is no general installer-first policy.
 
 ## Skill packages
 
-Every released skill is distributed as one independently downloadable archive named `<skill>.zip`.
+Every skill source directory uses the contextual name:
 
-That archive is the complete installable snapshot for the skill version. It includes its own manifest plus all skill instructions, bundled agents, runtime/support files, instruction fragments, schemas, or other assets required by that skill.
+```text
+skills/<name>/manifest.json
+```
 
-For Map, the working package shape is:
+That same file is included at the root of the released `<skill>.zip` and is the authoritative description of that immutable skill snapshot.
+
+Required package-manifest fields:
+
+- `format`: package-manifest schema version; currently `1`;
+- `name`: stable skill identifier and archive basename;
+- `version`: skill semantic version;
+- `min_installer`: minimum compatible `jl-skills` semantic version;
+- `description`: catalog/UI description;
+- `skill_files`: files/directories copied into each selected harness's skill directory.
+
+Optional install-semantics fields are present only when the skill needs them: `runtime`, `runtime_artifacts`, `runtime_files`, `runtime_cli`, `runtime_cli_destination`, `runtime_shared_files`, `cli_token`, `instruction_fragment`, and `generated_data`.
+
+Map's exact source/package manifest is:
+
+```json
+{
+  "format": 1,
+  "name": "map",
+  "version": "0.2.0",
+  "min_installer": "0.5.0",
+  "description": "Durable local graph of user intent, questions, decisions, ideas, facts, dependencies, and recovery state.",
+  "skill_files": [
+    "SKILL.md",
+    "agents"
+  ],
+  "runtime": "rust",
+  "runtime_artifacts": {
+    "windows-x64": "runtime/windows-x64/map.exe"
+  },
+  "runtime_cli": "map",
+  "runtime_cli_destination": "~/.jl-skills/map/bin/map.exe",
+  "runtime_shared_files": {
+    "schema.surql": "~/.jl-skills/map/schema.surql"
+  },
+  "cli_token": "JL_MAP_CLI",
+  "instruction_fragment": "AGENTS.fragment.md",
+  "generated_data": [
+    {
+      "path": ".map",
+      "marker": "project.json"
+    }
+  ]
+}
+```
+
+Map's released archive layout is exactly:
 
 ```text
 map.zip
@@ -154,11 +202,26 @@ map.zip
   SKILL.md
   AGENTS.fragment.md
   agents/
+    map-completion-auditor.toml
+    map-context.toml
+    map-discovery-reviewer.toml
+    map-discovery.toml
+    map-linguist.toml
+    map-state-reviewer.toml
+    map-state-writer.toml
   schema.surql
   runtime/
+    windows-x64/
+      map.exe
 ```
 
-The exact per-skill manifest schema and final internal package layout are the next design item.
+The archive contains only the installable snapshot. Map's `README.md`, `SPEC.md`, Cargo files, Rust source, tests, and other development material are not package payload.
+
+The build validates manifest name/version metadata against `SKILL.md`, stages the declared payload, creates one `<skill>.zip`, hashes the archive, and derives the top-level release-manifest skill entry from that built archive and its package manifest.
+
+For non-publishing local/CI builds, `JL_SKILLS_RELEASE_TAG` may be omitted and generated artifact URLs use the placeholder `dev` tag. Release workflows must set `JL_SKILLS_RELEASE_TAG` to the actual snapshot tag before publication.
+
+The old embedded catalog remains only as a temporary installation path until items 5-6 switch the installer to downloaded archives and remove it. `build/map.exe` likewise remains temporarily for existing workflow compatibility; it is not part of the accepted stable release asset set.
 
 ## Nightly channel
 
@@ -196,11 +259,11 @@ Work through these sequentially and keep scope narrow.
 
 - [x] **1. Update the durable release/update contract.** Record the accepted one-archive-per-skill model, sole stable update-index behavior, local-version sources, main-only repository workflow, and remove stale branch/PR assumptions.
 - [x] **2. Lock the top-level stable `manifest.json` schema.** Use `format`, `installer`, and `skills` as documented above; bind artifact URLs to the immutable timestamped release; use the latest normal release only as the entry point for update discovery.
-- [ ] **3. Lock the per-skill package manifest and archive layout.** Define the exact minimal skill manifest, final archive paths, and whether source `skills/<name>/jl-skill.json` becomes `skills/<name>/manifest.json`.
-- [ ] **4. Build skill archives instead of embedding skill payloads in `jl-skills.exe`.** Produce `<skill>.zip`, hash it, publish it as a release asset, and populate the top-level release manifest from the built artifact.
+- [x] **3. Lock the per-skill package manifest and archive layout.** Source/package metadata is `skills/<name>/manifest.json`; the same file is packaged at archive root; Map's exact manifest and archive contents are documented above.
+- [x] **4. Build skill archives as release artifacts.** The build stages each declared package payload, creates `<skill>.zip`, hashes it, and generates top-level `manifest.json` entries from the built archive. Workflow publication of those outputs is handled in item 7.
 - [ ] **5. Change install/update logic to consume the release manifest and skill archives.** Compare running installer version and installed `SKILL.md` metadata against the release manifest, enforce only `min_installer`, then download/verify/install the requested archive.
 - [ ] **6. Remove obsolete embedded-skill machinery.** Delete catalog/base64/extraction/update paths that no longer have a job once archive delivery is authoritative; let the current `map/agents` failure disappear through the architecture instead of patching it separately.
-- [ ] **7. Simplify Actions around the final package model and main-only workflow.** Collapse the current workflows where practical, remove branch-hygiene/PR-only behavior, retain clean build/test, change-aware rolling nightly publication, and explicit manual stable publication.
+- [ ] **7. Simplify Actions around the final package model and main-only workflow.** Collapse the current workflows where practical, remove branch-hygiene/PR-only behavior, publish `jl-skills.exe`, `manifest.json`, and every `<skill>.zip`, retain clean build/test, change-aware rolling nightly publication, and explicit manual stable publication.
 - [ ] **8. Repair and run tests around the final package model.** Preserve meaningful regression coverage and add focused coverage for archive installation, independent skill updates, and minimum-installer compatibility.
 - [ ] **9. Publish/test nightly.** Produce the rolling nightly through the real release path and perform the planned production install/update/uninstall test with Codex.
 - [ ] **10. Publish first stable snapshot.** After production validation, manually publish the first timestamp-tagged stable release and verify installer/skill update discovery through `releases/latest/download/manifest.json`.

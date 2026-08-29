@@ -45,7 +45,7 @@ const catalog: Record<string, { manifest: unknown; files: Record<string, string>
 for (const entry of readdirSync(skillsRoot)) {
   const skillRoot = join(skillsRoot, entry)
   if (!statSync(skillRoot).isDirectory()) continue
-  const manifestPath = join(skillRoot, 'jl-skill.json')
+  const manifestPath = join(skillRoot, 'manifest.json')
   if (!existsSync(manifestPath)) continue
 
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))

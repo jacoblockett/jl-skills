@@ -1,21 +1,168 @@
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join, dirname, resolve } from 'node:path'
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import { arch, platform } from 'node:os'
 
 const repo = join(import.meta.dir, '..')
 const out = join(repo, 'build')
+const skillsRoot = join(repo, 'skills')
+const runtimeAssets = join(out, 'runtime-assets')
+const packageStages = join(out, 'packages')
+const semver = /^\d+\.\d+\.\d+$/
+const skillMetaPrefix = 'jl-skills-meta:'
+
 mkdirSync(out, { recursive: true })
 
 if (platform() !== 'win32' || arch() !== 'x64') {
   throw new Error('current installer build supports Windows x64 only')
 }
 
+type SkillManifest = {
+  format: number
+  name: string
+  version: string
+  min_installer: string
+  description: string
+  skill_files: string[]
+  runtime_files?: string[]
+  runtime?: string
+  runtime_artifacts?: Record<string, string>
+  runtime_shared_files?: Record<string, string>
+  runtime_cli?: string
+  runtime_cli_destination?: string
+  cli_token?: string
+  instruction_fragment?: string
+  generated_data?: { path: string; marker?: string }[]
+}
+
+type ReleasedSkill = {
+  version: string
+  min_installer: string
+  url: string
+  sha256: string
+}
+
+function sha256(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+function packagePath(rel: string, label: string): string {
+  const normalized = rel.replaceAll('\\', '/')
+  const parts = normalized.split('/')
+  if (!normalized || normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || parts.includes('..')) {
+    throw new Error(`${label} must be a relative contained path: ${rel}`)
+  }
+  return normalized
+}
+
+function readManifest(skillRoot: string, directoryName: string): SkillManifest {
+  const path = join(skillRoot, 'manifest.json')
+  const manifest = JSON.parse(readFileSync(path, 'utf8')) as SkillManifest
+  if (manifest.format !== 1) throw new Error(`${directoryName} manifest format must be 1`)
+  if (manifest.name !== directoryName) throw new Error(`${directoryName} manifest name must match its directory`)
+  if (!semver.test(manifest.version)) throw new Error(`${directoryName} manifest version must be plain semver`)
+  if (!semver.test(manifest.min_installer)) throw new Error(`${directoryName} min_installer must be plain semver`)
+  if (typeof manifest.description !== 'string' || !manifest.description.trim()) {
+    throw new Error(`${directoryName} manifest requires a description`)
+  }
+  if (!Array.isArray(manifest.skill_files) || manifest.skill_files.length === 0) {
+    throw new Error(`${directoryName} manifest requires skill_files`)
+  }
+  return manifest
+}
+
+function validateSkillMetadata(skillRoot: string, manifest: SkillManifest): void {
+  const skillFile = manifest.skill_files.find((rel) => basename(rel).toLowerCase() === 'skill.md')
+  if (!skillFile) throw new Error(`${manifest.name} manifest must include SKILL.md`)
+  const text = readFileSync(join(skillRoot, packagePath(skillFile, `${manifest.name} skill file`)), 'utf8')
+  const line = text.split(/\r?\n/).find((candidate) => candidate.includes(skillMetaPrefix))
+  if (!line) throw new Error(`${manifest.name} SKILL.md is missing jl-skills metadata`)
+  const marker = line.indexOf(skillMetaPrefix)
+  const end = line.lastIndexOf('-->')
+  if (marker < 0 || end < marker) throw new Error(`${manifest.name} SKILL.md has malformed jl-skills metadata`)
+
+  let metadata: { name?: string; version?: string; format?: number }
+  try {
+    metadata = JSON.parse(line.slice(marker + skillMetaPrefix.length, end).trim())
+  } catch {
+    throw new Error(`${manifest.name} SKILL.md has invalid jl-skills metadata JSON`)
+  }
+  if (metadata.name !== manifest.name || metadata.version !== manifest.version || metadata.format !== 1) {
+    throw new Error(`${manifest.name} SKILL.md metadata must match manifest name/version and format 1`)
+  }
+}
+
+function copyDeclared(sourceRoot: string, stageRoot: string, rel: string, label: string): void {
+  const safe = packagePath(rel, label)
+  const source = join(sourceRoot, safe)
+  const destination = join(stageRoot, safe)
+  if (!existsSync(source)) throw new Error(`missing ${label}: ${source}`)
+  mkdirSync(dirname(destination), { recursive: true })
+  if (statSync(source).isDirectory()) cpSync(source, destination, { recursive: true })
+  else copyFileSync(source, destination)
+}
+
+function buildSkillArchive(
+  directoryName: string,
+  manifest: SkillManifest,
+  releaseBase: string,
+  tar: string,
+): ReleasedSkill {
+  const skillRoot = join(skillsRoot, directoryName)
+  const stageRoot = join(packageStages, directoryName)
+  const archive = join(out, `${manifest.name}.zip`)
+  rmSync(stageRoot, { recursive: true, force: true })
+  rmSync(archive, { force: true })
+  mkdirSync(stageRoot, { recursive: true })
+
+  validateSkillMetadata(skillRoot, manifest)
+  copyFileSync(join(skillRoot, 'manifest.json'), join(stageRoot, 'manifest.json'))
+
+  const declared = new Set<string>([
+    ...manifest.skill_files,
+    ...(manifest.runtime_files ?? []),
+    ...Object.keys(manifest.runtime_shared_files ?? {}),
+    ...(manifest.instruction_fragment ? [manifest.instruction_fragment] : []),
+  ])
+  for (const rel of declared) copyDeclared(skillRoot, stageRoot, rel, `${manifest.name} package asset`)
+
+  for (const rel of Object.values(manifest.runtime_artifacts ?? {})) {
+    copyDeclared(join(runtimeAssets, directoryName), stageRoot, rel, `${manifest.name} runtime artifact`)
+  }
+
+  const entries = readdirSync(stageRoot).sort()
+  if (entries.length === 0) throw new Error(`${manifest.name} package is empty`)
+  const packed = Bun.spawnSync([tar, '-a', '-c', '-f', archive, '-C', stageRoot, ...entries], {
+    cwd: repo,
+    stdin: 'inherit',
+    stdout: 'inherit',
+    stderr: 'inherit',
+  })
+  if (packed.exitCode !== 0) process.exit(packed.exitCode)
+
+  return {
+    version: manifest.version,
+    min_installer: manifest.min_installer,
+    url: `${releaseBase}/${manifest.name}.zip`,
+    sha256: sha256(archive),
+  }
+}
+
 const cargoTarget = join(out, 'cargo', 'map')
-const runtimeAssets = join(out, 'runtime-assets')
 const stagedMap = join(runtimeAssets, 'map', 'runtime', 'windows-x64', 'map.exe')
-const publishedMap = join(out, 'map.exe')
+const compatibilityMap = join(out, 'map.exe')
 rmSync(runtimeAssets, { recursive: true, force: true })
+rmSync(packageStages, { recursive: true, force: true })
 mkdirSync(dirname(stagedMap), { recursive: true })
 
 const suppliedMap = process.env.JL_SKILL_MAP_EXE?.trim()
@@ -45,8 +192,11 @@ if (suppliedMap) {
 
   copyFileSync(join(cargoTarget, 'release', 'map.exe'), stagedMap)
 }
-copyFileSync(stagedMap, publishedMap)
 
+// Temporary compatibility output until the release workflows and installer stop referring to build/map.exe.
+copyFileSync(stagedMap, compatibilityMap)
+
+// Temporary compatibility path until items 5-6 move installation fully to downloaded archives.
 await import('./generate-catalog')
 
 const output = join(out, 'jl-skills.exe')
@@ -70,41 +220,39 @@ if (installerBuild.exitCode !== 0) process.exit(installerBuild.exitCode)
 const installerSource = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8')
 const versionMatch = installerSource.match(/const VERSION = ['"]([^'"]+)['"]/)
 if (!versionMatch) throw new Error('could not determine jl-skills installer version from src/jl-skill.ts')
-const version = versionMatch[1]
-if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`stable release version must be plain semver: ${version}`)
+const installerVersion = versionMatch[1]
+if (!semver.test(installerVersion)) throw new Error(`installer version must be plain semver: ${installerVersion}`)
 
-const mapManifest = JSON.parse(readFileSync(join(repo, 'skills', 'map', 'jl-skill.json'), 'utf8')) as { version?: string }
-if (typeof mapManifest.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(mapManifest.version)) {
-  throw new Error('Map manifest must expose a stable semantic version')
+const releaseTag = process.env.JL_SKILLS_RELEASE_TAG?.trim() || 'dev'
+if (!/^[A-Za-z0-9._-]+$/.test(releaseTag)) throw new Error(`invalid release tag: ${releaseTag}`)
+const releaseBase = `https://github.com/jacoblockett/jl-skills/releases/download/${releaseTag}`
+const tar = Bun.which('tar')
+if (!tar) throw new Error('tar is required on the build machine to create skill ZIP archives')
+
+mkdirSync(packageStages, { recursive: true })
+const releasedSkills: Record<string, ReleasedSkill> = {}
+for (const directoryName of readdirSync(skillsRoot).sort()) {
+  const skillRoot = join(skillsRoot, directoryName)
+  if (!statSync(skillRoot).isDirectory()) continue
+  const manifestPath = join(skillRoot, 'manifest.json')
+  if (!existsSync(manifestPath)) continue
+  const manifest = readManifest(skillRoot, directoryName)
+  releasedSkills[manifest.name] = buildSkillArchive(directoryName, manifest, releaseBase, tar)
 }
 
-const installerSha256 = createHash('sha256').update(readFileSync(output)).digest('hex')
-const mapSha256 = createHash('sha256').update(readFileSync(publishedMap)).digest('hex')
-const releaseBase = `https://github.com/jacoblockett/jl-skills/releases/download/v${version}`
 const releaseManifest = {
   format: 1,
-  version,
-  artifacts: {
-    'windows-x64': {
-      url: `${releaseBase}/jl-skills.exe`,
-      sha256: installerSha256,
-    },
+  installer: {
+    version: installerVersion,
+    url: `${releaseBase}/jl-skills.exe`,
+    sha256: sha256(output),
   },
-  skills: {
-    map: {
-      version: mapManifest.version,
-      artifacts: {
-        'windows-x64': {
-          url: `${releaseBase}/map.exe`,
-          sha256: mapSha256,
-        },
-      },
-    },
-  },
+  skills: releasedSkills,
 }
-const manifestOutput = join(out, 'jl-skills-manifest.json')
+const manifestOutput = join(out, 'manifest.json')
+rmSync(join(out, 'jl-skills-manifest.json'), { force: true })
 writeFileSync(manifestOutput, `${JSON.stringify(releaseManifest, null, 2)}\n`)
 
 console.log(`Built ${output}`)
-console.log(`Built ${publishedMap}`)
+for (const skill of Object.keys(releasedSkills)) console.log(`Built ${join(out, `${skill}.zip`)}`)
 console.log(`Built ${manifestOutput}`)
