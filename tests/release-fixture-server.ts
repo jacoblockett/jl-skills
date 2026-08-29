@@ -11,12 +11,16 @@ const server = Bun.serve({
   port: 0,
   fetch(request) {
     const url = new URL(request.url)
-    if (url.pathname === '/manifest.json') {
+    if (url.pathname === '/manifest.json' || url.pathname === '/incompatible-manifest.json') {
       const manifest = JSON.parse(readFileSync(join(build, 'manifest.json'), 'utf8'))
       const base = `http://127.0.0.1:${server.port}`
       manifest.installer.url = `${base}/jl-skills.exe`
       for (const [name, skill] of Object.entries(manifest.skills) as [string, any][]) {
         skill.url = `${base}/${name}.zip`
+      }
+      if (url.pathname === '/incompatible-manifest.json') {
+        manifest.installer.version = '0.6.0'
+        manifest.skills.map.min_installer = '0.6.0'
       }
       return Response.json(manifest)
     }
