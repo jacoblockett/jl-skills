@@ -1,6 +1,6 @@
 # jl-skills release channels
 
-Status: accepted direction; implementation pending.
+Status: implementation substantially complete; consolidated validation pending.
 
 This file is the durable contract and running checklist for release/update work.
 
@@ -221,7 +221,7 @@ The build validates manifest name/version metadata against `SKILL.md`, stages th
 
 For non-publishing local/CI builds, `JL_SKILLS_RELEASE_TAG` may be omitted and generated artifact URLs use the placeholder `dev` tag. Release workflows must set `JL_SKILLS_RELEASE_TAG` to the actual snapshot tag before publication.
 
-The old embedded catalog remains only as a temporary installation path until items 5-6 switch the installer to downloaded archives and remove it. `build/map.exe` likewise remains temporarily for existing workflow compatibility; it is not part of the accepted stable release asset set.
+The installer now consumes independently downloaded skill archives; the old embedded catalog/base64 delivery path and standalone stable `map.exe` asset are no longer part of the implementation.
 
 ## Nightly channel
 
@@ -245,13 +245,13 @@ The repository is currently main-only development, so future workflow cleanup sh
 
 Use GitHub-native repository features instead of bespoke workflow code where they are sufficient.
 
-## Known current failure
+## Historical packaging failure
 
-The first release-automation Action run failed because Map declares `agents` as a directory in `skill_files`, the catalog generator recursively embeds the files under it, but the installer later tries to extract an asset literally named `map/agents`.
+The first release-automation Action run failed because Map declared `agents` as a directory in `skill_files`, the old catalog generator recursively embedded the files under it, but the old installer later tried to extract an asset literally named `map/agents`.
 
-All Map Rust tests passed, the installer compiled, and updater-specific tests passed. The 15 installer regression failures are one packaging failure fanning out across install-dependent tests, not 15 unrelated defects.
+All Map Rust tests passed, the installer compiled, and updater-specific tests passed. The 15 installer regression failures were one packaging failure fanning out across install-dependent tests, not 15 unrelated defects.
 
-Do not patch this directory bug in isolation if the independent skill-package redesign removes the embedded-catalog path entirely.
+That failure is obsolete under the implemented archive model: package directories are installed from the downloaded skill snapshot rather than represented as literal embedded catalog keys. Consolidated validation remains pending.
 
 ## Remaining work
 
@@ -261,9 +261,9 @@ Work through these sequentially and keep scope narrow.
 - [x] **2. Lock the top-level stable `manifest.json` schema.** Use `format`, `installer`, and `skills` as documented above; bind artifact URLs to the immutable timestamped release; use the latest normal release only as the entry point for update discovery.
 - [x] **3. Lock the per-skill package manifest and archive layout.** Source/package metadata is `skills/<name>/manifest.json`; the same file is packaged at archive root; Map's exact manifest and archive contents are documented above.
 - [x] **4. Build skill archives as release artifacts.** The build stages each declared package payload, creates `<skill>.zip`, hashes it, and generates top-level `manifest.json` entries from the built archive. Workflow publication of those outputs is handled in item 7.
-- [ ] **5. Change install/update logic to consume the release manifest and skill archives.** Compare running installer version and installed `SKILL.md` metadata against the release manifest, enforce only `min_installer`, then download/verify/install the requested archive.
-- [ ] **6. Remove obsolete embedded-skill machinery.** Delete catalog/base64/extraction/update paths that no longer have a job once archive delivery is authoritative; let the current `map/agents` failure disappear through the architecture instead of patching it separately.
-- [ ] **7. Simplify Actions around the final package model and main-only workflow.** Collapse the current workflows where practical, remove branch-hygiene/PR-only behavior, publish `jl-skills.exe`, `manifest.json`, and every `<skill>.zip`, retain clean build/test, change-aware rolling nightly publication, and explicit manual stable publication.
-- [ ] **8. Repair and run tests around the final package model.** Preserve meaningful regression coverage and add focused coverage for archive installation, independent skill updates, and minimum-installer compatibility.
+- [x] **5. Change install/update logic to consume the release manifest and skill archives — implemented; validation deferred.** Compare running installer version and installed `SKILL.md` metadata against the release manifest, enforce only `min_installer`, then download/verify/install the requested archive.
+- [x] **6. Remove obsolete embedded-skill machinery — implemented; validation deferred.** Delete catalog/base64/extraction/update paths that no longer have a job once archive delivery is authoritative; let the old `map/agents` failure disappear through the architecture instead of patching it separately.
+- [x] **7. Simplify Actions around the final package model and main-only workflow — implemented; validation deferred.** Use one broad workflow, remove branch-hygiene/PR-only behavior, publish `jl-skills.exe`, `manifest.json`, and every `<skill>.zip`, retain clean build/test, change-aware rolling nightly publication, and explicit manual stable publication.
+- [ ] **8. Run consolidated validation of the final package model.** Exercise the meaningful regression suite and production artifact path together, including archive installation, independent skill updates, minimum-installer compatibility, install/update/uninstall behavior, generated-data preservation, and produced artifact inspection.
 - [ ] **9. Publish/test nightly.** Produce the rolling nightly through the real release path and perform the planned production install/update/uninstall test with Codex.
 - [ ] **10. Publish first stable snapshot.** After production validation, manually publish the first timestamp-tagged stable release and verify installer/skill update discovery through `releases/latest/download/manifest.json`.
