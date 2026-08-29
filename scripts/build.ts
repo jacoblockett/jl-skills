@@ -160,7 +160,6 @@ function buildSkillArchive(
 
 const cargoTarget = join(out, 'cargo', 'map')
 const stagedMap = join(runtimeAssets, 'map', 'runtime', 'windows-x64', 'map.exe')
-const compatibilityMap = join(out, 'map.exe')
 rmSync(runtimeAssets, { recursive: true, force: true })
 rmSync(packageStages, { recursive: true, force: true })
 mkdirSync(dirname(stagedMap), { recursive: true })
@@ -192,9 +191,6 @@ if (suppliedMap) {
 
   copyFileSync(join(cargoTarget, 'release', 'map.exe'), stagedMap)
 }
-
-// Temporary output until item 7 removes the old workflow reference to build/map.exe.
-copyFileSync(stagedMap, compatibilityMap)
 
 const output = join(out, 'jl-skills.exe')
 rmSync(join(out, 'jl-skill.exe'), { force: true })
@@ -248,6 +244,7 @@ const releaseManifest = {
 }
 const manifestOutput = join(out, 'manifest.json')
 rmSync(join(out, 'jl-skills-manifest.json'), { force: true })
+rmSync(join(out, 'map.exe'), { force: true })
 writeFileSync(manifestOutput, `${JSON.stringify(releaseManifest, null, 2)}\n`)
 
 console.log(`Built ${output}`)
