@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -13,8 +14,6 @@ import {
 } from 'node:fs'
 import { arch, homedir, platform } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path'
-import { Buffer } from 'node:buffer'
-import { catalog } from './catalog.generated'
 import { exclusiveMultiselect, type ExclusiveOption } from './exclusive-multiselect'
 import {
   classifyInstallTargets,
@@ -25,9 +24,16 @@ import {
 import { BACK_SIGNAL, navSelect, navText, type NavOption } from './nav-prompts'
 import {
   checkInstallerUpdate,
+  compareVersions,
+  downloadSkillPackage,
   fetchStableReleaseManifest,
+  parseSkillPackageManifest,
   scheduleInstallerReplacement,
   stageInstallerUpdate,
+  type DownloadedSkillPackage,
+  type GeneratedDataSpec,
+  type ReleaseManifest,
+  type SkillPackageManifest,
 } from './installer-updater'
 
 const VERSION = '0.5.0'
@@ -36,26 +42,7 @@ const isWindows = platform() === 'win32'
 const HOME = Symbol('jl-skills-home')
 const SKILL_META_PREFIX = 'jl-skills-meta:'
 
-type GeneratedDataSpec = {
-  path: string
-  marker?: string
-}
-
-type Manifest = {
-  name: string
-  version: string
-  description: string
-  skill_files: string[]
-  runtime_files?: string[]
-  runtime?: string
-  runtime_artifacts?: Record<string, string>
-  runtime_shared_files?: Record<string, string>
-  runtime_cli?: string
-  runtime_cli_destination?: string
-  cli_token?: string
-  instruction_fragment?: string
-  generated_data?: GeneratedDataSpec[]
-}
+type Manifest = SkillPackageManifest
 
 type Scope = {
   kind: 'user' | 'project'
@@ -100,7 +87,6 @@ type NavResult<T> = T | typeof BACK_SIGNAL
 type InstallResult = NavResult<number> | typeof HOME
 type UpdateResult = NavResult<number> | typeof HOME
 type AvailableSkillVersions = Record<string, string>
-
 type InstallTarget = { agent: string; instructions: boolean }
 
 const agentCatalog: AgentSpec[] = [
@@ -399,13 +385,6 @@ function agentPaths(agent: string, scope: Scope): { skillRoot: string; instructi
   throw new Error(`unsupported agent "${agent}"`)
 }
 
-function decodeAsset(skill: string, rel: string): Uint8Array {
-  const item = catalog[skill]
-  const encoded = item?.files?.[rel.replaceAll('\\', '/')]
-  if (encoded === undefined) throw new Error(`missing embedded asset ${skill}/${rel}`)
-  return Uint8Array.from(Buffer.from(encoded, 'base64'))
-}
-
 function parseSkillMetadata(text: string): SkillMetadata | undefined {
   const line = text.split(/\r?\n/).find((candidate) => candidate.includes(SKILL_META_PREFIX))
   if (!line) return undefined
@@ -420,17 +399,6 @@ function parseSkillMetadata(text: string): SkillMetadata | undefined {
   } catch {
     return undefined
   }
-}
-
-function sourceSkillMetadata(manifest: Manifest): SkillMetadata {
-  const skillFile = manifest.skill_files.find((rel) => basename(rel).toLowerCase() === 'skill.md')
-  if (!skillFile) throw new Error(`${manifest.name} manifest must include SKILL.md`)
-  const text = new TextDecoder().decode(decodeAsset(manifest.name, skillFile))
-  const metadata = parseSkillMetadata(text)
-  if (!metadata || metadata.name !== manifest.name || metadata.version !== manifest.version || metadata.format !== 1) {
-    throw new Error(`${manifest.name} SKILL.md must self-report matching jl-skills metadata`)
-  }
-  return metadata
 }
 
 function validateGeneratedData(manifest: Manifest): void {
@@ -448,20 +416,38 @@ function validateGeneratedData(manifest: Manifest): void {
   }
 }
 
-function loadManifest(name: string): Manifest {
-  const item = catalog[name]
-  if (!item) throw new Error(`unknown skill "${name}"`)
-  const manifest = item.manifest as Manifest
-  if (!manifest.name || !manifest.version || !Array.isArray(manifest.skill_files) || manifest.skill_files.length === 0) {
-    throw new Error(`invalid manifest for ${name}`)
+function validatePackageMetadata(pkg: DownloadedSkillPackage): void {
+  const skillFile = pkg.manifest.skill_files.find((rel) => basename(rel).toLowerCase() === 'skill.md')
+  if (!skillFile) throw new Error(`${pkg.manifest.name} manifest must include SKILL.md`)
+  const skillPath = join(pkg.root, skillFile)
+  if (!existsSync(skillPath) || statSync(skillPath).isDirectory()) throw new Error(`${pkg.manifest.name} package has invalid SKILL.md`)
+  const metadata = parseSkillMetadata(readFileSync(skillPath, 'utf8'))
+  if (!metadata || metadata.name !== pkg.manifest.name || metadata.version !== pkg.manifest.version || metadata.format !== 1) {
+    throw new Error(`${pkg.manifest.name} SKILL.md must self-report matching jl-skills metadata`)
   }
-  sourceSkillMetadata(manifest)
-  validateGeneratedData(manifest)
-  return manifest
+  validateGeneratedData(pkg.manifest)
 }
 
-function catalogManifests(): Manifest[] {
-  return Object.keys(catalog).sort().map(loadManifest)
+function cachedManifestPath(name: string): string {
+  return join(jlSkillsRoot(), name, 'manifest.json')
+}
+
+function cachePackageManifest(pkg: DownloadedSkillPackage): void {
+  atomicWrite(cachedManifestPath(pkg.manifest.name), readFileSync(join(pkg.root, 'manifest.json')))
+}
+
+function cachedManifests(): Manifest[] {
+  const root = jlSkillsRoot()
+  if (!existsSync(root) || !statSync(root).isDirectory()) return []
+  const manifests: Manifest[] = []
+  for (const entry of readdirSync(root).sort()) {
+    const path = join(root, entry, 'manifest.json')
+    if (!existsSync(path) || !statSync(path).isFile()) continue
+    try {
+      manifests.push(parseSkillPackageManifest(JSON.parse(readFileSync(path, 'utf8'))))
+    } catch {}
+  }
+  return manifests
 }
 
 function atomicWrite(path: string, data: string | Uint8Array, mode = 0o644): void {
@@ -484,10 +470,16 @@ function render(text: string, tokens: Record<string, string>): string {
   return result
 }
 
-function extractAsset(skill: string, rel: string, dest: string, tokens?: Record<string, string>, mode = 0o644): void {
-  const bytes = decodeAsset(skill, rel)
-  if (!tokens) return atomicWrite(dest, bytes, mode)
-  atomicWrite(dest, render(new TextDecoder().decode(bytes), tokens), mode)
+function copyPackageEntry(source: string, destination: string, tokens?: Record<string, string>): void {
+  if (!existsSync(source)) throw new Error(`missing package asset ${source}`)
+  if (statSync(source).isDirectory()) {
+    mkdirSync(destination, { recursive: true })
+    for (const entry of readdirSync(source)) copyPackageEntry(join(source, entry), join(destination, entry), tokens)
+    return
+  }
+  const bytes = readFileSync(source)
+  if (!tokens || Object.keys(tokens).length === 0) return atomicWrite(destination, bytes)
+  atomicWrite(destination, render(bytes.toString('utf8'), tokens))
 }
 
 function managedMarkers(skill: string): { begin: string; end: string } {
@@ -542,32 +534,34 @@ function removeManagedBlock(path: string, skill: string): void {
   else atomicWrite(path, `${next.replace(/[\r\n]+$/, '')}\n`)
 }
 
-function installedMetadata(skillPath: string, expectedSkill: string): SkillMetadata | undefined {
+function installedMetadata(skillPath: string, expectedSkill?: string): SkillMetadata | undefined {
   const path = join(skillPath, 'SKILL.md')
   if (!existsSync(path)) return undefined
   const metadata = parseSkillMetadata(readFileSync(path, 'utf8'))
-  if (!metadata || metadata.name !== expectedSkill) return undefined
+  if (!metadata || metadata.format !== 1) return undefined
+  if (expectedSkill && metadata.name !== expectedSkill) return undefined
   return metadata
 }
 
 function discoverInstallations(scope: Scope): InstallGroup[] {
   const groups = new Map<string, InstallGroup>()
-  for (const manifest of catalogManifests()) {
-    for (const agent of agentCatalog) {
-      const paths = agentPaths(agent.id, scope)
-      const skillPath = join(paths.skillRoot, manifest.name)
-      const skillFile = join(skillPath, 'SKILL.md')
-      if (!existsSync(skillFile)) continue
-      const metadata = installedMetadata(skillPath, manifest.name)
-      const key = `${manifest.name}\u0000${scope.identity}`
-      const group = groups.get(key) ?? { key, skill: manifest.name, scope, targets: [] }
+  for (const agent of agentCatalog) {
+    const paths = agentPaths(agent.id, scope)
+    if (!existsSync(paths.skillRoot) || !statSync(paths.skillRoot).isDirectory()) continue
+    for (const entry of readdirSync(paths.skillRoot).sort()) {
+      const skillPath = join(paths.skillRoot, entry)
+      if (!statSync(skillPath).isDirectory()) continue
+      const metadata = installedMetadata(skillPath, entry)
+      if (!metadata) continue
+      const key = `${metadata.name}\u0000${scope.identity}`
+      const group = groups.get(key) ?? { key, skill: metadata.name, scope, targets: [] }
       group.targets.push({
-        skill: manifest.name,
-        version: metadata?.version ?? 'unknown',
+        skill: metadata.name,
+        version: metadata.version,
         agent: agent.id,
         skillPath,
         instructionPath: paths.instruction,
-        instructions: managedBlockPresent(paths.instruction, manifest.name),
+        instructions: managedBlockPresent(paths.instruction, metadata.name),
       })
       groups.set(key, group)
     }
@@ -594,41 +588,26 @@ function installedVersions(group: InstallGroup): string[] {
   return [...new Set(group.targets.map((target) => target.version))].sort()
 }
 
-function semverParts(version: string): [number, number, number] | undefined {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version)
-  if (!match) return undefined
-  return [Number(match[1]), Number(match[2]), Number(match[3])]
+function stableVersions(release: ReleaseManifest): AvailableSkillVersions {
+  return Object.fromEntries(Object.entries(release.skills).map(([name, skill]) => [name, skill.version]))
 }
 
-function compareSemver(a: string, b: string): number | undefined {
-  const left = semverParts(a)
-  const right = semverParts(b)
-  if (!left || !right) return undefined
-  for (let i = 0; i < 3; i++) {
-    if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1
-  }
-  return 0
-}
-
-function availableSkillVersion(group: InstallGroup, stable?: AvailableSkillVersions): string | undefined {
-  if (stable) return stable[group.skill]
-  return loadManifest(group.skill).version
-}
-
-function updateAvailable(group: InstallGroup, stable?: AvailableSkillVersions): boolean {
-  const available = availableSkillVersion(group, stable)
-  if (!available) return false
+function updateAvailable(group: InstallGroup, available: AvailableSkillVersions): boolean {
+  const version = available[group.skill]
+  if (!version) return false
   return installedVersions(group).some((installed) => {
-    if (installed === 'unknown') return true
-    const comparison = compareSemver(installed, available)
-    return comparison === undefined ? installed !== available : comparison < 0
+    try {
+      return compareVersions(installed, version) < 0
+    } catch {
+      return installed !== version
+    }
   })
 }
 
-function updateStatus(group: InstallGroup, stable?: AvailableSkillVersions): string {
-  const available = availableSkillVersion(group, stable)
-  if (!available) throw new Error(`stable release does not contain ${group.skill}`)
-  return `${installedVersions(group).join(' / ')} → ${available}`
+function updateStatus(group: InstallGroup, available: AvailableSkillVersions): string {
+  const version = available[group.skill]
+  if (!version) throw new Error(`stable release does not contain ${group.skill}`)
+  return `${installedVersions(group).join(' / ')} → ${version}`
 }
 
 function installPreflight(
@@ -636,8 +615,8 @@ function installPreflight(
   skills: string[],
   agents: string[],
   injectedSkills: string[],
+  availableVersions: AvailableSkillVersions,
 ): InstallTargetState[] {
-  const availableVersions = Object.fromEntries(skills.map((skill) => [skill, loadManifest(skill).version]))
   const requestedInstructions = Object.fromEntries(skills.map((skill) => [skill, injectedSkills.includes(skill)]))
   const installedTargets = discoverInstallations(scope).flatMap((group) => group.targets.map((target) => ({
     skill: group.skill,
@@ -672,46 +651,56 @@ function runtimeCliPath(manifest: Manifest, scope: Scope): string {
   return join(root, isWindows ? `${manifest.runtime_cli}.exe` : manifest.runtime_cli)
 }
 
-function renderInstructionFragment(manifest: Manifest, cli: string): string {
+function renderInstructionFragment(pkg: DownloadedSkillPackage, cli?: string): string {
+  const manifest = pkg.manifest
   if (!manifest.instruction_fragment) return ''
   const tokenName = manifest.cli_token || 'JL_SKILL_CLI'
-  const tokens = { [`{{${tokenName}}}`]: normalize(cli) }
-  return render(new TextDecoder().decode(decodeAsset(manifest.name, manifest.instruction_fragment)), tokens)
+  const tokens = cli ? { [`{{${tokenName}}}`]: normalize(cli) } : {}
+  return render(readFileSync(join(pkg.root, manifest.instruction_fragment), 'utf8'), tokens)
 }
 
-function provisionRuntime(manifest: Manifest, scope: Scope): { cli: string; root: string } {
-  if (manifest.runtime !== 'rust') throw new Error(`unsupported runtime "${manifest.runtime ?? ''}"`)
+function provisionRuntime(pkg: DownloadedSkillPackage, scope: Scope): { cli?: string; root?: string } {
+  const manifest = pkg.manifest
+  if (!manifest.runtime) return {}
+  if (manifest.runtime !== 'rust') throw new Error(`unsupported runtime "${manifest.runtime}"`)
   if (!manifest.runtime_cli) throw new Error(`${manifest.name} manifest is missing runtime_cli`)
   const artifact = manifest.runtime_artifacts?.[runtimePlatformKey()]
   if (!artifact) throw new Error(`${manifest.name} has no bundled runtime for ${runtimePlatformKey()}`)
   const root = runtimeRoot(manifest, scope)
   mkdirSync(root, { recursive: true })
   const cli = runtimeCliPath(manifest, scope)
-  extractAsset(manifest.name, artifact, cli, undefined, 0o755)
-  for (const rel of manifest.runtime_files ?? []) extractAsset(manifest.name, rel, join(root, rel))
+  copyPackageEntry(join(pkg.root, artifact), cli)
+  try { chmodSync(cli, 0o755) } catch {}
+  for (const rel of manifest.runtime_files ?? []) copyPackageEntry(join(pkg.root, rel), join(root, rel))
   for (const [rel, destination] of Object.entries(manifest.runtime_shared_files ?? {})) {
-    extractAsset(manifest.name, rel, canonicalPath(destination))
+    copyPackageEntry(join(pkg.root, rel), canonicalPath(destination))
   }
   return { cli, root }
 }
 
 function installTargets(
-  manifest: Manifest,
+  pkg: DownloadedSkillPackage,
   scope: Scope,
   targets: InstallTarget[],
   interactive = false,
   action: 'install' | 'update' = 'install',
 ): void {
+  const manifest = pkg.manifest
+  validatePackageMetadata(pkg)
+  cachePackageManifest(pkg)
   if (scope.kind === 'project') mkdirSync(scope.root, { recursive: true })
-  const runtime = provisionRuntime(manifest, scope)
+  const runtime = provisionRuntime(pkg, scope)
   const tokenName = manifest.cli_token || 'JL_SKILL_CLI'
-  const tokens = { [`{{${tokenName}}}`]: normalize(runtime.cli) }
-  const fragment = renderInstructionFragment(manifest, runtime.cli)
+  const tokens = runtime.cli ? { [`{{${tokenName}}}`]: normalize(runtime.cli) } : {}
+  const fragment = renderInstructionFragment(pkg, runtime.cli)
 
   for (const target of targets) {
     const paths = agentPaths(target.agent, scope)
     const dest = join(paths.skillRoot, manifest.name)
-    for (const rel of manifest.skill_files) extractAsset(manifest.name, rel, join(dest, rel), tokens)
+    rmSync(dest, { recursive: true, force: true })
+    mkdirSync(dest, { recursive: true })
+    for (const rel of manifest.skill_files) copyPackageEntry(join(pkg.root, rel), join(dest, rel), tokens)
+    copyPackageEntry(join(pkg.root, 'manifest.json'), join(dest, 'manifest.json'))
 
     if (target.instructions && fragment) managedBlock(paths.instruction, manifest.name, fragment)
     else removeManagedBlock(paths.instruction, manifest.name)
@@ -726,15 +715,17 @@ function installTargets(
 }
 
 function configureInstruction(
-  manifest: Manifest,
+  pkg: DownloadedSkillPackage,
   scope: Scope,
   agent: string,
   instructions: boolean,
   interactive = false,
 ): void {
+  const manifest = pkg.manifest
   const paths = agentPaths(agent, scope)
   if (instructions) {
-    const fragment = renderInstructionFragment(manifest, runtimeCliPath(manifest, scope))
+    const cli = manifest.runtime ? runtimeCliPath(manifest, scope) : undefined
+    const fragment = renderInstructionFragment(pkg, cli)
     if (!fragment) throw new Error(`${manifest.name} does not provide managed instructions`)
     managedBlock(paths.instruction, manifest.name, fragment)
   } else {
@@ -807,7 +798,67 @@ function indentedLineList(values: string[]): string {
   return values.map((value) => `  ${value}`).join('\n')
 }
 
+function requireRelease(release: ReleaseManifest | null): ReleaseManifest {
+  if (!release) throw new Error('no stable jl-skills release is currently available')
+  return release
+}
+
+function requireReleasedSkills(release: ReleaseManifest, names: string[]): void {
+  for (const name of names) {
+    if (!release.skills[name]) throw new Error(`stable release does not contain ${name}`)
+  }
+}
+
+async function ensureSkillCompatibility(
+  release: ReleaseManifest,
+  skills: string[],
+  state: WizardState,
+): Promise<boolean> {
+  const incompatible = skills.filter((name) => compareVersions(VERSION, release.skills[name].min_installer) < 0)
+  if (incompatible.length === 0) return true
+
+  const lines = incompatible.map((name) => (
+    `${displaySkillName(name)} ${release.skills[name].version} requires jl-skills ${release.skills[name].min_installer} or newer; running ${VERSION}.`
+  ))
+  const latestSatisfies = incompatible.every((name) => (
+    compareVersions(release.installer.version, release.skills[name].min_installer) >= 0
+  ))
+
+  if (!process.stdin.isTTY) {
+    const suffix = latestSatisfies
+      ? ` jl-skills ${release.installer.version} is available.`
+      : ' No compatible stable installer is available.'
+    throw new Error(`${lines.join(' ')}${suffix}`)
+  }
+
+  for (const line of lines) prompts.log.warn(line)
+  if (!latestSatisfies) {
+    prompts.log.warn('No compatible stable installer is currently available.')
+    return false
+  }
+  prompts.log.info(`jl-skills ${release.installer.version} is available and satisfies the requirement.`)
+  const result = await updateInstallerWizard(state)
+  return result === 0 ? false : false
+}
+
+async function withSkillPackage<T>(
+  release: ReleaseManifest,
+  name: string,
+  work: (pkg: DownloadedSkillPackage) => Promise<T> | T,
+): Promise<T> {
+  const released = release.skills[name]
+  if (!released) throw new Error(`stable release does not contain ${name}`)
+  const pkg = await downloadSkillPackage(name, released)
+  try {
+    validatePackageMetadata(pkg)
+    return await work(pkg)
+  } finally {
+    pkg.cleanup()
+  }
+}
+
 async function chooseInstallSkills(
+  release: ReleaseManifest,
   scope: Scope,
   state: WizardState,
   stepId: string,
@@ -818,9 +869,9 @@ async function chooseInstallSkills(
     state,
     stepId,
     'Select skills to install.',
-    catalogManifests().map((item) => ({
-      value: item.name,
-      label: displaySkillName(item.name),
+    Object.keys(release.skills).sort().map((name) => ({
+      value: name,
+      label: displaySkillName(name),
     })),
     { allowBack },
   )
@@ -915,8 +966,8 @@ function installationSummary(
   ].join('\n')
 }
 
-function updateSummary(groups: InstallGroup[], stable?: AvailableSkillVersions): string {
-  const skillLines = groups.map((group) => `${displaySkillName(group.skill)}  ${updateStatus(group, stable)}`)
+function updateSummary(groups: InstallGroup[], available: AvailableSkillVersions): string {
+  const skillLines = groups.map((group) => `${displaySkillName(group.skill)}  ${updateStatus(group, available)}`)
   const harnesses = [...new Set(groups.flatMap((group) => group.targets.map((target) => agentLabel(target.agent))))]
   return [
     'Skills to update',
@@ -970,16 +1021,19 @@ async function installAtScope(
   allowBack = true,
   askInstructions = true,
 ): Promise<InstallResult> {
+  const release = requireRelease(await fetchStableReleaseManifest())
+  const availableVersions = stableVersions(release)
   let selectedSkills = skills
 
   skillStep:
   while (true) {
     if (selectedSkills.length === 0) {
-      const chosen = await chooseInstallSkills(scope, state, `${stepPrefix}.skills`, allowBack)
+      const chosen = await chooseInstallSkills(release, scope, state, `${stepPrefix}.skills`, allowBack)
       if (chosen === BACK_SIGNAL) return BACK_SIGNAL
       selectedSkills = chosen
     }
-    selectedSkills.forEach(loadManifest)
+    requireReleasedSkills(release, selectedSkills)
+    if (!await ensureSkillCompatibility(release, selectedSkills, state)) return HOME
 
     agentStep:
     while (true) {
@@ -1020,13 +1074,13 @@ async function installAtScope(
           console.log(`Skills: ${selectedSkills.join(', ')}`)
           console.log(`Instruction skills: ${injectedSkills.join(', ') || 'none'}`)
           for (const skill of selectedSkills) {
-            installTargets(
-              loadManifest(skill),
+            await withSkillPackage(release, skill, (pkg) => installTargets(
+              pkg,
               scope,
               targetsForNewInstall(agentChoice.values, injectedSkills.includes(skill)),
               false,
               'install',
-            )
+            ))
           }
           return 0
         }
@@ -1040,7 +1094,7 @@ async function installAtScope(
           const proceed = await chooseConfirmation(state, `${stepPrefix}.confirm`, { allowBack: true })
           if (proceed === BACK_SIGNAL || !proceed) continue instructionStep
 
-          const plannedStates = installPreflight(scope, selectedSkills, agentChoice.values, injectedSkills)
+          const plannedStates = installPreflight(scope, selectedSkills, agentChoice.values, injectedSkills, availableVersions)
           const alreadyInstalled = satisfiedSkills(plannedStates)
           if (alreadyInstalled.length > 0) {
             prompts.note(
@@ -1083,37 +1137,36 @@ async function installAtScope(
           }
 
           for (const skill of continuingSkills) {
-            const manifest = loadManifest(skill)
             const skillStates = plannedStates.filter((target) => target.skill === skill)
-            const missingAgents = skillStates
-              .filter((target) => target.state === 'missing')
-              .map((target) => target.agent)
+            const missingAgents = skillStates.filter((target) => target.state === 'missing').map((target) => target.agent)
             const configureTargets = skillStates.filter((target) => target.state === 'configure')
             const updateAgents = skillStates
               .filter((target) => target.state === 'stale' && approvedStaleSkills.has(skill))
               .map((target) => target.agent)
 
-            if (missingAgents.length > 0) {
-              installTargets(
-                manifest,
-                scope,
-                targetsForNewInstall(missingAgents, injectedSkills.includes(skill)),
-                true,
-                'install',
-              )
-            }
-            for (const target of configureTargets) {
-              configureInstruction(manifest, scope, target.agent, target.requestedInstructions, true)
-            }
-            if (updateAgents.length > 0) {
-              installTargets(
-                manifest,
-                scope,
-                targetsForNewInstall(updateAgents, injectedSkills.includes(skill)),
-                true,
-                'update',
-              )
-            }
+            await withSkillPackage(release, skill, (pkg) => {
+              if (missingAgents.length > 0) {
+                installTargets(
+                  pkg,
+                  scope,
+                  targetsForNewInstall(missingAgents, injectedSkills.includes(skill)),
+                  true,
+                  'install',
+                )
+              }
+              for (const target of configureTargets) {
+                configureInstruction(pkg, scope, target.agent, target.requestedInstructions, true)
+              }
+              if (updateAgents.length > 0) {
+                installTargets(
+                  pkg,
+                  scope,
+                  targetsForNewInstall(updateAgents, injectedSkills.includes(skill)),
+                  true,
+                  'update',
+                )
+              }
+            })
           }
           prompts.outro('Installation complete')
           return 0
@@ -1174,10 +1227,12 @@ async function updateAtScope(
   state: WizardState,
   stepPrefix: string,
 ): Promise<UpdateResult> {
+  const release = requireRelease(await fetchStableReleaseManifest())
+  const availableVersions = stableVersions(release)
   const parsed: ParsedAction = { skills, scope: scope.identity, agents: explicitAgents, instructions: instructionOverride }
+
   while (true) {
     let groups = matchingGroups(parsed, scope)
-    let stableVersions: AvailableSkillVersions | undefined
     if (skills.length === 0) {
       if (!process.stdin.isTTY) throw new Error('no skills selected for update')
       const installed = discoverInstallations(scope)
@@ -1187,11 +1242,7 @@ async function updateAtScope(
       }
 
       prompts.log.step('Checking for updates...')
-      const stableRelease = await fetchStableReleaseManifest()
-      stableVersions = Object.fromEntries(
-        Object.entries(stableRelease?.skills ?? {}).map(([name, skill]) => [name, skill.version]),
-      )
-      const available = installed.filter((group) => updateAvailable(group, stableVersions))
+      const available = installed.filter((group) => updateAvailable(group, availableVersions))
       if (available.length === 0) {
         prompts.log.warn('All skills are already up to date. Choose a different scope or path.')
         return BACK_SIGNAL
@@ -1204,26 +1255,32 @@ async function updateAtScope(
         'The following skill updates were found. Which would you like to install?',
         available.map((group) => ({
           value: group.skill,
-          label: `${displaySkillName(group.skill).padEnd(skillWidth)}  ${updateStatus(group, stableVersions)}`,
+          label: `${displaySkillName(group.skill).padEnd(skillWidth)}  ${updateStatus(group, availableVersions)}`,
         })),
         { allowBack: true },
       )
       if (selected === BACK_SIGNAL) return BACK_SIGNAL
       groups = available.filter((group) => selected.includes(group.skill))
+    }
 
-      const unavailableLocally = groups.filter((group) => (
-        stableVersions?.[group.skill] !== undefined
-        && loadManifest(group.skill).version !== stableVersions[group.skill]
-      ))
-      if (unavailableLocally.length > 0) {
-        prompts.log.warn('Update jl-skills installer first, then retry the skill update.')
-        return HOME
+    if (groups.length === 0) throw new Error('no installations match update filters')
+    requireReleasedSkills(release, groups.map((group) => group.skill))
+    for (const group of groups) {
+      const released = release.skills[group.skill]
+      for (const installed of installedVersions(group)) {
+        try {
+          if (compareVersions(installed, released.version) > 0) {
+            throw new Error(`${group.skill} ${installed} is newer than stable ${released.version}; refusing to downgrade`)
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('refusing to downgrade')) throw error
+        }
       }
     }
-    if (groups.length === 0) throw new Error('no installations match update filters')
+    if (!await ensureSkillCompatibility(release, groups.map((group) => group.skill), state)) return HOME
 
     if (process.stdin.isTTY) {
-      prompts.note(updateSummary(groups, stableVersions), 'Update Summary')
+      prompts.note(updateSummary(groups, availableVersions), 'Update Summary')
       const proceed = await chooseConfirmation(state, `${stepPrefix}.confirm`, { allowBack: true })
       if (proceed === BACK_SIGNAL || !proceed) {
         if (skills.length > 0) return BACK_SIGNAL
@@ -1232,13 +1289,13 @@ async function updateAtScope(
     }
 
     for (const group of groups) {
-      installTargets(
-        loadManifest(group.skill),
+      await withSkillPackage(release, group.skill, (pkg) => installTargets(
+        pkg,
         group.scope,
         targetsForUpdate(group, instructionOverride),
         !!process.stdin.isTTY,
         'update',
-      )
+      ))
     }
     if (process.stdin.isTTY) prompts.outro('Update complete')
     return 0
@@ -1376,7 +1433,7 @@ function generatedDataPath(scope: Scope, manifest: Manifest, entry: GeneratedDat
 
 function generatedDataAtScope(scope: Scope): GeneratedDataGroup[] {
   const groups: GeneratedDataGroup[] = []
-  for (const manifest of catalogManifests()) {
+  for (const manifest of cachedManifests()) {
     const detected: string[] = []
     for (const entry of manifest.generated_data ?? []) {
       const path = generatedDataPath(scope, manifest, entry)
