@@ -1,0 +1,27 @@
+name: Branch hygiene
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete merged and obsolete branches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for branch in "$HEAD_BRANCH" spec-installer-lifecycle installer-scope-regressions; do
+            [ "$branch" = "main" ] && continue
+            encoded=$(printf '%s' "$branch" | sed 's#/#%2F#g')
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$encoded" >/dev/null 2>&1 || true
+          done

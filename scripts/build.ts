@@ -14,6 +14,7 @@ if (platform() !== 'win32' || arch() !== 'x64') {
 const cargoTarget = join(out, 'cargo', 'map')
 const runtimeAssets = join(out, 'runtime-assets')
 const stagedMap = join(runtimeAssets, 'map', 'runtime', 'windows-x64', 'map.exe')
+const publishedMap = join(out, 'map.exe')
 rmSync(runtimeAssets, { recursive: true, force: true })
 mkdirSync(dirname(stagedMap), { recursive: true })
 
@@ -44,6 +45,7 @@ if (suppliedMap) {
 
   copyFileSync(join(cargoTarget, 'release', 'map.exe'), stagedMap)
 }
+copyFileSync(stagedMap, publishedMap)
 
 await import('./generate-catalog')
 
@@ -69,13 +71,34 @@ const installerSource = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8')
 const versionMatch = installerSource.match(/const VERSION = ['"]([^'"]+)['"]/)
 if (!versionMatch) throw new Error('could not determine jl-skills installer version from src/jl-skill.ts')
 const version = versionMatch[1]
-const sha256 = createHash('sha256').update(readFileSync(output)).digest('hex')
+if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`stable release version must be plain semver: ${version}`)
+
+const mapManifest = JSON.parse(readFileSync(join(repo, 'skills', 'map', 'jl-skill.json'), 'utf8')) as { version?: string }
+if (typeof mapManifest.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(mapManifest.version)) {
+  throw new Error('Map manifest must expose a stable semantic version')
+}
+
+const installerSha256 = createHash('sha256').update(readFileSync(output)).digest('hex')
+const mapSha256 = createHash('sha256').update(readFileSync(publishedMap)).digest('hex')
+const releaseBase = `https://github.com/jacoblockett/jl-skills/releases/download/v${version}`
 const releaseManifest = {
+  format: 1,
   version,
   artifacts: {
     'windows-x64': {
-      url: `https://github.com/jacoblockett/jl-skills/releases/download/v${version}/jl-skills.exe`,
-      sha256,
+      url: `${releaseBase}/jl-skills.exe`,
+      sha256: installerSha256,
+    },
+  },
+  skills: {
+    map: {
+      version: mapManifest.version,
+      artifacts: {
+        'windows-x64': {
+          url: `${releaseBase}/map.exe`,
+          sha256: mapSha256,
+        },
+      },
     },
   },
 }
@@ -83,4 +106,5 @@ const manifestOutput = join(out, 'jl-skills-manifest.json')
 writeFileSync(manifestOutput, `${JSON.stringify(releaseManifest, null, 2)}\n`)
 
 console.log(`Built ${output}`)
+console.log(`Built ${publishedMap}`)
 console.log(`Built ${manifestOutput}`)
