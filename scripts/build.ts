@@ -193,11 +193,8 @@ if (suppliedMap) {
   copyFileSync(join(cargoTarget, 'release', 'map.exe'), stagedMap)
 }
 
-// Temporary compatibility output until the release workflows and installer stop referring to build/map.exe.
+// Temporary output until item 7 removes the old workflow reference to build/map.exe.
 copyFileSync(stagedMap, compatibilityMap)
-
-// Temporary compatibility path until items 5-6 move installation fully to downloaded archives.
-await import('./generate-catalog')
 
 const output = join(out, 'jl-skills.exe')
 rmSync(join(out, 'jl-skill.exe'), { force: true })
