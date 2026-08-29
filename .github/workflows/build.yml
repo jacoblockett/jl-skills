@@ -27,7 +27,7 @@ permissions:
 
 concurrency:
   group: jl-skills-${{ github.event_name == 'workflow_dispatch' && inputs.action || github.event_name }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   build:
