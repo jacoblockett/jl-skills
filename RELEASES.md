@@ -1,68 +1,162 @@
 # jl-skills release channels
 
-Status: accepted release/update channel contract.
+Status: accepted direction; implementation pending.
 
-## Stable channel
+This file is the durable contract and running checklist for release/update work.
 
-Stable releases are the only source used by jl-skills update discovery.
+## Core model
 
-A stable release:
+- `jl-skills` and every skill have independent semantic versions.
+- A stable GitHub release is a distribution snapshot, not a master semantic version.
+- Stable update discovery uses only the latest normal GitHub release. Nightly never participates in stable update discovery.
+- One stable release contains the current installer and every currently published skill package, regardless of which component changed.
+- Updating the installer and updating a skill are independent operations unless that skill explicitly requires a newer installer capability.
 
-- is tagged `v<MAJOR>.<MINOR>.<PATCH>`;
-- is a normal GitHub release, never a prerelease;
-- contains every currently published native binary, regardless of which component changed;
-- contains `jl-skills-manifest.json` as the authoritative machine-readable version/hash index for that release.
+## Stable release identity
 
-Current Windows x64 assets:
+Use a calendar/timestamp tag rather than a synthetic distribution semver.
+
+Tag format:
 
 ```text
+YYYY.MM.DD-HHmmZ
+```
+
+Example:
+
+```text
+2026.08.29-0141Z
+```
+
+Use UTC. This follows Calendar Versioning conventions for date-based release identity while keeping tags chronologically sortable and unambiguous. The release timestamp is only snapshot identity; component compatibility still uses each component's own semantic version.
+
+## Stable release assets
+
+Preferred top-level assets:
+
+```text
+manifest.json
 jl-skills.exe
-map.exe
-jl-skills-manifest.json
+map.zip
 ```
 
-The release manifest carries the installer semver, installer artifact hash/URL, and each released skill's own semver plus native runtime artifact hash/URL.
+Additional skills follow the same `<skill>.zip` pattern.
 
-The public update manifest remains:
+`manifest.json` is the authoritative release index. It should contain, at minimum:
+
+- installer semantic version and artifact URL/hash;
+- each released skill's semantic version and package URL/hash;
+- each skill's minimum supported installer version.
+
+The stable public index should be reachable through GitHub's latest normal release, e.g.:
 
 ```text
-https://github.com/jacoblockett/jl-skills/releases/latest/download/jl-skills-manifest.json
+https://github.com/jacoblockett/jl-skills/releases/latest/download/manifest.json
 ```
 
-GitHub `latest` must therefore remain a stable release. Nightly releases are prereleases and must never be marked latest.
+Nightly must remain a prerelease so GitHub `latest` continues to mean the current stable snapshot.
 
-Only plain stable semantic versions (`X.Y.Z`) are accepted from the public update manifest. Prerelease versions such as `X.Y.Z-nightly` are rejected even if a manifest URL is overridden during testing.
+## Skill packages
 
-Installer update discovery compares the running installer version against the stable release manifest.
+Skills must be independently downloadable/installable rather than being version-owned by the installer binary.
 
-Interactive skill update discovery compares installed skill self-reported versions against the skill versions in the same stable release manifest. It must not use a nightly build or a newer development catalog as the update source.
+A skill package should contain the complete installable skill payload, including its own manifest and any runtime/support files it needs. For Map this includes the skill instructions, bundled specialist agents, instruction fragment, schema/runtime support, and native runtime.
 
-Because the installer is the self-contained carrier for skill instructions/resources, a running installer can apply a stable skill update only when its embedded skill version exactly matches the stable release manifest. If the stable release advertises a newer skill than the running installer carries, the user must update `jl-skills` first, then retry the skill update.
+Preferred package shape:
 
-Explicit non-interactive update/reapply commands may continue to operate deterministically from the running executable's embedded catalog; the interactive discovery channel is the published-release authority.
+```text
+map.zip
+  manifest.json
+  SKILL.md
+  AGENTS.fragment.md
+  agents/
+  schema.surql
+  runtime/
+```
+
+The exact internal layout may be simplified during implementation if an equally accurate smaller structure exists.
+
+## Update behavior
+
+### Installer
+
+- The running installer compares its own semantic version with the installer version in the latest stable `manifest.json`.
+- If a newer installer exists, report that an update is available.
+- Do not force the update merely because it exists.
+- If the user requests the installer update, fetch, verify, and replace only the installer.
+
+### Skills
+
+- The installer compares each installed skill's semantic version with that skill's version in the latest stable `manifest.json`.
+- If a newer skill exists, report that an update is available.
+- If the user requests the skill update, download and verify that skill's package and update only that skill.
+- A newer skill must not require the installer itself to be current merely because the installer is older.
+
+### Compatibility
+
+Each skill declares a minimum installer version, e.g.:
+
+```text
+min_installer: 0.5.0
+```
+
+If the running installer satisfies the minimum, the skill may install/update even when a newer installer exists.
+
+If the running installer is below the skill's minimum:
+
+1. report the compatibility requirement;
+2. check the latest stable installer version;
+3. report the available installer update if it can satisfy the requirement;
+4. offer/allow the installer update, but do not perform it silently;
+5. block only the incompatible skill operation if the required installer capability is unavailable or the user declines the necessary installer update.
+
+No general installer-first policy exists.
 
 ## Nightly channel
 
-`nightly` is one rolling GitHub prerelease used for production-path testing.
+`nightly` is one rolling GitHub prerelease for production-path testing.
 
-It:
+It should:
 
-- is built only from `main`;
-- runs nightly on schedule and may also be dispatched manually;
-- builds only when build-relevant source changed since the last successful nightly, unless a manual force build is requested;
-- builds and tests all current binaries from source;
-- replaces the existing `nightly` assets rather than creating an accumulating series of dated releases;
-- never publishes or replaces the stable update manifest channel;
-- never becomes GitHub's latest release.
+- build only from `main`;
+- run nightly on the agreed schedule and support manual force dispatch;
+- skip compilation/publication when no build-relevant source changed since the last successful nightly, unless forced;
+- build and test the same installer/skill packages used by stable releases;
+- replace the rolling nightly assets instead of accumulating dated nightly releases;
+- move the `nightly` tag only after a successful build/test/publication;
+- never become GitHub's latest stable release.
 
-The `nightly` tag moves only after a successful build/test pass, so it also records the last source revision successfully published through the nightly channel.
+## Workflow direction
 
-## Stable release automation
+Prefer one broadly named GitHub Actions workflow for build/release behavior rather than separate granular workflows unless a concrete limitation requires separation.
 
-Stable release publication is manual. The requested version must:
+That workflow may branch behavior by event:
 
-- be plain semver;
-- match the installer source version and package version;
-- not already have a tag/release.
+- pull request: build/test and upload production-test artifacts only;
+- nightly schedule: change-aware rolling prerelease publication;
+- manual dispatch: production test or stable release publication as explicitly selected.
 
-The release workflow builds/tests from `main`, verifies the generated manifest, and publishes all current binaries plus the manifest in one atomic release unit.
+Use GitHub-native repository features instead of bespoke workflow code where they are sufficient. In particular, prefer GitHub's native delete-branch-on-merge setting over a custom branch-hygiene workflow.
+
+## Known current failure
+
+The first PR Action run failed because Map declares `agents` as a directory in `skill_files`, the catalog generator recursively embeds the files under it, but the installer later tries to extract an asset literally named `map/agents`.
+
+All Map Rust tests passed, the installer compiled, and updater-specific tests passed. The 15 installer regression failures are one packaging failure fanning out across install-dependent tests, not 15 unrelated defects.
+
+Do not patch this directory bug in isolation if the independent skill-package redesign removes the embedded-catalog path entirely.
+
+## Remaining work
+
+Work through these sequentially and keep scope narrow.
+
+- [ ] **1. Finalize package/update contract.** Confirm the exact minimal `manifest.json` schema, skill package manifest schema, package layout, `min_installer` semantics, stable/latest lookup behavior, and whether source `skills/<name>/jl-skill.json` should also become simply `manifest.json`.
+- [ ] **2. Simplify Actions design.** Collapse the current four workflow files into one broad workflow if practical; remove bespoke branch-hygiene automation; enable GitHub-native delete-branch-on-merge; retain PR build/test artifacts, change-aware rolling nightly publication, and explicit manual stable publication.
+- [ ] **3. Decouple skill delivery from installer binaries.** Replace the installer's embedded skill-version ownership with independently downloadable, hash-verified skill packages from the selected release manifest. Preserve existing install/update/uninstall scope semantics and managed instruction behavior.
+- [ ] **4. Implement compatibility-aware updates.** Installer and skills independently report available updates; enforce only per-skill `min_installer` requirements; never require an installer update solely because a newer installer exists.
+- [ ] **5. YAGNI cleanup around the changed architecture.** Remove bespoke catalog/base64/extraction/update code that no longer has a job; consolidate duplicate plain-semver/platform helpers where doing so is smaller and clearer; avoid new utility frameworks or dependencies without a concrete need.
+- [ ] **6. Repair tests around the final package model.** Replace/fix the current `map/agents` failure through the chosen package architecture, preserve existing regression coverage, and add focused tests for independent skill updates and minimum-installer compatibility.
+- [ ] **7. Re-run PR production-source build.** Require Map tests, installer tests, packaging, and artifact generation to pass on a clean Windows Actions runner. Inspect produced artifacts rather than only trusting exit status.
+- [ ] **8. Merge release work and clean branches.** Merge only after the revised PR is green, then remove obsolete feature branches so `main` is authoritative.
+- [ ] **9. Publish/test nightly.** Produce the rolling nightly through the real release path and perform the planned production install/update/uninstall test with Codex.
+- [ ] **10. Publish first stable snapshot.** After production validation, manually publish the first timestamp-tagged stable release and verify both installer and skill update discovery against `releases/latest/download/manifest.json`.
