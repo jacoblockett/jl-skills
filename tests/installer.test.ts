@@ -1,7 +1,7 @@
-import { beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 
 const repo = resolve(import.meta.dir, '..')
 const installer = join(repo, 'build', 'jl-skills.exe')
@@ -9,10 +9,14 @@ const sourceMap = join(repo, 'build', 'cargo', 'map', 'release', 'map.exe')
 const sourceSkill = join(repo, 'skills', 'map', 'SKILL.md')
 const schema = join(repo, 'skills', 'map', 'schema.surql')
 const scratch = join(repo, 'build', 'installer-tests')
+const fixtureReady = join(scratch, 'release-fixture-port.txt')
 
 const begin = '<!-- jl-skill:begin map -->'
 const end = '<!-- jl-skill:end map -->'
 const metadata = '<!-- jl-skills-meta: {"name":"map","version":"0.2.0","format":1} -->'
+
+let fixtureServer: ReturnType<typeof spawn> | undefined
+let fixtureManifestUrl = ''
 
 type Sandbox = {
   root: string
@@ -47,6 +51,7 @@ function sandbox(name: string): Sandbox {
       USERPROFILE: home,
       HOME: home,
       LOCALAPPDATA: localAppData,
+      JL_SKILLS_UPDATE_MANIFEST_URL: fixtureManifestUrl,
     },
   }
 }
@@ -117,11 +122,32 @@ function read(path: string): string {
   return readFileSync(path, 'utf8')
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   if (process.platform !== 'win32') throw new Error('installer regression suite currently targets Windows x64')
   if (!existsSync(installer)) throw new Error('build/jl-skills.exe is missing; run bun run build first')
   if (!existsSync(sourceMap)) throw new Error('built Map runtime is missing; run bun run build first')
+  if (!existsSync(join(repo, 'build', 'map.zip'))) throw new Error('build/map.zip is missing; run bun run build first')
+  if (!existsSync(join(repo, 'build', 'manifest.json'))) throw new Error('build/manifest.json is missing; run bun run build first')
   mkdirSync(scratch, { recursive: true })
+  rmSync(fixtureReady, { force: true })
+
+  fixtureServer = spawn(process.execPath, [join(repo, 'tests', 'release-fixture-server.ts')], {
+    cwd: repo,
+    env: { ...process.env, JL_SKILLS_FIXTURE_READY: fixtureReady },
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+
+  for (let attempt = 0; attempt < 200 && !existsSync(fixtureReady); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  if (!existsSync(fixtureReady)) throw new Error('release fixture server did not start')
+  fixtureManifestUrl = `http://127.0.0.1:${read(fixtureReady).trim()}/manifest.json`
+})
+
+afterAll(() => {
+  fixtureServer?.kill()
+  rmSync(fixtureReady, { force: true })
 })
 
 describe('jl-skills installer scope regressions', () => {
@@ -365,7 +391,7 @@ describe('jl-skills installer scope regressions', () => {
 
     ok(update(s.project, s))
 
-    expect(read(join(skillDir, 'SKILL.md'))).toContain(metadata)
+    expect(read(join(skillDir, 'SKILL.md')).toContain(metadata)
     expect(existsSync(sharedMap(s.home))).toBe(true)
     expect(read(join(s.project, 'AGENTS.md'))).toBe('MANUAL CONTENT\n')
     expect(existsSync(installerRegistry(s))).toBe(false)
