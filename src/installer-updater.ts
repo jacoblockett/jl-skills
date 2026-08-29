@@ -1,10 +1,19 @@
 import { createHash } from 'node:crypto'
-import { chmodSync, rmSync, renameSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
-import { arch, platform } from 'node:os'
-import { spawn } from 'node:child_process'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, dirname, isAbsolute, join } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
 
-export const DEFAULT_INSTALLER_MANIFEST_URL = 'https://github.com/jacoblockett/jl-skills/releases/latest/download/jl-skills-manifest.json'
+export const DEFAULT_RELEASE_MANIFEST_URL = 'https://github.com/jacoblockett/jl-skills/releases/latest/download/manifest.json'
 
 type FetchLike = typeof fetch
 
@@ -13,21 +22,49 @@ export type ReleaseArtifact = {
   sha256: string
 }
 
-export type ReleasedSkill = {
+export type ReleasedSkill = ReleaseArtifact & {
   version: string
-  artifacts: Record<string, ReleaseArtifact>
+  min_installer: string
 }
 
-export type InstallerUpdateManifest = {
-  format?: number
-  version: string
-  artifacts: Record<string, ReleaseArtifact>
+export type ReleaseManifest = {
+  format: 1
+  installer: ReleaseArtifact & { version: string }
   skills: Record<string, ReleasedSkill>
 }
 
 export type InstallerUpdate = {
   version: string
   artifact: ReleaseArtifact
+}
+
+export type GeneratedDataSpec = {
+  path: string
+  marker?: string
+}
+
+export type SkillPackageManifest = {
+  format: 1
+  name: string
+  version: string
+  min_installer: string
+  description: string
+  skill_files: string[]
+  runtime_files?: string[]
+  runtime?: string
+  runtime_artifacts?: Record<string, string>
+  runtime_shared_files?: Record<string, string>
+  runtime_cli?: string
+  runtime_cli_destination?: string
+  cli_token?: string
+  instruction_fragment?: string
+  generated_data?: GeneratedDataSpec[]
+}
+
+export type DownloadedSkillPackage = {
+  manifest: SkillPackageManifest
+  root: string
+  cleanup: () => void
 }
 
 function semverParts(version: string): [number, number, number] | undefined {
@@ -39,87 +76,121 @@ function semverParts(version: string): [number, number, number] | undefined {
 export function compareVersions(a: string, b: string): number {
   const left = semverParts(a)
   const right = semverParts(b)
-  if (!left || !right) throw new Error(`invalid installer version comparison: ${a} vs ${b}`)
+  if (!left || !right) throw new Error(`invalid semantic version comparison: ${a} vs ${b}`)
   for (let i = 0; i < 3; i++) {
     if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1
   }
   return 0
 }
 
-export function installerPlatformKey(): string {
-  if (platform() === 'win32' && arch() === 'x64') return 'windows-x64'
-  if (platform() === 'linux' && arch() === 'x64') return 'linux-x64'
-  if (platform() === 'darwin' && arch() === 'arm64') return 'macos-arm64'
-  return `${platform()}-${arch()}`
+function parseSha256(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) {
+    throw new Error(`${label} has an invalid SHA-256`)
+  }
+  return value
 }
 
 function parseArtifact(value: unknown, label: string): ReleaseArtifact {
   if (!value || typeof value !== 'object') throw new Error(`invalid ${label}`)
   const raw = value as Record<string, unknown>
   if (typeof raw.url !== 'string' || !raw.url.trim()) throw new Error(`${label} is missing a URL`)
-  if (typeof raw.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(raw.sha256)) {
-    throw new Error(`${label} has an invalid SHA-256`)
+  return {
+    url: raw.url,
+    sha256: parseSha256(raw.sha256, label),
   }
-  return { url: raw.url, sha256: raw.sha256.toLowerCase() }
 }
 
-export function parseInstallerUpdateManifest(value: unknown): InstallerUpdateManifest {
-  if (!value || typeof value !== 'object') throw new Error('invalid installer update manifest')
+export function parseReleaseManifest(value: unknown): ReleaseManifest {
+  if (!value || typeof value !== 'object') throw new Error('invalid release manifest')
   const raw = value as Record<string, unknown>
-  if (typeof raw.version !== 'string' || !semverParts(raw.version)) throw new Error('invalid installer update version')
-  if (!raw.artifacts || typeof raw.artifacts !== 'object') throw new Error('installer update manifest is missing artifacts')
+  if (raw.format !== 1) throw new Error('unsupported release manifest format')
 
-  const artifacts: Record<string, ReleaseArtifact> = {}
-  for (const [key, artifactValue] of Object.entries(raw.artifacts as Record<string, unknown>)) {
-    artifacts[key] = parseArtifact(artifactValue, `installer update artifact ${key}`)
+  if (!raw.installer || typeof raw.installer !== 'object') throw new Error('release manifest is missing installer metadata')
+  const installerRaw = raw.installer as Record<string, unknown>
+  if (typeof installerRaw.version !== 'string' || !semverParts(installerRaw.version)) {
+    throw new Error('invalid installer release version')
   }
+  const installerArtifact = parseArtifact(installerRaw, 'installer release artifact')
 
+  if (!raw.skills || typeof raw.skills !== 'object') throw new Error('release manifest is missing skills metadata')
   const skills: Record<string, ReleasedSkill> = {}
-  if (raw.skills !== undefined) {
-    if (!raw.skills || typeof raw.skills !== 'object') throw new Error('installer update manifest has invalid skills metadata')
-    for (const [name, skillValue] of Object.entries(raw.skills as Record<string, unknown>)) {
-      if (!skillValue || typeof skillValue !== 'object') throw new Error(`invalid released skill ${name}`)
-      const skill = skillValue as Record<string, unknown>
-      if (typeof skill.version !== 'string' || !semverParts(skill.version)) throw new Error(`invalid released skill version ${name}`)
-      if (!skill.artifacts || typeof skill.artifacts !== 'object') throw new Error(`released skill ${name} is missing artifacts`)
-      const skillArtifacts: Record<string, ReleaseArtifact> = {}
-      for (const [key, artifactValue] of Object.entries(skill.artifacts as Record<string, unknown>)) {
-        skillArtifacts[key] = parseArtifact(artifactValue, `released skill ${name} artifact ${key}`)
-      }
-      skills[name] = { version: skill.version, artifacts: skillArtifacts }
+  for (const [name, value] of Object.entries(raw.skills as Record<string, unknown>)) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`invalid released skill name ${name}`)
+    if (!value || typeof value !== 'object') throw new Error(`invalid released skill ${name}`)
+    const skill = value as Record<string, unknown>
+    if (typeof skill.version !== 'string' || !semverParts(skill.version)) {
+      throw new Error(`invalid released skill version ${name}`)
+    }
+    if (typeof skill.min_installer !== 'string' || !semverParts(skill.min_installer)) {
+      throw new Error(`invalid minimum installer version for ${name}`)
+    }
+    const artifact = parseArtifact(skill, `released skill ${name}`)
+    skills[name] = {
+      version: skill.version,
+      min_installer: skill.min_installer,
+      ...artifact,
     }
   }
 
   return {
-    format: typeof raw.format === 'number' ? raw.format : undefined,
-    version: raw.version,
-    artifacts,
+    format: 1,
+    installer: {
+      version: installerRaw.version,
+      ...installerArtifact,
+    },
     skills,
   }
 }
 
 export async function fetchStableReleaseManifest(
-  manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_INSTALLER_MANIFEST_URL,
+  manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
   fetcher: FetchLike = fetch,
-): Promise<InstallerUpdateManifest | null> {
+): Promise<ReleaseManifest | null> {
   const response = await fetcher(manifestUrl, { headers: { 'user-agent': 'jl-skills' } })
   if (response.status === 404) return null
   if (!response.ok) throw new Error(`stable release check failed with HTTP ${response.status}`)
-  return parseInstallerUpdateManifest(await response.json())
+  return parseReleaseManifest(await response.json())
 }
 
 export async function checkInstallerUpdate(
   currentVersion: string,
-  manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_INSTALLER_MANIFEST_URL,
+  manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
   fetcher: FetchLike = fetch,
 ): Promise<InstallerUpdate | null> {
   const manifest = await fetchStableReleaseManifest(manifestUrl, fetcher)
-  if (!manifest || compareVersions(manifest.version, currentVersion) <= 0) return null
+  if (!manifest || compareVersions(manifest.installer.version, currentVersion) <= 0) return null
+  return {
+    version: manifest.installer.version,
+    artifact: {
+      url: manifest.installer.url,
+      sha256: manifest.installer.sha256,
+    },
+  }
+}
 
-  const key = installerPlatformKey()
-  const artifact = manifest.artifacts[key]
-  if (!artifact) throw new Error(`installer update ${manifest.version} has no artifact for ${key}`)
-  return { version: manifest.version, artifact }
+async function downloadVerified(
+  artifact: ReleaseArtifact,
+  destination: string,
+  label: string,
+  fetcher: FetchLike = fetch,
+): Promise<string> {
+  const response = await fetcher(artifact.url, { headers: { 'user-agent': 'jl-skills' } })
+  if (!response.ok) throw new Error(`${label} download failed with HTTP ${response.status}`)
+
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  const actual = createHash('sha256').update(bytes).digest('hex')
+  if (actual !== artifact.sha256) {
+    throw new Error(`${label} SHA-256 mismatch: expected ${artifact.sha256}, got ${actual}`)
+  }
+
+  try {
+    mkdirSync(dirname(destination), { recursive: true })
+    writeFileSync(destination, bytes)
+    return destination
+  } catch (error) {
+    try { rmSync(destination, { force: true }) } catch {}
+    throw error
+  }
 }
 
 export async function downloadVerifiedInstaller(
@@ -127,23 +198,9 @@ export async function downloadVerifiedInstaller(
   destination: string,
   fetcher: FetchLike = fetch,
 ): Promise<string> {
-  const response = await fetcher(update.artifact.url, { headers: { 'user-agent': 'jl-skills' } })
-  if (!response.ok) throw new Error(`installer update download failed with HTTP ${response.status}`)
-
-  const bytes = new Uint8Array(await response.arrayBuffer())
-  const actual = createHash('sha256').update(bytes).digest('hex')
-  if (actual !== update.artifact.sha256.toLowerCase()) {
-    throw new Error(`installer update SHA-256 mismatch: expected ${update.artifact.sha256}, got ${actual}`)
-  }
-
-  try {
-    writeFileSync(destination, bytes)
-    try { chmodSync(destination, 0o755) } catch {}
-    return destination
-  } catch (error) {
-    try { rmSync(destination, { force: true }) } catch {}
-    throw error
-  }
+  const path = await downloadVerified(update.artifact, destination, 'installer update', fetcher)
+  try { chmodSync(path, 0o755) } catch {}
+  return path
 }
 
 export async function stageInstallerUpdate(
@@ -167,7 +224,7 @@ export function windowsReplacementCommand(staged: string, executable: string): s
 }
 
 export function scheduleInstallerReplacement(staged: string, executable: string): void {
-  if (platform() !== 'win32') {
+  if (process.platform !== 'win32') {
     renameSync(staged, executable)
     return
   }
@@ -178,4 +235,156 @@ export function scheduleInstallerReplacement(staged: string, executable: string)
     windowsHide: true,
   })
   child.unref()
+}
+
+function packagePath(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty path`)
+  const normalized = value.replaceAll('\\', '/')
+  const parts = normalized.split('/').filter((part) => part !== '.' && part !== '')
+  if (isAbsolute(value) || /^[A-Za-z]:/.test(normalized) || parts.includes('..')) {
+    throw new Error(`${label} must be a relative contained path`)
+  }
+  return parts.join('/')
+}
+
+function optionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`)
+  return value
+}
+
+function pathArray(value: unknown, label: string, required = false): string[] | undefined {
+  if (value === undefined && !required) return undefined
+  if (!Array.isArray(value) || (required && value.length === 0)) throw new Error(`${label} must be a non-empty array`)
+  return value.map((item, index) => packagePath(item, `${label}[${index}]`))
+}
+
+function pathRecord(value: unknown, label: string): Record<string, string> | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
+  const result: Record<string, string> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    result[key] = packagePath(item, `${label}.${key}`)
+  }
+  return result
+}
+
+function sharedPathRecord(value: unknown, label: string): Record<string, string> | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
+  const result: Record<string, string> = {}
+  for (const [source, destination] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof destination !== 'string' || !destination.trim()) throw new Error(`${label}.${source} has an invalid destination`)
+    result[packagePath(source, `${label}.${source}`)] = destination
+  }
+  return result
+}
+
+export function parseSkillPackageManifest(value: unknown): SkillPackageManifest {
+  if (!value || typeof value !== 'object') throw new Error('invalid skill package manifest')
+  const raw = value as Record<string, unknown>
+  if (raw.format !== 1) throw new Error('unsupported skill package manifest format')
+  if (typeof raw.name !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(raw.name)) throw new Error('invalid skill package name')
+  if (typeof raw.version !== 'string' || !semverParts(raw.version)) throw new Error(`invalid ${raw.name} package version`)
+  if (typeof raw.min_installer !== 'string' || !semverParts(raw.min_installer)) {
+    throw new Error(`invalid ${raw.name} minimum installer version`)
+  }
+  if (typeof raw.description !== 'string' || !raw.description.trim()) throw new Error(`${raw.name} package is missing description`)
+
+  const generatedData: GeneratedDataSpec[] | undefined = raw.generated_data === undefined
+    ? undefined
+    : (() => {
+      if (!Array.isArray(raw.generated_data)) throw new Error(`${raw.name} generated_data must be an array`)
+      return raw.generated_data.map((value, index) => {
+        if (!value || typeof value !== 'object') throw new Error(`${raw.name} generated_data[${index}] is invalid`)
+        const entry = value as Record<string, unknown>
+        return {
+          path: packagePath(entry.path, `${raw.name} generated_data[${index}].path`),
+          marker: entry.marker === undefined
+            ? undefined
+            : packagePath(entry.marker, `${raw.name} generated_data[${index}].marker`),
+        }
+      })
+    })()
+
+  return {
+    format: 1,
+    name: raw.name,
+    version: raw.version,
+    min_installer: raw.min_installer,
+    description: raw.description,
+    skill_files: pathArray(raw.skill_files, `${raw.name} skill_files`, true)!,
+    runtime_files: pathArray(raw.runtime_files, `${raw.name} runtime_files`),
+    runtime: optionalString(raw.runtime, `${raw.name} runtime`),
+    runtime_artifacts: pathRecord(raw.runtime_artifacts, `${raw.name} runtime_artifacts`),
+    runtime_shared_files: sharedPathRecord(raw.runtime_shared_files, `${raw.name} runtime_shared_files`),
+    runtime_cli: optionalString(raw.runtime_cli, `${raw.name} runtime_cli`),
+    runtime_cli_destination: optionalString(raw.runtime_cli_destination, `${raw.name} runtime_cli_destination`),
+    cli_token: optionalString(raw.cli_token, `${raw.name} cli_token`),
+    instruction_fragment: raw.instruction_fragment === undefined
+      ? undefined
+      : packagePath(raw.instruction_fragment, `${raw.name} instruction_fragment`),
+    generated_data: generatedData,
+  }
+}
+
+function validateArchiveEntries(archive: string): void {
+  const listing = spawnSync('tar', ['-tf', archive], { encoding: 'utf8', windowsHide: true })
+  if (listing.status !== 0) throw new Error(`could not inspect skill archive: ${(listing.stderr || '').trim()}`)
+  for (const raw of listing.stdout.split(/\r?\n/)) {
+    if (!raw.trim()) continue
+    packagePath(raw.replace(/\/$/, ''), 'skill archive entry')
+  }
+}
+
+function assertPackageFiles(root: string, manifest: SkillPackageManifest): void {
+  const declared = new Set<string>([
+    ...manifest.skill_files,
+    ...(manifest.runtime_files ?? []),
+    ...Object.values(manifest.runtime_artifacts ?? {}),
+    ...Object.keys(manifest.runtime_shared_files ?? {}),
+    ...(manifest.instruction_fragment ? [manifest.instruction_fragment] : []),
+  ])
+  for (const rel of declared) {
+    if (!existsSync(join(root, rel))) throw new Error(`${manifest.name} package is missing ${rel}`)
+  }
+}
+
+export async function downloadSkillPackage(
+  name: string,
+  released: ReleasedSkill,
+  fetcher: FetchLike = fetch,
+): Promise<DownloadedSkillPackage> {
+  const scratch = mkdtempSync(join(tmpdir(), `jl-skills-${name}-`))
+  const archive = join(scratch, `${name}.zip`)
+  const root = join(scratch, 'package')
+  mkdirSync(root, { recursive: true })
+
+  try {
+    await downloadVerified(released, archive, `${name} ${released.version}`, fetcher)
+    validateArchiveEntries(archive)
+    const extracted = spawnSync('tar', ['-xf', archive, '-C', root], { encoding: 'utf8', windowsHide: true })
+    if (extracted.status !== 0) throw new Error(`could not extract ${name} archive: ${(extracted.stderr || '').trim()}`)
+
+    const manifestPath = join(root, 'manifest.json')
+    if (!existsSync(manifestPath)) throw new Error(`${name} package is missing manifest.json`)
+    const manifest = parseSkillPackageManifest(JSON.parse(readFileSync(manifestPath, 'utf8')))
+    if (manifest.name !== name) throw new Error(`${name} package manifest identifies ${manifest.name}`)
+    if (manifest.version !== released.version) {
+      throw new Error(`${name} package version ${manifest.version} does not match release index ${released.version}`)
+    }
+    if (manifest.min_installer !== released.min_installer) {
+      throw new Error(`${name} package min_installer does not match release index`)
+    }
+    assertPackageFiles(root, manifest)
+
+    return {
+      manifest,
+      root,
+      cleanup: () => rmSync(scratch, { recursive: true, force: true }),
+    }
+  } catch (error) {
+    rmSync(scratch, { recursive: true, force: true })
+    throw error
+  }
 }
