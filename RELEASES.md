@@ -1,6 +1,6 @@
 # jl-skills release channels
 
-Status: implementation substantially complete; consolidated validation pending.
+Status: implementation and consolidated validation complete; nightly acceptance pending.
 
 This file is the durable contract and running checklist for release/update work.
 
@@ -251,7 +251,7 @@ The first release-automation Action run failed because Map declared `agents` as 
 
 All Map Rust tests passed, the installer compiled, and updater-specific tests passed. The 15 installer regression failures were one packaging failure fanning out across install-dependent tests, not 15 unrelated defects.
 
-That failure is obsolete under the implemented archive model: package directories are installed from the downloaded skill snapshot rather than represented as literal embedded catalog keys. Consolidated validation remains pending.
+That failure is obsolete under the implemented archive model: package directories are installed from the downloaded skill snapshot rather than represented as literal embedded catalog keys. Consolidated validation passed on a clean Windows GitHub Actions runner on 2026-08-29.
 
 ## Remaining work
 
@@ -261,9 +261,9 @@ Work through these sequentially and keep scope narrow.
 - [x] **2. Lock the top-level stable `manifest.json` schema.** Use `format`, `installer`, and `skills` as documented above; bind artifact URLs to the immutable timestamped release; use the latest normal release only as the entry point for update discovery.
 - [x] **3. Lock the per-skill package manifest and archive layout.** Source/package metadata is `skills/<name>/manifest.json`; the same file is packaged at archive root; Map's exact manifest and archive contents are documented above.
 - [x] **4. Build skill archives as release artifacts.** The build stages each declared package payload, creates `<skill>.zip`, hashes it, and generates top-level `manifest.json` entries from the built archive. Workflow publication of those outputs is handled in item 7.
-- [x] **5. Change install/update logic to consume the release manifest and skill archives — implemented; validation deferred.** Compare running installer version and installed `SKILL.md` metadata against the release manifest, enforce only `min_installer`, then download/verify/install the requested archive.
-- [x] **6. Remove obsolete embedded-skill machinery — implemented; validation deferred.** Delete catalog/base64/extraction/update paths that no longer have a job once archive delivery is authoritative; let the old `map/agents` failure disappear through the architecture instead of patching it separately.
-- [x] **7. Simplify Actions around the final package model and main-only workflow — implemented; validation deferred.** Use one broad workflow, remove branch-hygiene/PR-only behavior, publish `jl-skills.exe`, `manifest.json`, and every `<skill>.zip`, retain clean build/test, change-aware rolling nightly publication, and explicit manual stable publication.
-- [ ] **8. Run consolidated validation of the final package model.** Exercise the meaningful regression suite and production artifact path together, including archive installation, independent skill updates, minimum-installer compatibility, install/update/uninstall behavior, generated-data preservation, and produced artifact inspection.
+- [x] **5. Change install/update logic to consume the release manifest and skill archives.** Compare running installer version and installed `SKILL.md` metadata against the release manifest, enforce only `min_installer`, then download/verify/install the requested archive.
+- [x] **6. Remove obsolete embedded-skill machinery.** Delete catalog/base64/extraction/update paths that no longer have a job once archive delivery is authoritative; let the old `map/agents` failure disappear through the architecture instead of patching it separately.
+- [x] **7. Simplify Actions around the final package model and main-only workflow.** Use one broad workflow, remove branch-hygiene/PR-only behavior, publish `jl-skills.exe`, `manifest.json`, and every `<skill>.zip`, retain clean build/test, change-aware rolling nightly publication, and explicit manual stable publication.
+- [x] **8. Run consolidated validation of the final package model.** Clean Windows Actions validation passed: 22 Map Rust tests and 46 installer/package tests passed with zero failures; archive installation, minimum-installer compatibility, scope/install/update/uninstall regressions, generated-data preservation, artifact hashes, and exact `map.zip` payload were exercised. The uploaded production-test artifact contained exactly `jl-skills.exe`, `manifest.json`, and `map.zip`, and the manifest hashes matched the actual binaries/archive.
 - [ ] **9. Publish/test nightly.** Produce the rolling nightly through the real release path and perform the planned production install/update/uninstall test with Codex.
 - [ ] **10. Publish first stable snapshot.** After production validation, manually publish the first timestamp-tagged stable release and verify installer/skill update discovery through `releases/latest/download/manifest.json`.
