@@ -68,8 +68,8 @@ jobs:
             $force = '${{ inputs.force }}' -eq 'true'
             if ($shouldBuild -and -not $force) {
               git fetch origin --tags --force
-              $base = (& git rev-parse --verify refs/tags/nightly 2>$null)
-              if ($LASTEXITCODE -eq 0 -and $base) {
+              $base = (& git tag --list nightly | Select-Object -First 1)
+              if ($base) {
                 $files = @(git diff --name-only "$base..HEAD" -- src scripts skills package.json bun.lock)
                 if ($LASTEXITCODE -ne 0) { throw 'Could not compare against the previous nightly tag.' }
                 $shouldBuild = $files.Count -gt 0
@@ -85,8 +85,8 @@ jobs:
           } elseif ($mode -eq 'stable') {
             $releaseTag = [DateTime]::UtcNow.ToString('yyyy.MM.dd-HHmmZ')
             git fetch origin --tags --force
-            git rev-parse --verify "refs/tags/$releaseTag" 2>$null
-            if ($LASTEXITCODE -eq 0) { throw "Tag $releaseTag already exists." }
+            $existingTag = (& git tag --list $releaseTag | Select-Object -First 1)
+            if ($existingTag) { throw "Tag $releaseTag already exists." }
           }
 
           "mode=$mode" >> $env:GITHUB_OUTPUT
@@ -139,8 +139,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $assets = @('build/jl-skills.exe', 'build/manifest.json') + @(Get-ChildItem build/*.zip | ForEach-Object { $_.FullName })
-          gh release view nightly *> $null
-          if ($LASTEXITCODE -ne 0) {
+          $existingRelease = (& gh release list --limit 100 --json tagName --jq '.[] | select(.tagName == "nightly") | .tagName' | Select-Object -First 1)
+          if (-not $existingRelease) {
             gh release create nightly @assets --title 'Nightly' --notes 'Rolling production-test build from main. Not part of the stable update channel.' --prerelease --target $env:GITHUB_SHA
             if ($LASTEXITCODE -ne 0) { throw 'Could not create the nightly prerelease.' }
           } else {
