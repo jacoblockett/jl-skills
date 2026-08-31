@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
+import AdmZip from 'adm-zip'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
 import {
   checkInstallerUpdate,
   compareVersions,
@@ -169,7 +169,7 @@ describe('release metadata', () => {
 })
 
 describe('skill package download', () => {
-  test('verified archive is extracted and must match release index metadata', async () => {
+  test('verified ZIP is extracted without relying on an archive utility in PATH', async () => {
     const root = reset('skill-package')
     const packageRoot = join(root, 'package')
     mkdirSync(packageRoot, { recursive: true })
@@ -184,13 +184,10 @@ describe('skill package download', () => {
     writeFileSync(join(packageRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
     writeFileSync(join(packageRoot, 'SKILL.md'), '<!-- jl-skills-meta: {"name":"map","version":"0.3.0","format":1} -->\n')
 
-    const archive = join(root, 'map.zip')
-    const packed = spawnSync('tar', ['-a', '-c', '-f', archive, '-C', packageRoot, 'manifest.json', 'SKILL.md'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    })
-    expect(packed.status).toBe(0)
-    const bytes = new Uint8Array(readFileSync(archive))
+    const zip = new AdmZip()
+    zip.addLocalFile(join(packageRoot, 'manifest.json'))
+    zip.addLocalFile(join(packageRoot, 'SKILL.md'))
+    const bytes = new Uint8Array(zip.toBuffer())
     const released: ReleasedSkill = {
       version: '0.3.0',
       min_installer: '0.5.0',
@@ -198,14 +195,35 @@ describe('skill package download', () => {
       sha256: sha256(bytes),
     }
 
-    const downloaded = await downloadSkillPackage('map', released, fixtureFetcher({}, 'unused', bytes))
+    const originalPath = process.env.PATH
+    process.env.PATH = ''
     try {
-      expect(downloaded.manifest.name).toBe('map')
-      expect(downloaded.manifest.version).toBe('0.3.0')
-      expect(existsSync(join(downloaded.root, 'SKILL.md'))).toBe(true)
+      const downloaded = await downloadSkillPackage('map', released, fixtureFetcher({}, 'unused', bytes))
+      try {
+        expect(downloaded.manifest.name).toBe('map')
+        expect(downloaded.manifest.version).toBe('0.3.0')
+        expect(existsSync(join(downloaded.root, 'SKILL.md'))).toBe(true)
+      } finally {
+        downloaded.cleanup()
+      }
     } finally {
-      downloaded.cleanup()
+      process.env.PATH = originalPath
     }
+  })
+
+  test('archive entry paths cannot escape the extraction root', async () => {
+    const zip = new AdmZip()
+    zip.addFile('C:/escape.txt', Buffer.from('bad'))
+    const bytes = new Uint8Array(zip.toBuffer())
+    const released: ReleasedSkill = {
+      version: '0.3.0',
+      min_installer: '0.5.0',
+      url: 'https://fixture.invalid/map.zip',
+      sha256: sha256(bytes),
+    }
+
+    await expect(downloadSkillPackage('map', released, fixtureFetcher({}, 'unused', bytes)))
+      .rejects.toThrow('relative contained path')
   })
 })
 
