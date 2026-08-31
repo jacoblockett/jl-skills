@@ -79,6 +79,11 @@ export type DownloadedSkillPackage = {
   cleanup: () => void
 }
 
+export type SelectedSkillArtifact = {
+  key: TargetKey | 'portable'
+  artifact: ReleaseArtifact
+}
+
 function semverParts(version: string): [number, number, number] | undefined {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)
   if (!match) return undefined
@@ -193,28 +198,36 @@ export async function fetchStableReleaseManifest(
   return parseReleaseManifest(await response.json())
 }
 
-function preMatrixInstallerArtifact(manifest: ReleaseManifest): ReleaseArtifact {
-  const artifact = manifest.installer.artifacts['windows-x64']
-  if (!artifact) throw new Error('installer release has no windows-x64 artifact')
+function targetKey(target?: TargetKey): TargetKey {
+  return target ?? compiledTarget().key
+}
+
+export function selectInstallerArtifact(manifest: ReleaseManifest, target: TargetKey): ReleaseArtifact {
+  const artifact = manifest.installer.artifacts[target]
+  if (!artifact) throw new Error(`installer release has no ${target} artifact`)
   return artifact
 }
 
-function preMatrixSkillArtifact(name: string, released: ReleasedSkill): ReleaseArtifact {
-  const artifact = released.artifacts['windows-x64'] ?? released.artifacts.portable
-  if (!artifact) throw new Error(`${name} has no windows-x64 or portable release artifact`)
-  return artifact
+export function selectSkillArtifact(name: string, released: ReleasedSkill, target: TargetKey): SelectedSkillArtifact {
+  const exact = released.artifacts[target]
+  if (exact) return { key: target, artifact: exact }
+  const portable = released.artifacts.portable
+  if (portable) return { key: 'portable', artifact: portable }
+  throw new Error(`${name} has no ${target} or portable release artifact`)
 }
 
 export async function checkInstallerUpdate(
   currentVersion: string,
   manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
   fetcher: FetchLike = fetch,
+  target?: TargetKey,
 ): Promise<InstallerUpdate | null> {
   const manifest = await fetchStableReleaseManifest(manifestUrl, fetcher)
   if (!manifest || compareVersions(manifest.installer.version, currentVersion) <= 0) return null
+  const currentTarget = targetKey(target)
   return {
     version: manifest.installer.version,
-    artifact: preMatrixInstallerArtifact(manifest),
+    artifact: selectInstallerArtifact(manifest, currentTarget),
   }
 }
 
@@ -392,19 +405,33 @@ function assertPackageFiles(root: string, manifest: SkillPackageManifest): void 
   }
 }
 
+function assertPackageTarget(name: string, manifest: SkillPackageManifest, selected: TargetKey | 'portable'): void {
+  const runtimeTargets = Object.keys(manifest.runtime_artifacts ?? {})
+  if (selected === 'portable') {
+    if (runtimeTargets.length > 0) throw new Error(`${name} portable package cannot contain target-specific runtime artifacts`)
+    return
+  }
+  if (!manifest.runtime) return
+  if (runtimeTargets.length !== 1 || runtimeTargets[0] !== selected) {
+    throw new Error(`${name} ${selected} package must contain only its ${selected} runtime artifact`)
+  }
+}
+
 export async function downloadSkillPackage(
   name: string,
   released: ReleasedSkill,
   fetcher: FetchLike = fetch,
+  target?: TargetKey,
 ): Promise<DownloadedSkillPackage> {
+  const currentTarget = targetKey(target)
+  const selected = selectSkillArtifact(name, released, currentTarget)
   const scratch = mkdtempSync(join(tmpdir(), `jl-skills-${name}-`))
   const archive = join(scratch, `${name}.zip`)
   const root = join(scratch, 'package')
   mkdirSync(root, { recursive: true })
 
   try {
-    const artifact = preMatrixSkillArtifact(name, released)
-    await downloadVerified(artifact, archive, `${name} ${released.version}`, fetcher)
+    await downloadVerified(selected.artifact, archive, `${name} ${released.version}`, fetcher)
     extractZip(archive, root)
 
     const manifestPath = join(root, 'manifest.json')
@@ -417,6 +444,7 @@ export async function downloadSkillPackage(
     if (manifest.min_installer !== released.min_installer) {
       throw new Error(`${name} package min_installer does not match release index`)
     }
+    assertPackageTarget(name, manifest, selected.key)
     assertPackageFiles(root, manifest)
 
     return {
