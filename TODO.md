@@ -232,21 +232,22 @@ Test the actual downloadable release assets as consumers receive them.
 
 At minimum:
 
-- macOS: Gatekeeper behavior, and whether signing/notarization is required for acceptable installation;
-- Windows: SmartScreen/AuthentiCode behavior and whether signing is required for acceptable installation;
+- macOS: record Gatekeeper behavior and signing state;
+- Windows: record SmartScreen/AuthentiCode-relevant signing state;
 - Linux: executable permissions and glibc/musl compatibility.
 
-Treat required signing/notarization work as a Stable blocker if unsigned artifacts create unacceptable normal-user friction.
+Unsigned macOS and Windows artifacts are an explicit accepted release policy. Developer ID/notarization, Authenticode, Gatekeeper rejection caused by the unsigned policy, SmartScreen reputation warnings, and Smart App Control blocking are not Stable blockers. Integrity failures, target/ABI mismatches, malformed packages, and inability to execute after the documented platform preparation remain blockers.
 
-Distribution-audit implementation is complete; this checkbox remains open until an actual Nightly passes it and any signing-policy blockers are resolved:
+Distribution-audit implementation is complete; this checkbox remains open until an actual Nightly passes it:
 
 - Nightly first publishes the fully aggregated bundle as candidate GitHub Release assets, with any previous `validation.json` removed before candidate replacement;
 - an eight-target post-publication matrix downloads the exact `nightly` release `manifest.json`, installer, and Map archive that consumers receive;
 - `scripts/audit-distribution.ts` re-verifies release URLs and SHA-256 values, extracts and executes the downloaded target Map runtime, and writes one machine-readable report per target;
-- macOS audit applies a quarantine attribute, requires a Developer ID Application signature, and requires `spctl` Gatekeeper assessment to accept both the installer and Map runtime;
-- Windows audit requires valid Authenticode on both downloaded executables; SmartScreen/Smart App Control reputation remains a consumer-distribution consideration even after signing;
+- macOS audit applies a quarantine attribute and records Developer ID and `spctl` Gatekeeper results as non-blocking distribution-friction observations;
+- Windows audit records Authenticode status as a non-blocking distribution-friction observation;
 - Linux audit records whether the raw release download retained an executable bit, applies the required executable permission before launch, executes both binaries, and verifies GNU vs musl ABI identity;
-- failed distribution checks prevent Nightly finalization and prevent creation of a validation receipt;
+- failed blocking distribution checks prevent Nightly finalization and prevent creation of a validation receipt;
+- each distribution report records the explicit `unsigned-accepted` signing policy;
 - the raw non-Windows installer format may require documented `chmod +x` after download because HTTP release assets do not carry a POSIX executable mode.
 
 ### 10. [ ] Publish Stable only after complete validation
@@ -257,8 +258,8 @@ Stable publication must enforce the complete required target set rather than rel
 
 Stable-gate implementation is complete; this checkbox remains open until steps 8 and 9 actually pass and the first Stable snapshot is intentionally published:
 
-- `scripts/validation-receipt.ts` creates a receipt only after all eight post-download distribution reports pass;
-- the receipt binds the exact `main` commit SHA, exact Nightly `manifest.json` SHA-256, and exact eight-target set;
+- `scripts/validation-receipt.ts` creates a receipt only after all eight post-download distribution reports pass under the explicit `unsigned-accepted` signing policy;
+- the receipt binds the exact `main` commit SHA, exact Nightly `manifest.json` SHA-256, exact eight-target set, and signing policy;
 - the rolling `nightly` tag is advanced only after that validation receipt is created and uploaded;
 - Stable dispatch refuses to proceed unless the current `main` SHA has a matching Nightly validation receipt and the currently published Nightly manifest still matches that receipt;
 - Stable does not rebuild binaries after validation: `scripts/promote-nightly.ts` verifies and promotes the exact validated Nightly installer/package bytes, rewriting only release-manifest URLs to the new immutable timestamped Stable tag;
