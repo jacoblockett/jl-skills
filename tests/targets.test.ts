@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { TARGET_KEYS, TARGETS, targetByKey } from '../src/targets'
+import {
+  TARGET_KEYS,
+  TARGETS,
+  installerAssetName,
+  runtimeArtifactPath,
+  skillArchiveName,
+  targetByKey,
+} from '../src/targets'
 
 describe('distribution targets', () => {
   test('locks the required public target set', () => {
@@ -64,6 +71,16 @@ describe('distribution targets', () => {
       bunCompileTarget: 'bun-linux-arm64-musl',
       rustTargetTriple: 'aarch64-unknown-linux-musl',
     })
+  })
+
+  test('owns exact public artifact and runtime names', () => {
+    for (const key of TARGET_KEYS) {
+      const target = TARGETS[key]
+      expect(installerAssetName(target)).toBe(`jl-skills-${key}${target.executableSuffix}`)
+      expect(skillArchiveName('map', target)).toBe(`map-${key}.zip`)
+      expect(runtimeArtifactPath('map', target)).toBe(`runtime/${key}/map${target.executableSuffix}`)
+    }
+    expect(skillArchiveName('portable-test', 'portable')).toBe('portable-test-portable.zip')
   })
 
   test('rejects unknown targets', () => {
