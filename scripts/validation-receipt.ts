@@ -3,10 +3,13 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { dirname, join, resolve } from 'node:path'
 import { TARGET_KEYS } from '../src/targets'
 
+const SIGNING_POLICY = 'unsigned-accepted' as const
+
 type DistributionReport = {
   format: 1
   target: string
   release_tag: string
+  signing_policy: typeof SIGNING_POLICY
   generated_at: string
   ok: boolean
 }
@@ -16,6 +19,7 @@ type ValidationReceipt = {
   sha: string
   run_id: string
   release_tag: 'nightly'
+  signing_policy: typeof SIGNING_POLICY
   manifest_sha256: string
   validated_at: string
   targets: string[]
@@ -61,6 +65,9 @@ function createReceipt(): void {
   }
   for (const report of reports) {
     if (report.release_tag !== 'nightly') throw new Error(`${report.target} report is not for nightly`)
+    if (report.signing_policy !== SIGNING_POLICY) {
+      throw new Error(`${report.target} distribution report uses signing policy ${report.signing_policy || 'unknown'}`)
+    }
     if (report.ok !== true) throw new Error(`${report.target} distribution report did not pass`)
   }
 
@@ -69,6 +76,7 @@ function createReceipt(): void {
     sha,
     run_id: runId,
     release_tag: 'nightly',
+    signing_policy: SIGNING_POLICY,
     manifest_sha256: sha256(manifest),
     validated_at: new Date().toISOString(),
     targets: [...TARGET_KEYS],
@@ -92,6 +100,9 @@ function verifyReceipt(): void {
     throw new Error(`current main ${expectedSha} has not passed Nightly validation; receipt is for ${receipt.sha || 'unknown'}`)
   }
   if (receipt.release_tag !== 'nightly') throw new Error('validation receipt is not for Nightly')
+  if (receipt.signing_policy !== SIGNING_POLICY) {
+    throw new Error(`validation receipt signing policy is ${receipt.signing_policy || 'unknown'}, expected ${SIGNING_POLICY}`)
+  }
   if (!Array.isArray(receipt.targets) || !exactTargets(receipt.targets)) {
     throw new Error('validation receipt does not contain the exact required target set')
   }
