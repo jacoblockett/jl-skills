@@ -1,8 +1,6 @@
 name: Build
 
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: '0 6,7 * * *'
   workflow_dispatch:
@@ -26,8 +24,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: jl-skills-${{ github.event_name == 'workflow_dispatch' && inputs.action || github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  group: jl-skills-${{ github.event_name == 'schedule' && 'nightly' || inputs.action }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -41,10 +39,8 @@ jobs:
         id: mode
         shell: pwsh
         run: |
-          $mode = 'build'
-          if ('${{ github.event_name }}' -eq 'schedule') {
-            $mode = 'nightly'
-          } elseif ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+          $mode = 'nightly'
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
             $mode = '${{ inputs.action }}'
           }
 
@@ -108,6 +104,19 @@ jobs:
         with:
           toolchain: 1.97.1
 
+      - name: Restore Rust build cache
+        id: rust-cache
+        if: steps.mode.outputs.should_build == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/cargo/map
+          key: windows-x64-rust-1.97.1-map-${{ hashFiles('skills/map/Cargo.lock', 'skills/map/Cargo.toml') }}
+          restore-keys: |
+            windows-x64-rust-1.97.1-map-
+
       - name: Install dependencies
         if: steps.mode.outputs.should_build == 'true'
         shell: pwsh
@@ -119,6 +128,16 @@ jobs:
         env:
           JL_SKILLS_RELEASE_TAG: ${{ steps.mode.outputs.release_tag }}
         run: bun run smoke
+
+      - name: Save Rust build cache
+        if: always() && steps.mode.outputs.should_build == 'true' && steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/cargo/map
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
       - name: Upload production-test artifacts
         if: steps.mode.outputs.should_build == 'true'
