@@ -1,6 +1,6 @@
 # jl-skills release channels
 
-Status: Windows production-path acceptance has passed, but the first Stable release is blocked until the cross-platform target work in `TODO.md` is complete.
+Status: the complete native build/aggregation matrix is implemented. The first Stable release remains blocked on cross-platform consumer acceptance and distribution-friction validation in `TODO.md`.
 
 This file is the durable release/update contract. `TODO.md` owns the ordered implementation plan for unfinished cross-platform release work.
 
@@ -100,7 +100,7 @@ jl-skills.exe
 map.zip
 ```
 
-Target-qualified naming is now active in build output, manifest URLs, GitHub Actions artifact paths, and release commands. The current pre-matrix build emits only the Windows x64 members of this naming contract; the remaining seven are produced once the native matrix is implemented.
+Target-qualified naming is active for every required matrix target in build output, manifest URLs, GitHub Actions artifacts, and release assets.
 
 The stable public update index remains:
 
@@ -116,7 +116,7 @@ Nightly remains a prerelease so GitHub `latest` resolves only to a normal Stable
 
 Release-manifest format 2 is the active source/build contract. Format 1 is obsolete pre-stable implementation history and is no longer emitted by the build.
 
-During the current migration, the Windows-only pre-matrix build emits a valid format-2 manifest containing only its `windows-x64` artifacts. That partial manifest is suitable for development/build validation only and must not be published to Nightly or Stable. Publication remains blocked until the complete target set is produced and aggregated.
+Each target build emits a format-2 fragment containing only its installer artifact, that target's native skill packages, and any portable package assigned to the designated portable-package job. `scripts/aggregate-release.ts` independently verifies all eight target fragments against the canonical target set and source skill catalog before producing the publishable complete manifest.
 
 Format 2 has this exact structural contract:
 
@@ -156,8 +156,8 @@ Format-2 invariants:
 - `installer.artifacts` is keyed by canonical target key and never uses `portable`.
 - Each skill entry retains `version` and `min_installer`.
 - Each skill `artifacts` map is keyed by canonical target key and may additionally use the reserved key `portable` only for an explicitly platform-independent package.
-- Every artifact contains exactly the immutable snapshot URL used for that artifact plus its SHA-256.
-- Artifact URLs point to the immutable timestamped snapshot, not a moving `releases/latest/...` asset URL.
+- Every artifact contains exactly the snapshot URL used for that artifact plus its SHA-256.
+- Stable artifact URLs point to the immutable timestamped snapshot, not a moving `releases/latest/...` asset URL. Nightly uses the rolling `nightly` snapshot identity for its production-test bundle.
 - The installer resolves an artifact by exact canonical target key first. For skills only, if that exact key is absent, an explicitly published `portable` artifact may be used.
 - Absence of a compatible exact-target or allowed portable skill artifact is an incompatibility error. Another OS, architecture, or ABI is never a fallback.
 - Unrelated artifact entries do not change the running installer's embedded target identity.
@@ -270,7 +270,7 @@ Map currently declares native Codex and Claude subagent resources separately and
 
 Current Map semantic/package version is `0.5.0`; current installer version is `0.7.0`. Map requires installer `0.7.0`.
 
-The target-specific package model is active. The current pre-matrix Windows build emits `map-windows-x64.zip`, containing common Map resources plus only `runtime/windows-x64/map.exe`. The same builder contract applies to the other seven targets once their native jobs are introduced.
+The target-specific package model is active across all eight required native build targets. Each matrix job emits one `map-<target>.zip` containing common Map resources plus only `runtime/<target>/map[.exe]`.
 
 Map's development-only material (`README.md`, `SPEC.md`, Cargo files, Rust source, tests) is not release-package payload.
 
@@ -312,9 +312,7 @@ It must:
 - move the `nightly` tag only after successful build/test/publication;
 - never become GitHub's latest normal Stable release.
 
-Format 2 and target-qualified output naming are active in source/build output. Until the complete native matrix and aggregation gate are implemented, scheduled/manual Nightly publication is intentionally blocked rather than publishing a partial target set.
-
-Once release publication is re-enabled, Nightly requires the same complete supported target set as Stable and must not publish a partial matrix.
+Nightly publication is enabled only through the same complete eight-target aggregation gate used by Stable. A partial matrix never reaches the release step.
 
 ## Publication completeness gate
 
@@ -324,9 +322,9 @@ Nightly and Stable publication are both mechanically blocked unless all of the f
 2. the aggregator received an installer artifact for all eight canonical targets;
 3. the aggregator received a package artifact for all eight canonical targets for every native published skill;
 4. every portable published skill has its declared `portable` package artifact;
-5. every expected release asset has a computed SHA-256 and an immutable release URL matching its actual target-qualified filename;
+5. every expected release asset has a computed SHA-256 and a release URL matching its actual target-qualified filename;
 6. the generated format-2 manifest contains the complete expected installer artifact set and complete compatible artifact coverage for every published skill;
-7. the aggregator independently compares the produced target keys against the canonical required target set rather than trusting matrix job count alone.
+7. the aggregator independently compares the produced target keys against the canonical required target set and source skill catalog rather than trusting matrix job count alone.
 
 Failure of any condition stops publication. The workflow must not create/advance a Stable snapshot, replace Nightly assets, or advance the `nightly` tag with a partial or failed target set.
 
@@ -334,17 +332,24 @@ Additional targets may be added only by updating the canonical contract. Missing
 
 ## Workflow direction
 
-Prefer one broadly named GitHub Actions workflow for build/release behavior unless a concrete platform limitation requires another shape.
+One GitHub Actions workflow owns build/release behavior.
 
-The repository is main-only development. Workflow behavior must not assume feature branches or pull requests.
+The repository is main-only development. Workflow behavior does not assume feature branches or pull requests.
 
-Build/test failures must prevent publication. Stable publication occurs only after all required build/test/aggregate gates succeed.
+The active workflow shape is:
 
-The current workflow still builds Windows x64 only. Manual `build` remains available for development artifacts, while Nightly and Stable publication are temporarily blocked until the complete target build/test matrix and aggregator replace the pre-matrix flow.
+```text
+prepare
+  -> eight-target native build/test matrix
+  -> aggregate/validate complete release bundle
+  -> publish Nightly or Stable when requested
+```
+
+The matrix uses `fail-fast: false`. Each target produces an isolated artifact fragment. Aggregation runs only after every required target job succeeds and independently verifies the complete target/skill set before publication. Manual `build` produces the same verified aggregate bundle without publishing it.
 
 ## Current acceptance state
 
-Windows x64 production-path acceptance has passed for installer `0.7.0` / Map `0.4.0`:
+Windows x64 production-path acceptance previously passed for installer `0.7.0` / Map `0.4.0`:
 
 - project-scope install/uninstall worked against real filesystem paths;
 - user-scope install/uninstall worked against the real user home;
@@ -355,22 +360,18 @@ Windows x64 production-path acceptance has passed for installer `0.7.0` / Map `0
 - generated `.map` semantic state is separate from ordinary uninstall;
 - empty `AGENTS.md` files and harness parent directories are retained on uninstall;
 - generic redundant install/update/uninstall outro messages have been removed;
-- the rolling Nightly workflow was exercised repeatedly through real release downloads before the current cross-platform publication block.
+- the earlier rolling Nightly workflow was exercised repeatedly through real release downloads.
 
-That acceptance predates the Map `0.5.0` target-package change. It remains evidence for the Windows lifecycle behavior, not acceptance of the new cross-platform release work.
+That acceptance predates the Map `0.5.0` target-package change. It remains evidence for the Windows lifecycle behavior, not acceptance of the new cross-platform release artifacts.
 
-This acceptance is insufficient to publish Stable because the required Linux/macOS/ARM/ABI release targets are not yet implemented and validated.
+The complete native build/test/aggregation path is now implemented, but Stable remains blocked until step 8 executes consumer lifecycle acceptance on every required target and step 9 evaluates real OS distribution friction/signing requirements.
 
 ## Stable gate
 
 The first Stable release is blocked until every ordered item in `TODO.md` is complete, including:
 
-- canonical target abstraction;
-- target-qualified public artifact names;
-- target-aware release manifest;
-- per-target native skill packages;
-- target-aware installer self-update and skill selection;
-- complete native build/test matrix;
 - consumer acceptance on every required target;
 - OS-specific distribution-friction/signing review;
-- mechanical verification that the full supported target set exists before publication.
+- any remediation those checks identify.
+
+The mechanical complete-target publication gate is already implemented and remains mandatory for every Nightly and Stable snapshot.
