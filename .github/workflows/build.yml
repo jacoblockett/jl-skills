@@ -90,7 +90,7 @@ jobs:
             release_tag="$(date -u +%Y.%m.%d-%H%MZ)"
             git fetch origin --tags --force
             if git rev-parse -q --verify "refs/tags/$release_tag" >/dev/null; then
-              echo "Tag $release_tag already exists." >&2
+              echo "Tag $releaseTag already exists." >&2
               exit 1
             fi
           elif [[ "$mode" != build ]]; then
@@ -233,11 +233,33 @@ jobs:
         run: bun run build
 
       - name: Launch compiled target artifacts
+        if: ${{ !endsWith(matrix.target, '-musl') }}
         shell: bash
         run: |
           set -euo pipefail
           './build/${{ matrix.installer }}' --version
           './build/cargo/map/${{ matrix.rust_target }}/release/${{ matrix.map_executable }}' --help >/dev/null
+
+      - name: Run musl consumer acceptance in Alpine
+        if: ${{ endsWith(matrix.target, '-musl') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --user root \
+            --entrypoint sh \
+            -e JL_SKILLS_BUILD_TARGET='${{ matrix.target }}' \
+            -e JL_SKILLS_RELEASE_TAG='${{ needs.prepare.outputs.release_tag }}' \
+            -v "$PWD:/work" \
+            -w /work \
+            oven/bun:1.4.0-alpine \
+            -lc "
+              apk add --no-cache libgcc libstdc++ >/dev/null &&
+              bun install --frozen-lockfile &&
+              ./build/${{ matrix.installer }} --version &&
+              ./build/cargo/map/${{ matrix.rust_target }}/release/${{ matrix.map_executable }} --help >/dev/null &&
+              bun run test:consumer
+            "
 
       - name: Run full installer regression suite
         if: matrix.target == 'windows-x64'
@@ -245,7 +267,7 @@ jobs:
         run: bun run test:installer
 
       - name: Run consumer acceptance
-        if: matrix.target != 'windows-x64'
+        if: ${{ !endsWith(matrix.target, '-musl') }}
         shell: bash
         run: bun run test:consumer
 
@@ -403,16 +425,17 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      - name: Install Linux distribution tools
-        if: startsWith(matrix.target, 'linux-')
+      - name: Install dependencies
+        shell: bash
+        run: bun install --frozen-lockfile
+
+      - name: Install GNU Linux distribution tools
+        if: ${{ startsWith(matrix.target, 'linux-') && !endsWith(matrix.target, '-musl') }}
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y binutils file
-          if [[ '${{ matrix.target }}' == *-musl ]]; then
-            sudo apt-get install -y musl
-          fi
 
       - name: Download actual Nightly release assets
         shell: bash
@@ -427,6 +450,7 @@ jobs:
           gh release download nightly -p '${{ matrix.map_archive }}' -D "$root" --clobber
 
       - name: Audit consumer distribution behavior
+        if: ${{ !endsWith(matrix.target, '-musl') }}
         shell: bash
         env:
           JL_SKILLS_DISTRIBUTION_TARGET: ${{ matrix.target }}
@@ -434,6 +458,28 @@ jobs:
           JL_SKILLS_DISTRIBUTION_REPORT: build/distribution-reports/${{ matrix.target }}.json
           JL_SKILLS_RELEASE_TAG: nightly
         run: bun scripts/audit-distribution.ts
+
+      - name: Audit musl consumer distribution behavior in Alpine
+        if: ${{ endsWith(matrix.target, '-musl') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/distribution-reports
+          docker run --rm \
+            --user root \
+            --entrypoint sh \
+            -e JL_SKILLS_DISTRIBUTION_TARGET='${{ matrix.target }}' \
+            -e JL_SKILLS_DISTRIBUTION_ROOT='/work/build/distribution/${{ matrix.target }}' \
+            -e JL_SKILLS_DISTRIBUTION_REPORT='/work/build/distribution-reports/${{ matrix.target }}.json' \
+            -e JL_SKILLS_RELEASE_TAG=nightly \
+            -v "$PWD:/work" \
+            -w /work \
+            oven/bun:1.4.0-alpine \
+            -lc "
+              apk add --no-cache binutils file libgcc libstdc++ >/dev/null &&
+              bun install --frozen-lockfile &&
+              bun scripts/audit-distribution.ts
+            "
 
       - name: Upload distribution report
         if: always()
