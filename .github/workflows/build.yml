@@ -214,6 +214,10 @@ jobs:
           './build/${{ matrix.installer }}' --version
           './build/cargo/map/${{ matrix.rust_target }}/release/${{ matrix.map_executable }}' --help >/dev/null
 
+      - name: Run consumer acceptance
+        shell: bash
+        run: bun run test:consumer
+
       - name: Run full installer regression suite
         if: matrix.target == 'windows-x64'
         shell: bash
