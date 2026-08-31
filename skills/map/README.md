@@ -15,7 +15,7 @@ cargo build --manifest-path skills/map/Cargo.toml --release
 
 The runtime embeds SurrealDB/SurrealKV and requires no daemon or listening port.
 
-The current pre-stable release/smoke implementation is Windows x64 only. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the release package/manifest, and compiles the TypeScript + `@clack/prompts` installer with Bun into a standalone Windows executable. The first Stable release is blocked until the target-aware Windows/Linux/macOS matrix and explicit architecture-qualified artifact naming in the repo-level `To Do.md` are complete.
+The current pre-stable release/smoke implementation is Windows x64 only. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the release package/manifest, and compiles the TypeScript + `@clack/prompts` installer with Bun into a standalone Windows executable. The first Stable release is blocked until the target-aware Windows/Linux/macOS matrix and explicit architecture-qualified artifact naming in the repo-level `TODO.md` are complete.
 
 Run the full Map + installer regression smoke with:
 
