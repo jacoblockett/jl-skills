@@ -57,9 +57,7 @@ export type SkillPackageManifest = {
   runtime_files?: string[]
   runtime?: string
   runtime_artifacts?: Record<string, string>
-  runtime_shared_files?: Record<string, string>
   runtime_cli?: string
-  runtime_cli_destination?: string
   cli_token?: string
   instruction_fragment?: string
   generated_data?: GeneratedDataSpec[]
@@ -267,17 +265,6 @@ function pathRecord(value: unknown, label: string): Record<string, string> | und
   return result
 }
 
-function sharedPathRecord(value: unknown, label: string): Record<string, string> | undefined {
-  if (value === undefined) return undefined
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
-  const result: Record<string, string> = {}
-  for (const [source, destination] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof destination !== 'string' || !destination.trim()) throw new Error(`${label}.${source} has an invalid destination`)
-    result[packagePath(source, `${label}.${source}`)] = destination
-  }
-  return result
-}
-
 function harnessResources(value: unknown, label: string): HarnessResources | undefined {
   if (value === undefined) return undefined
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
@@ -335,9 +322,7 @@ export function parseSkillPackageManifest(value: unknown): SkillPackageManifest 
     runtime_files: pathArray(raw.runtime_files, `${raw.name} runtime_files`),
     runtime: optionalString(raw.runtime, `${raw.name} runtime`),
     runtime_artifacts: pathRecord(raw.runtime_artifacts, `${raw.name} runtime_artifacts`),
-    runtime_shared_files: sharedPathRecord(raw.runtime_shared_files, `${raw.name} runtime_shared_files`),
     runtime_cli: optionalString(raw.runtime_cli, `${raw.name} runtime_cli`),
-    runtime_cli_destination: optionalString(raw.runtime_cli_destination, `${raw.name} runtime_cli_destination`),
     cli_token: optionalString(raw.cli_token, `${raw.name} cli_token`),
     instruction_fragment: raw.instruction_fragment === undefined
       ? undefined
@@ -352,7 +337,6 @@ function assertPackageFiles(root: string, manifest: SkillPackageManifest): void 
     ...Object.values(manifest.harness_resources ?? {}).flatMap((resources) => Object.values(resources).flat()),
     ...(manifest.runtime_files ?? []),
     ...Object.values(manifest.runtime_artifacts ?? {}),
-    ...Object.keys(manifest.runtime_shared_files ?? {}),
     ...(manifest.instruction_fragment ? [manifest.instruction_fragment] : []),
   ])
   for (const rel of declared) {
