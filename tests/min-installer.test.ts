@@ -49,8 +49,8 @@ test('compiled installer blocks a skill whose minimum installer is newer', async
     })
 
     expect(result.status).not.toBe(0)
-    expect(result.stderr).toContain('Map 0.2.0 requires jl-skills 0.6.0 or newer; running 0.5.0.')
-    expect(result.stderr).toContain('jl-skills 0.6.0 is available.')
+    expect(result.stderr).toContain('Map 0.3.0 requires jl-skills 0.7.0 or newer; running 0.6.0.')
+    expect(result.stderr).toContain('jl-skills 0.7.0 is available.')
     expect(existsSync(join(project, '.agents', 'skills', 'map'))).toBe(false)
     expect(existsSync(join(home, '.jl-skills', 'map', 'bin', 'map.exe'))).toBe(false)
   } finally {
