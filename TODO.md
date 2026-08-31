@@ -196,7 +196,7 @@ Completed implementation:
 - Windows x64 uses `windows-2025`, Windows ARM64 uses the GA `windows-11-vs2026-arm` image, macOS uses native Intel/ARM runners, and Linux uses native x64/ARM64 Ubuntu runners;
 - GNU and musl Linux builds use the same native architecture runners, with `musl`/`musl-tools` plus target-specific Rust linker configuration for musl;
 - every target runs target-specific Map Rust tests, builds its target-qualified installer/package, launches the compiled installer and Map runtime, and runs target-contract tests;
-- Windows x64 additionally retains the established full installer regression suite until step 8 generalizes consumer lifecycle acceptance across every target;
+- Windows x64 additionally retains the established full installer regression suite;
 - every target uploads an isolated `target-<key>` artifact containing its installer, skill package fragment, and target manifest fragment;
 - `scripts/aggregate-release.ts` independently compares downloaded artifacts against all eight canonical targets and the source skill catalog, verifies exact filenames/URLs/SHA-256 values/version metadata, and rejects missing/extra/foreign target coverage;
 - only the verified aggregate release bundle can reach Nightly or Stable publication;
@@ -217,6 +217,16 @@ For every required target, verify the actual release artifact can:
 - avoid downloading/installing foreign-platform binaries.
 
 Where scope semantics apply, retain the existing project/custom/user scope lifecycle guarantees.
+
+Acceptance implementation is complete; this checkbox remains open until the eight-target workflow has actually passed it:
+
+- `tests/consumer-acceptance.test.ts` drives the compiled target-qualified installer against that target job's real `manifest.json` and Map package through a local release server;
+- every matrix target runs the same consumer acceptance suite;
+- project/custom-path acceptance installs Map into both Codex and Claude, verifies native harness resources and exact-target runtime metadata, executes the installed Map runtime, forces and repairs a stale skill/runtime update, and preserves unrelated plus `.map` generated data;
+- staged Codex then Claude uninstall proves scope-local tooling remains until the final harness integration is removed and generated data survives ordinary uninstall;
+- user-scope acceptance verifies user-local harness resources/tooling and proves the invocation project is untouched;
+- the target package fixture contains only the current target's release assets, and installed package/runtime assertions reject foreign-target runtime provisioning;
+- the established Windows x64 regression suite remains separate so deeper UI/filesystem boundary coverage is not duplicated across all eight targets.
 
 ### 9. [ ] Validate OS distribution friction
 
