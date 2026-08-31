@@ -6,13 +6,15 @@ import { join, resolve } from 'node:path'
 const repo = resolve(import.meta.dir, '..')
 const build = join(repo, 'build')
 
-test('Map release archive contains only the documented installable snapshot', () => {
-  const archive = join(build, 'map.zip')
+test('Map release archive contains only its target runtime and documented installable snapshot', () => {
+  const archive = join(build, 'map-windows-x64.zip')
   expect(existsSync(archive)).toBe(true)
+  expect(existsSync(join(build, 'map.zip'))).toBe(false)
   expect(existsSync(join(build, 'map.exe'))).toBe(false)
   expect(existsSync(join(build, 'jl-skills-manifest.json'))).toBe(false)
 
-  const files = new AdmZip(archive)
+  const zip = new AdmZip(archive)
+  const files = zip
     .getEntries()
     .filter((entry) => !entry.isDirectory)
     .map((entry) => entry.entryName.replaceAll('\\', '/').replace(/^\.\//, ''))
@@ -39,4 +41,10 @@ test('Map release archive contains only the documented installable snapshot', ()
     'runtime/windows-x64/map.exe',
     'schema.surql',
   ].sort())
+
+  const packagedManifest = JSON.parse(zip.readAsText('manifest.json'))
+  expect(packagedManifest.version).toBe('0.5.0')
+  expect(packagedManifest.runtime_artifacts).toEqual({
+    'windows-x64': 'runtime/windows-x64/map.exe',
+  })
 })
