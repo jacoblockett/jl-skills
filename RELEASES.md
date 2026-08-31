@@ -1,6 +1,6 @@
 # jl-skills release channels
 
-Status: the complete native build/aggregation, cross-platform consumer-acceptance, post-download distribution-audit, validation-receipt, and Stable-promotion machinery is implemented. The first Stable release remains blocked until the empirical acceptance/distribution gates in `TODO.md` actually pass and any signing-policy blockers are resolved.
+Status: the complete native build/aggregation, cross-platform consumer-acceptance, post-download distribution-audit, validation-receipt, and Stable-promotion machinery is implemented. The first Stable release remains blocked until the empirical acceptance/distribution gates in `TODO.md` actually pass.
 
 This file is the durable release/update contract. `TODO.md` owns the ordered implementation plan and records which empirical release gates remain unfinished.
 
@@ -14,6 +14,7 @@ This file is the durable release/update contract. `TODO.md` owns the ordered imp
 - Repository work is performed directly on `main`; no feature-branch/PR workflow is assumed unless explicitly reintroduced later.
 - Stable publication is not permitted until every required distribution target is built, tested, represented in the release manifest, accepted through the consumer lifecycle, and validated as a downloaded release asset.
 - Stable promotes the exact validated Nightly installer/package bytes rather than rebuilding them after validation.
+- macOS and Windows code signing is intentionally not required. Unsigned-platform trust warnings or policy blocks are accepted distribution friction rather than Stable blockers.
 
 ## Stable release identity
 
@@ -316,7 +317,7 @@ It must:
 - replace the rolling Nightly candidate assets rather than accumulate dated Nightly releases;
 - remove any prior `validation.json` before replacing candidate assets so stale validation can never authorize a new candidate;
 - run a second eight-target matrix that downloads the actual GitHub Release assets and evaluates consumer distribution behavior;
-- create `validation.json` only after every post-download distribution job passes;
+- create `validation.json` only after every post-download distribution job passes under the configured release policy;
 - move the rolling `nightly` tag to the candidate commit only after successful post-download validation and receipt creation;
 - never become GitHub's latest normal Stable release.
 
@@ -346,11 +347,13 @@ After the complete bundle is published as a Nightly candidate, each native runne
 
 The audit re-verifies the published URLs and SHA-256 values, extracts the downloaded Map package, verifies its exact target runtime metadata, and executes the downloaded installer/runtime after applying any required ordinary file permission.
 
-Platform-specific release blockers are:
+The release signing policy is explicitly `unsigned-accepted`:
 
-- macOS: downloaded executables must carry a Developer ID Application signature and pass Gatekeeper `spctl` assessment after a quarantine attribute is applied. If these checks fail, the candidate is not Stable-eligible.
-- Windows: downloaded executables must have valid Authenticode signatures. SmartScreen/Smart App Control reputation remains part of distribution acceptability even with a valid signature; unsigned artifacts are not Stable-eligible under the current gate.
+- macOS: Developer ID signature state and quarantine-time `spctl` Gatekeeper behavior are recorded as non-blocking distribution-friction observations. Gatekeeper rejection attributable to unsigned distribution is accepted.
+- Windows: Authenticode status is recorded as a non-blocking distribution-friction observation. SmartScreen reputation warnings and Smart App Control blocking attributable to unsigned distribution are accepted.
 - Linux: both GNU and musl artifacts must launch on their intended native environment and report the expected ABI. The audit records whether the HTTP download retained executable permission; requiring a documented `chmod +x` for a raw binary is acceptable unless the distribution format is changed later.
+
+Signing/trust observations do not make a report fail under this policy. Integrity failures, missing or foreign-target artifacts, malformed packages, target/ABI mismatches, and inability to execute after ordinary platform preparation remain blocking.
 
 One machine-readable report is produced for each target. Any blocking check prevents Nightly finalization and therefore prevents Stable promotion.
 
@@ -363,9 +366,10 @@ The receipt binds:
 - the exact `main` commit SHA;
 - the exact Nightly `manifest.json` SHA-256;
 - the exact eight canonical target keys;
-- the workflow run that performed validation.
+- the workflow run that performed validation;
+- the exact `unsigned-accepted` signing policy.
 
-Stable dispatch re-downloads both `validation.json` and Nightly `manifest.json` and refuses to proceed unless the receipt matches the current `main` SHA and current Nightly manifest bytes.
+Stable dispatch re-downloads both `validation.json` and Nightly `manifest.json` and refuses to proceed unless the receipt matches the current `main` SHA, current Nightly manifest bytes, required target set, and current signing policy.
 
 The validation receipt is release state, not installer/update metadata. It is not included in Stable release contents.
 
@@ -393,7 +397,7 @@ Stable is an immutable promotion of a validated Nightly snapshot, not a fresh co
 
 On Stable dispatch:
 
-1. verify the current `main` SHA has a matching Nightly validation receipt;
+1. verify the current `main` SHA has a matching Nightly validation receipt under the current signing policy;
 2. download the complete validated Nightly release snapshot;
 3. re-verify the receipt against the downloaded Nightly manifest;
 4. verify every installer/package file against the Nightly manifest SHA-256 and the canonical source skill/target contract;
@@ -464,9 +468,8 @@ The current cross-platform acceptance and distribution machinery is implemented 
 The first Stable release is blocked until:
 
 - the eight-target consumer acceptance matrix actually passes;
-- the post-download distribution-friction matrix actually passes;
-- any signing/notarization remediation required by those audits is complete;
+- the post-download distribution-friction matrix actually passes under the explicit `unsigned-accepted` policy;
 - a matching Nightly `validation.json` exists for the exact current `main` commit;
 - an intentional Stable dispatch promotes that exact validated Nightly snapshot.
 
-The mechanical gates are implemented. Until the empirical checks pass, Stable cannot satisfy the receipt requirement and therefore cannot publish.
+Code signing/notarization is intentionally outside the Stable gate. The mechanical gates are implemented. Until the empirical checks pass, Stable cannot satisfy the receipt requirement and therefore cannot publish.
