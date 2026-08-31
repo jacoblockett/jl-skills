@@ -51,7 +51,6 @@ function command(command: string, args: string[]): { status: number; stdout: str
 }
 
 function runExecutable(path: string, args: string[]): void {
-  if (target.os !== 'windows') chmodSync(path, 0o755)
   const result = command(path, args)
   record(
     `${basename(path)} launches`,
@@ -114,11 +113,11 @@ function binaryAbi(path: string): string {
 }
 
 function auditLinux(path: string): void {
-  const originalExecutable = (statSync(path).mode & 0o111) !== 0
+  const downloadedExecutable = (statSync(path).mode & 0o111) !== 0
   record(
     `${basename(path)} download executable bit`,
-    originalExecutable,
-    originalExecutable ? 'download retained an executable bit' : 'raw GitHub Release download requires chmod +x',
+    downloadedExecutable,
+    downloadedExecutable ? 'download retained an executable bit' : 'raw GitHub Release download requires chmod +x',
     false,
   )
 
@@ -130,6 +129,19 @@ function auditLinux(path: string): void {
     const gnu = /ld-linux|glibc|GNU\/Linux/i.test(abi)
     record(`${basename(path)} GNU ABI`, gnu, abi.trim())
   }
+}
+
+function auditAndRun(path: string, args: string[]): void {
+  if (target.os === 'macos') {
+    chmodSync(path, 0o755)
+    auditMac(path)
+  } else if (target.os === 'windows') {
+    auditWindows(path)
+  } else {
+    auditLinux(path)
+    chmodSync(path, 0o755)
+  }
+  runExecutable(path, args)
 }
 
 try {
@@ -154,8 +166,6 @@ try {
       record('Map release SHA-256', mapEntry.sha256 === sha256(mapArchive), mapEntry.sha256)
     }
 
-    runExecutable(installer, ['--version'])
-
     rmSync(extractedMap, { recursive: true, force: true })
     mkdirSync(extractedMap, { recursive: true })
     extractZip(mapArchive, extractedMap)
@@ -174,18 +184,9 @@ try {
     )
     const runtime = join(extractedMap, runtimeRelative)
     record('Map package runtime downloaded', existsSync(runtime), runtime)
-    if (existsSync(runtime)) runExecutable(runtime, ['--help'])
 
-    if (target.os === 'macos') {
-      auditMac(installer)
-      if (existsSync(runtime)) auditMac(runtime)
-    } else if (target.os === 'windows') {
-      auditWindows(installer)
-      if (existsSync(runtime)) auditWindows(runtime)
-    } else {
-      auditLinux(installer)
-      if (existsSync(runtime)) auditLinux(runtime)
-    }
+    auditAndRun(installer, ['--version'])
+    if (existsSync(runtime)) auditAndRun(runtime, ['--help'])
   }
 } catch (error) {
   record('distribution audit execution', false, error instanceof Error ? error.stack || error.message : String(error))
