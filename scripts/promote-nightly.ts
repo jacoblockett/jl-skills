@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parseReleaseManifest } from '../src/installer-updater'
 import {
   TARGET_KEYS,
@@ -22,12 +22,14 @@ if (!existsSync(sourceManifestPath)) throw new Error('validated Nightly manifest
 const manifest = parseReleaseManifest(JSON.parse(readFileSync(sourceManifestPath, 'utf8')))
 const sourceSkillsRoot = join(repo, 'skills')
 const stableBase = `https://github.com/jacoblockett/jl-skills/releases/download/${stableTag}`
+const expectedAssets = new Set<string>()
 
 function sha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
 function requireArtifact(name: string, expectedSha: string): void {
+  expectedAssets.add(name)
   const path = join(input, name)
   if (!existsSync(path) || !statSync(path).isFile()) throw new Error(`validated Nightly asset is missing: ${name}`)
   const actual = sha256(path)
@@ -97,13 +99,17 @@ for (const name of sourceSkillNames) {
   }
 }
 
+const actualAssets = readdirSync(input)
+  .filter((entry) => entry !== 'manifest.json' && entry !== 'validation.json' && statSync(join(input, entry)).isFile())
+  .sort()
+const expectedAssetList = [...expectedAssets].sort()
+if (actualAssets.join('\0') !== expectedAssetList.join('\0')) {
+  throw new Error(`validated Nightly assets do not match the release contract: expected ${expectedAssetList.join(', ')}, got ${actualAssets.join(', ')}`)
+}
+
 rmSync(output, { recursive: true, force: true })
 mkdirSync(output, { recursive: true })
-for (const entry of readdirSync(input).sort()) {
-  if (entry === 'manifest.json' || entry === 'validation.json') continue
-  const source = join(input, entry)
-  if (statSync(source).isFile()) copyFileSync(source, join(output, entry))
-}
+for (const entry of expectedAssetList) copyFileSync(join(input, entry), join(output, entry))
 writeFileSync(join(output, 'manifest.json'), `${JSON.stringify(promoted, null, 2)}\n`)
 
 console.log(`Promoted validated Nightly assets to Stable snapshot ${stableTag}`)
