@@ -85,10 +85,9 @@ Completed implementation:
 - the build selects a canonical target and injects it into the standalone installer as `JL_SKILLS_COMPILED_TARGET`;
 - standalone installer startup validates that the compiled target was injected and is supported;
 - the current pre-matrix build remains intentionally restricted to Windows x64 until step 7;
-- Bun is pinned to `1.4.0` in both project metadata and GitHub Actions;
-- target-aware release-manifest/package selection remains intentionally deferred to steps 3 and 6 rather than changing format-1 behavior early.
+- Bun is pinned to `1.4.0` in both project metadata and GitHub Actions.
 
-### 3. [ ] Move the release manifest to a target-aware schema
+### 3. [x] Move the release manifest to a target-aware schema
 
 Introduce a new release-manifest format rather than changing format-1 semantics in place.
 
@@ -97,6 +96,17 @@ The installer entry must expose a version plus an artifact map keyed by target.
 Each skill entry must expose a version, minimum installer version, and artifact map keyed by target, with optional `portable` fallback for skills that contain no native platform-specific payload.
 
 Every artifact entry retains an immutable release URL and SHA-256.
+
+Completed implementation:
+
+- `scripts/build.ts` now emits release-manifest format 2 with installer and skill `artifacts` maps;
+- `src/installer-updater.ts` parses only format 2 and validates canonical target keys, SHA-256 values, installer non-portability, and optional skill `portable` artifacts;
+- format 1 is obsolete and no longer emitted by the build;
+- release fixtures and updater regression coverage use the format-2 shape;
+- the current pre-matrix build intentionally emits only its `windows-x64` entries until per-target packaging/build aggregation exists;
+- current temporary Windows artifact use remains isolated from the final compiled-target selection work in step 6;
+- ambiguous pre-matrix output filenames remain intentionally unchanged until step 5;
+- Nightly and Stable publication are temporarily blocked so an incomplete one-target format-2 manifest cannot replace a release.
 
 ### 4. [ ] Package native skills per target
 
@@ -184,4 +194,4 @@ Only after steps 1-9 pass should the first stable snapshot be published.
 
 Stable publication must enforce the complete required target set rather than relying on a manual checklist or memory.
 
-The existing rolling Nightly remains the production-test channel while this work is underway.
+The existing rolling Nightly remains the production-test channel once release publication is re-enabled after the matrix/aggregation work is complete.
