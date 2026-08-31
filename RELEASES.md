@@ -1,8 +1,8 @@
 # jl-skills release channels
 
-Status: the complete native build/aggregation matrix is implemented. The first Stable release remains blocked on cross-platform consumer acceptance and distribution-friction validation in `TODO.md`.
+Status: the complete native build/aggregation, cross-platform consumer-acceptance, post-download distribution-audit, validation-receipt, and Stable-promotion machinery is implemented. The first Stable release remains blocked until the empirical acceptance/distribution gates in `TODO.md` actually pass and any signing-policy blockers are resolved.
 
-This file is the durable release/update contract. `TODO.md` owns the ordered implementation plan for unfinished cross-platform release work.
+This file is the durable release/update contract. `TODO.md` owns the ordered implementation plan and records which empirical release gates remain unfinished.
 
 ## Core model
 
@@ -12,7 +12,8 @@ This file is the durable release/update contract. `TODO.md` owns the ordered imp
 - One stable snapshot contains the current installer and every currently published skill package for every required supported target.
 - Updating the installer and updating a skill are independent operations unless that skill explicitly requires a newer installer capability.
 - Repository work is performed directly on `main`; no feature-branch/PR workflow is assumed unless explicitly reintroduced later.
-- Stable publication is not permitted until every required distribution target is built, tested, represented in the release manifest, and validated as defined in `TODO.md`.
+- Stable publication is not permitted until every required distribution target is built, tested, represented in the release manifest, accepted through the consumer lifecycle, and validated as a downloaded release asset.
+- Stable promotes the exact validated Nightly installer/package bytes rather than rebuilding them after validation.
 
 ## Stable release identity
 
@@ -110,13 +111,15 @@ https://github.com/jacoblockett/jl-skills/releases/latest/download/manifest.json
 
 Nightly remains a prerelease so GitHub `latest` resolves only to a normal Stable snapshot once Stable exists.
 
+Raw non-Windows executable assets do not carry a POSIX executable mode over HTTP. Consumer instructions for direct macOS/Linux binary downloads must therefore include `chmod +x` before first launch unless the distribution format changes later.
+
 ## Release manifest
 
 `manifest.json` is the sole remote index used for release/update discovery. `jl-skills` does not enumerate release history or download skill packages merely to discover versions.
 
 Release-manifest format 2 is the active source/build contract. Format 1 is obsolete pre-stable implementation history and is no longer emitted by the build.
 
-Each target build emits a format-2 fragment containing only its installer artifact, that target's native skill packages, and any portable package assigned to the designated portable-package job. `scripts/aggregate-release.ts` independently verifies all eight target fragments against the canonical target set and source skill catalog before producing the publishable complete manifest.
+Each target build emits a format-2 fragment containing only its installer artifact, that target's native skill packages, and any portable package assigned to the designated portable-package job. `scripts/aggregate-release.ts` independently verifies all eight target fragments against the canonical target set and source skill catalog before producing the complete Nightly candidate manifest.
 
 Format 2 has this exact structural contract:
 
@@ -161,6 +164,8 @@ Format-2 invariants:
 - The installer resolves an artifact by exact canonical target key first. For skills only, if that exact key is absent, an explicitly published `portable` artifact may be used.
 - Absence of a compatible exact-target or allowed portable skill artifact is an incompatibility error. Another OS, architecture, or ABI is never a fallback.
 - Unrelated artifact entries do not change the running installer's embedded target identity.
+
+Stable promotion preserves every validated Nightly artifact SHA-256 and rewrites only the artifact URLs in `manifest.json` from the rolling Nightly identity to the immutable Stable timestamp tag.
 
 No distribution-level semantic version exists.
 
@@ -306,19 +311,69 @@ It must:
 
 - build only from `main`;
 - run automatically at 2:00 AM Eastern and support manual dispatch;
-- skip compilation/publication when no build-relevant source changed since the previous successful nightly unless forced;
-- build and test the same artifact model intended for Stable;
-- replace the rolling Nightly assets rather than accumulate dated Nightly releases;
-- move the `nightly` tag only after successful build/test/publication;
+- skip compilation/publication when no build-relevant source changed since the previous validated Nightly unless forced;
+- run the full eight-target build/test/consumer-acceptance matrix;
+- replace the rolling Nightly candidate assets rather than accumulate dated Nightly releases;
+- remove any prior `validation.json` before replacing candidate assets so stale validation can never authorize a new candidate;
+- run a second eight-target matrix that downloads the actual GitHub Release assets and evaluates consumer distribution behavior;
+- create `validation.json` only after every post-download distribution job passes;
+- move the rolling `nightly` tag to the candidate commit only after successful post-download validation and receipt creation;
 - never become GitHub's latest normal Stable release.
 
-Nightly publication is enabled only through the same complete eight-target aggregation gate used by Stable. A partial matrix never reaches the release step.
+A failed Nightly candidate may remain available as production-test assets, but without a matching `validation.json` it is not a validated release and cannot be promoted to Stable.
+
+## Consumer acceptance gate
+
+Before a Nightly candidate reaches GitHub Releases, every required target runs the same release-critical consumer lifecycle against its own compiled installer and target-specific Map package.
+
+The acceptance path verifies at least:
+
+- compiled installer launch and embedded-target package selection;
+- project/custom-scope installation into both Codex and Claude;
+- harness-native resource placement;
+- exact-target runtime metadata and runtime execution;
+- stale skill/runtime update;
+- preservation of `.map` generated data and unrelated files;
+- staged harness uninstall with scope-local tooling retained until the final integration disappears;
+- user-scope installation/uninstallation without touching the invocation project;
+- absence of foreign-target runtime provisioning.
+
+Windows x64 additionally retains the broader installer regression suite for UI and filesystem-boundary behavior.
+
+## Distribution-friction gate
+
+After the complete bundle is published as a Nightly candidate, each native runner downloads the exact `manifest.json`, installer, and Map archive from the GitHub Release and runs `scripts/audit-distribution.ts`.
+
+The audit re-verifies the published URLs and SHA-256 values, extracts the downloaded Map package, verifies its exact target runtime metadata, and executes the downloaded installer/runtime after applying any required ordinary file permission.
+
+Platform-specific release blockers are:
+
+- macOS: downloaded executables must carry a Developer ID Application signature and pass Gatekeeper `spctl` assessment after a quarantine attribute is applied. If these checks fail, the candidate is not Stable-eligible.
+- Windows: downloaded executables must have valid Authenticode signatures. SmartScreen/Smart App Control reputation remains part of distribution acceptability even with a valid signature; unsigned artifacts are not Stable-eligible under the current gate.
+- Linux: both GNU and musl artifacts must launch on their intended native environment and report the expected ABI. The audit records whether the HTTP download retained executable permission; requiring a documented `chmod +x` for a raw binary is acceptable unless the distribution format is changed later.
+
+One machine-readable report is produced for each target. Any blocking check prevents Nightly finalization and therefore prevents Stable promotion.
+
+## Validation receipt
+
+`scripts/validation-receipt.ts` creates `validation.json` only after all eight distribution reports pass.
+
+The receipt binds:
+
+- the exact `main` commit SHA;
+- the exact Nightly `manifest.json` SHA-256;
+- the exact eight canonical target keys;
+- the workflow run that performed validation.
+
+Stable dispatch re-downloads both `validation.json` and Nightly `manifest.json` and refuses to proceed unless the receipt matches the current `main` SHA and current Nightly manifest bytes.
+
+The validation receipt is release state, not installer/update metadata. It is not included in Stable release contents.
 
 ## Publication completeness gate
 
-Nightly and Stable publication are both mechanically blocked unless all of the following are true in the same release attempt:
+Nightly candidate publication is mechanically blocked unless all of the following are true in the same build attempt:
 
-1. every required target build/test job succeeded;
+1. every required target build/test/consumer-acceptance job succeeded;
 2. the aggregator received an installer artifact for all eight canonical targets;
 3. the aggregator received a package artifact for all eight canonical targets for every native published skill;
 4. every portable published skill has its declared `portable` package artifact;
@@ -326,9 +381,27 @@ Nightly and Stable publication are both mechanically blocked unless all of the f
 6. the generated format-2 manifest contains the complete expected installer artifact set and complete compatible artifact coverage for every published skill;
 7. the aggregator independently compares the produced target keys against the canonical required target set and source skill catalog rather than trusting matrix job count alone.
 
-Failure of any condition stops publication. The workflow must not create/advance a Stable snapshot, replace Nightly assets, or advance the `nightly` tag with a partial or failed target set.
+Nightly finalization additionally requires all eight post-download distribution audits and a matching validation receipt.
+
+Stable publication additionally requires that the current `main` SHA already owns a valid Nightly receipt and that promotion re-verifies every validated Nightly asset hash and complete target/skill set.
 
 Additional targets may be added only by updating the canonical contract. Missing required targets are always fatal.
+
+## Stable promotion
+
+Stable is an immutable promotion of a validated Nightly snapshot, not a fresh compilation.
+
+On Stable dispatch:
+
+1. verify the current `main` SHA has a matching Nightly validation receipt;
+2. download the complete validated Nightly release snapshot;
+3. re-verify the receipt against the downloaded Nightly manifest;
+4. verify every installer/package file against the Nightly manifest SHA-256 and the canonical source skill/target contract;
+5. copy those exact validated bytes into the Stable candidate bundle;
+6. rewrite only the artifact URLs in `manifest.json` from `/download/nightly/...` to `/download/<timestamp>/...` while preserving artifact SHA-256 values;
+7. publish a new immutable timestamped normal GitHub release.
+
+A Stable dispatch against an unvalidated or subsequently changed `main` commit fails before publication.
 
 ## Workflow direction
 
@@ -336,16 +409,36 @@ One GitHub Actions workflow owns build/release behavior.
 
 The repository is main-only development. Workflow behavior does not assume feature branches or pull requests.
 
-The active workflow shape is:
+Manual build path:
 
 ```text
 prepare
-  -> eight-target native build/test matrix
+  -> eight-target native build/test/consumer matrix
   -> aggregate/validate complete release bundle
-  -> publish Nightly or Stable when requested
+  -> workflow artifact only
 ```
 
-The matrix uses `fail-fast: false`. Each target produces an isolated artifact fragment. Aggregation runs only after every required target job succeeds and independently verifies the complete target/skill set before publication. Manual `build` produces the same verified aggregate bundle without publishing it.
+Nightly path:
+
+```text
+prepare
+  -> eight-target native build/test/consumer matrix
+  -> aggregate/validate complete bundle
+  -> publish rolling Nightly candidate assets
+  -> eight-target post-download distribution audit
+  -> validation receipt + Nightly finalization
+```
+
+Stable path:
+
+```text
+prepare + verify current Nightly receipt
+  -> download validated Nightly snapshot
+  -> reverify and promote exact bytes
+  -> publish immutable timestamped Stable
+```
+
+Both matrices use `fail-fast: false` so target failures remain visible.
 
 ## Current acceptance state
 
@@ -362,16 +455,18 @@ Windows x64 production-path acceptance previously passed for installer `0.7.0` /
 - generic redundant install/update/uninstall outro messages have been removed;
 - the earlier rolling Nightly workflow was exercised repeatedly through real release downloads.
 
-That acceptance predates the Map `0.5.0` target-package change. It remains evidence for the Windows lifecycle behavior, not acceptance of the new cross-platform release artifacts.
+That acceptance predates the Map `0.5.0` target-package change. It remains historical evidence for the Windows lifecycle behavior, not acceptance of the new cross-platform release artifacts.
 
-The complete native build/test/aggregation path is now implemented, but Stable remains blocked until step 8 executes consumer lifecycle acceptance on every required target and step 9 evaluates real OS distribution friction/signing requirements.
+The current cross-platform acceptance and distribution machinery is implemented but has not yet been recorded as passing. `TODO.md` remains authoritative for those empirical gates.
 
 ## Stable gate
 
-The first Stable release is blocked until every ordered item in `TODO.md` is complete, including:
+The first Stable release is blocked until:
 
-- consumer acceptance on every required target;
-- OS-specific distribution-friction/signing review;
-- any remediation those checks identify.
+- the eight-target consumer acceptance matrix actually passes;
+- the post-download distribution-friction matrix actually passes;
+- any signing/notarization remediation required by those audits is complete;
+- a matching Nightly `validation.json` exists for the exact current `main` commit;
+- an intentional Stable dispatch promotes that exact validated Nightly snapshot.
 
-The mechanical complete-target publication gate is already implemented and remains mandatory for every Nightly and Stable snapshot.
+The mechanical gates are implemented. Until the empirical checks pass, Stable cannot satisfy the receipt requirement and therefore cannot publish.
