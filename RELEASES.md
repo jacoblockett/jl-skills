@@ -100,7 +100,7 @@ jl-skills.exe
 map.zip
 ```
 
-Those names remain part of the current pre-stable/Nightly implementation only and are replaced when release-manifest format 2 becomes active.
+Those ambiguous names remain temporary pre-matrix build outputs only. Release-manifest format 2 is now active in source/build output, but target-qualified public filenames are still pending `TODO.md` step 5. Nightly and Stable publication are temporarily blocked while the release output is incomplete.
 
 The stable public update index remains:
 
@@ -114,7 +114,9 @@ Nightly remains a prerelease so GitHub `latest` resolves only to a normal Stable
 
 `manifest.json` is the sole remote index used for release/update discovery. `jl-skills` does not enumerate release history or download skill packages merely to discover versions.
 
-The current pre-stable implementation uses release-manifest format 1 with one installer artifact and one archive per skill. That format is intentionally Windows-only and must not become the first Stable contract.
+Release-manifest format 2 is the active source/build contract. Format 1 is obsolete pre-stable implementation history and is no longer emitted by the build.
+
+During the current migration, the Windows-only pre-matrix build emits a valid format-2 manifest containing only its `windows-x64` artifacts. That partial manifest is suitable for development/build validation only and must not be published to Nightly or Stable. Publication remains blocked until the complete target set is produced and aggregated.
 
 The first Stable release uses release-manifest format 2. Format 2 has this exact structural contract:
 
@@ -266,7 +268,7 @@ Map currently declares native Codex and Claude subagent resources separately and
 
 Current Map semantic/package version is `0.4.0`; current installer version is `0.7.0`. Map requires installer `0.7.0`.
 
-The current Windows-only pre-stable package contains the Windows x64 runtime. Cross-platform work replaces the one-archive model for native skills with target-specific complete packages so a consumer downloads only the runtime for the current target.
+The current Windows-only pre-matrix package contains the Windows x64 runtime. Cross-platform work replaces the one-archive model for native skills with target-specific complete packages so a consumer downloads only the runtime for the current target.
 
 Map's development-only material (`README.md`, `SPEC.md`, Cargo files, Rust source, tests) is not release-package payload.
 
@@ -308,7 +310,9 @@ It must:
 - move the `nightly` tag only after successful build/test/publication;
 - never become GitHub's latest normal Stable release.
 
-Once format 2 is active, Nightly requires the same complete supported target set as Stable and must not publish a partial matrix.
+Format 2 is now active in source/build output. Until the complete native matrix and aggregation gate are implemented, scheduled/manual Nightly publication is intentionally blocked rather than publishing a partial format-2 target set.
+
+Once release publication is re-enabled, Nightly requires the same complete supported target set as Stable and must not publish a partial matrix.
 
 ## Publication completeness gate
 
@@ -334,7 +338,7 @@ The repository is main-only development. Workflow behavior must not assume featu
 
 Build/test failures must prevent publication. Stable publication occurs only after all required build/test/aggregate gates succeed.
 
-The current workflow is Windows x64 only. Replacing it with the complete target build/test matrix is release-blocking work tracked in `TODO.md`.
+The current workflow still builds Windows x64 only. Manual `build` remains available for development artifacts, while Nightly and Stable publication are temporarily blocked until the complete target build/test matrix and aggregator replace the pre-matrix flow.
 
 ## Current acceptance state
 
@@ -349,7 +353,7 @@ Windows x64 production-path acceptance has passed for installer `0.7.0` / Map `0
 - generated `.map` semantic state is separate from ordinary uninstall;
 - empty `AGENTS.md` files and harness parent directories are retained on uninstall;
 - generic redundant install/update/uninstall outro messages have been removed;
-- the rolling Nightly workflow has been exercised repeatedly through real release downloads.
+- the rolling Nightly workflow was exercised repeatedly through real release downloads before the current cross-platform publication block.
 
 This acceptance is sufficient confidence in the Windows lifecycle implementation, but it is not sufficient to publish Stable because the required Linux/macOS/ARM/ABI release targets are not yet implemented and validated.
 
