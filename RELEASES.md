@@ -1,17 +1,18 @@
 # jl-skills release channels
 
-Status: implementation and consolidated validation complete; nightly acceptance pending.
+Status: Windows production-path acceptance has passed, but the first Stable release is blocked until the cross-platform target work in `To Do.md` is complete.
 
-This file is the durable contract and running checklist for release/update work.
+This file is the durable release/update contract. `To Do.md` owns the ordered implementation plan for unfinished cross-platform release work.
 
 ## Core model
 
 - `jl-skills` and every skill have independent semantic versions.
 - A stable GitHub release is a distribution snapshot, not a master semantic version.
 - Stable update discovery uses only the latest normal GitHub release. Nightly never participates in stable update discovery.
-- One stable release contains the current installer and every currently published skill package, regardless of which component changed.
+- One stable snapshot contains the current installer and every currently published skill package for every required supported target.
 - Updating the installer and updating a skill are independent operations unless that skill explicitly requires a newer installer capability.
 - Repository work is performed directly on `main`; no feature-branch/PR workflow is assumed unless explicitly reintroduced later.
+- Stable publication is not permitted until every required distribution target is built, tested, represented in the release manifest, and validated as defined in `To Do.md`.
 
 ## Stable release identity
 
@@ -26,69 +27,51 @@ YYYY.MM.DD-HHmmZ
 Example:
 
 ```text
-2026.08.29-0141Z
+2026.08.31-0518Z
 ```
 
 Use UTC. The release timestamp identifies only the distribution snapshot; component compatibility still uses each component's own semantic version.
 
-## Stable release assets
+Stable release tags are immutable.
 
-Top-level assets:
+## Release assets and naming
+
+Release assets must identify their target operating system and architecture directly. A user must not need to infer compatibility from a file extension.
+
+The required target matrix and exact naming policy are locked in `To Do.md` while the target-aware build/release implementation is developed.
+
+Do not publish the first Stable release using the current ambiguous Windows-only asset names such as:
 
 ```text
-manifest.json
 jl-skills.exe
 map.zip
 ```
 
-Additional skills follow the same `<skill>.zip` pattern. Each skill archive is the complete immutable snapshot of that released skill version.
+Those names remain part of the current pre-stable/Nightly implementation only and are scheduled for replacement by explicit target-qualified names before Stable.
 
-The stable public update index is:
+The stable public update index remains:
 
 ```text
 https://github.com/jacoblockett/jl-skills/releases/latest/download/manifest.json
 ```
 
-Nightly remains a prerelease so GitHub `latest` continues to resolve to the current stable snapshot.
+Nightly remains a prerelease so GitHub `latest` resolves only to a normal Stable snapshot once Stable exists.
 
-## Stable `manifest.json`
+## Release manifest
 
-The latest stable `manifest.json` is the sole remote index used for stable update discovery. `jl-skills` does not enumerate release history or download skill archives merely to discover versions.
+`manifest.json` is the sole remote index used for release/update discovery. `jl-skills` does not enumerate release history or download skill packages merely to discover versions.
 
-Exact schema:
+The current pre-stable implementation uses release-manifest format 1 with one installer artifact and one archive per skill. That format is intentionally Windows-only and must not become the first Stable contract.
 
-```json
-{
-  "format": 1,
-  "installer": {
-    "version": "0.6.0",
-    "url": "https://github.com/jacoblockett/jl-skills/releases/download/2026.08.29-0141Z/jl-skills.exe",
-    "sha256": "<64 lowercase hex characters>"
-  },
-  "skills": {
-    "map": {
-      "version": "0.3.0",
-      "min_installer": "0.5.0",
-      "url": "https://github.com/jacoblockett/jl-skills/releases/download/2026.08.29-0141Z/map.zip",
-      "sha256": "<64 lowercase hex characters>"
-    }
-  }
-}
-```
+Before Stable, the release manifest will move to a new target-aware format as specified by `To Do.md`. The new format must retain these existing invariants:
 
-Contract:
-
-- `format` is the release-manifest schema version. The current format is `1`.
-- `installer.version` is the newest stable installer semantic version in this snapshot.
-- `installer.url` is the immutable URL for that snapshot's installer asset.
-- `installer.sha256` verifies the downloaded installer.
-- `skills` is keyed by stable skill name.
-- `skills.<name>.version` is the newest stable semantic version of that skill in this snapshot.
-- `skills.<name>.min_installer` is the minimum `jl-skills` semantic version capable of installing/updating that skill version.
-- `skills.<name>.url` is the immutable URL for that snapshot's complete skill archive.
-- `skills.<name>.sha256` verifies the downloaded skill archive.
-
-Artifact URLs inside the manifest must point to the immutable timestamped release, not `releases/latest/...`. This keeps the manifest and the assets it describes bound to the same snapshot even if another stable release is published between manifest fetch and artifact download.
+- installer and skill semantic versions remain independent;
+- every downloadable artifact has an immutable snapshot URL and SHA-256;
+- skill entries retain `min_installer` compatibility metadata;
+- artifact URLs point to the immutable timestamped snapshot, not a moving `releases/latest/...` asset URL;
+- the running installer selects only an artifact compatible with its own canonical target;
+- a platform-independent skill may explicitly publish a `portable` artifact;
+- absence of a compatible target artifact is an error, never permission to download another architecture/OS/ABI.
 
 No distribution-level semantic version exists.
 
@@ -98,27 +81,28 @@ No distribution-level semantic version exists.
 
 The running executable knows its own compiled semantic version.
 
-To check for an installer update:
+Stable installer update behavior remains:
 
 1. fetch the latest stable `manifest.json`;
-2. compare the running installer semantic version with `manifest.installer.version`;
-3. if the manifest version is newer, report that version as the available installer update;
-4. if requested, download `manifest.installer.url`, verify `manifest.installer.sha256`, and replace only the installer.
+2. compare the running installer semantic version with the published installer version;
+3. if the published version is newer, report it as available;
+4. select only the artifact for the running installer's canonical target;
+5. if requested, download that artifact, verify its SHA-256, and replace only the installer.
 
 A newer installer is never forced merely because it exists.
 
 ### Skills
 
-The selected scope's filesystem remains the source of truth for installed skill state. An installed catalog skill reports its own name/version in its installed `SKILL.md` metadata.
+The selected scope's filesystem remains the source of truth for installed skill state. An installed catalog skill reports its own name/version in installed `SKILL.md` metadata.
 
-To check for a skill update:
+Skill update behavior remains:
 
-1. read the installed skill version from its installed `SKILL.md` metadata;
+1. read the installed skill version from `SKILL.md` metadata;
 2. fetch/read the corresponding entry in the latest stable `manifest.json`;
-3. compare the installed semantic version with `manifest.skills.<name>.version`;
-4. if the manifest version is newer, report that version as the available skill update;
-5. before installation, verify the running installer satisfies `manifest.skills.<name>.min_installer`;
-6. if compatible and requested, download the skill archive, verify its SHA-256, and install that archive snapshot.
+3. compare installed and published semantic versions;
+4. before installation, verify the running installer satisfies the skill's `min_installer`;
+5. select only the skill package for the running installer's canonical target, or an explicitly published `portable` package;
+6. download only that package, verify its SHA-256, and install that snapshot.
 
 The manifest inside a skill archive is not used for update discovery. The archive is downloaded only when installing/updating that skill.
 
@@ -126,7 +110,7 @@ If installed version metadata is missing or malformed, presence may still be rec
 
 ## Compatibility
 
-Each released skill version declares a minimum installer version through `min_installer` in its source/package `manifest.json`. The build copies that value into the corresponding top-level release-manifest entry; it is authored once rather than maintained separately.
+Each released skill version declares a minimum installer version through `min_installer` in its source/package `manifest.json`. The build derives the release-manifest compatibility entry from that authored value.
 
 If the running installer satisfies that minimum, the skill may install/update even when a newer installer exists.
 
@@ -134,136 +118,136 @@ If the running installer is below the skill's minimum:
 
 1. report the skill update and its installer requirement;
 2. compare the latest stable installer version from the same release manifest;
-3. report an available installer update if it can satisfy the requirement;
+3. report an available compatible installer update if one exists for the current target;
 4. offer/allow the installer update, but never perform it silently;
-5. block only the incompatible skill operation if the required installer capability is unavailable or the user declines the necessary installer update.
+5. block only the incompatible skill operation if the required installer capability is unavailable or declined.
 
 There is no general installer-first policy.
 
-## Skill packages
+## Skill package model
 
-Every skill source directory uses the contextual name:
+Every skill source directory uses:
 
 ```text
 skills/<name>/manifest.json
 ```
 
-That same file is included at the root of the released `<skill>.zip` and is the authoritative description of that immutable skill snapshot.
+The package manifest is the authoritative description of that immutable skill snapshot.
 
-Required package-manifest fields:
+Current required fields are:
 
-- `format`: package-manifest schema version; currently `1`;
-- `name`: stable skill identifier and archive basename;
-- `version`: skill semantic version;
-- `min_installer`: minimum compatible `jl-skills` semantic version;
-- `description`: catalog/UI description;
-- `skill_files`: files/directories copied into each selected harness's skill directory.
+- `format`;
+- `name`;
+- `version`;
+- `min_installer`;
+- `description`;
+- `skill_files`.
 
-Optional install-semantics fields are present only when the skill needs them: `runtime`, `runtime_artifacts`, `runtime_files`, `runtime_cli`, `runtime_cli_destination`, `runtime_shared_files`, `cli_token`, `instruction_fragment`, and `generated_data`.
+Optional install-semantics fields are present only when needed, including:
 
-Map's exact source/package manifest is:
+- `harness_resources`;
+- `runtime`;
+- `runtime_artifacts`;
+- `runtime_files`;
+- `runtime_cli`;
+- `cli_token`;
+- `instruction_fragment`;
+- `generated_data`.
 
-```json
-{
-  "format": 1,
-  "name": "map",
-  "version": "0.2.0",
-  "min_installer": "0.5.0",
-  "description": "Durable local graph of user intent, questions, decisions, ideas, facts, dependencies, and recovery state.",
-  "skill_files": [
-    "SKILL.md",
-    "agents"
-  ],
-  "runtime": "rust",
-  "runtime_artifacts": {
-    "windows-x64": "runtime/windows-x64/map.exe"
-  },
-  "runtime_cli": "map",
-  "runtime_cli_destination": "~/.jl-skills/map/bin/map.exe",
-  "runtime_shared_files": {
-    "schema.surql": "~/.jl-skills/map/schema.surql"
-  },
-  "cli_token": "JL_MAP_CLI",
-  "instruction_fragment": "AGENTS.fragment.md",
-  "generated_data": [
-    {
-      "path": ".map",
-      "marker": "project.json"
-    }
-  ]
-}
-```
-
-Map's released archive layout is exactly:
+Skill packages do not choose absolute or scope-independent runtime destinations. Runtime/tooling is installed under the selected scope's neutral directory:
 
 ```text
-map.zip
-  manifest.json
-  SKILL.md
-  AGENTS.fragment.md
-  agents/
-    map-completion-auditor.toml
-    map-context.toml
-    map-discovery-reviewer.toml
-    map-discovery.toml
-    map-linguist.toml
-    map-state-reviewer.toml
-    map-state-writer.toml
-  schema.surql
-  runtime/
-    windows-x64/
-      map.exe
+user scope       ~/.jl-skills/<skill>/
+project/custom   <scope>/.jl-skills/<skill>/
 ```
 
-The archive contains only the installable snapshot. Map's `README.md`, `SPEC.md`, Cargo files, Rust source, tests, and other development material are not package payload.
+Harness-specific resources are declared by the skill package but their installation locations are owned by harness adapters.
 
-The build validates manifest name/version metadata against `SKILL.md`, stages the declared payload, creates one `<skill>.zip`, hashes the archive, and derives the top-level release-manifest skill entry from that built archive and its package manifest.
+Map currently declares native Codex and Claude subagent resources separately and keeps its runtime/support files outside harness skill-discovery directories.
 
-For non-publishing local/CI builds, `JL_SKILLS_RELEASE_TAG` may be omitted and generated artifact URLs use the placeholder `dev` tag. Release workflows must set `JL_SKILLS_RELEASE_TAG` to the actual snapshot tag before publication.
+Current Map semantic/package version is `0.4.0`; current installer version is `0.7.0`. Map requires installer `0.7.0`.
 
-The installer now consumes independently downloaded skill archives; the old embedded catalog/base64 delivery path and standalone stable `map.exe` asset are no longer part of the implementation.
+The current Windows-only pre-stable package contains the Windows x64 runtime. Cross-platform work will replace the one-archive model for native skills with target-specific complete packages so a consumer downloads only the runtime for the current target.
+
+Map's development-only material (`README.md`, `SPEC.md`, Cargo files, Rust source, tests) is not release-package payload.
+
+Package generation validates manifest name/version metadata against `SKILL.md`, validates every declared file, packages the declared snapshot, hashes it, and derives release metadata from the built artifact.
+
+## Scope-local native tooling
+
+Native skill tooling is scope-local, not globally shared across installations.
+
+For Map today:
+
+```text
+user scope
+  ~/.jl-skills/map/bin/map.exe
+  ~/.jl-skills/map/schema.surql
+
+project/custom scope
+  <scope>/.jl-skills/map/bin/map.exe
+  <scope>/.jl-skills/map/schema.surql
+```
+
+On non-Windows targets the runtime executable has no `.exe` suffix.
+
+Multiple harness integrations for the same skill inside one scope share that scope's tooling. Different scopes do not share runtime binaries.
+
+Removing the final harness integration for a skill at a scope removes its scope-local installed tooling. Skill-generated project data remains a separate lifecycle concern.
 
 ## Nightly channel
 
 `nightly` is one rolling GitHub prerelease for production-path testing.
 
-It should:
+It must:
 
 - build only from `main`;
-- run nightly on the agreed schedule and support manual force dispatch;
-- skip compilation/publication when no build-relevant source changed since the last successful nightly, unless forced;
-- build and test the same installer/skill packages used by stable releases;
-- replace the rolling nightly assets instead of accumulating dated nightly releases;
-- move the `nightly` tag only after a successful build/test/publication;
-- never become GitHub's latest stable release.
+- run automatically at 2:00 AM Eastern and support manual dispatch;
+- skip compilation/publication when no build-relevant source changed since the previous successful nightly unless forced;
+- build and test the same artifact model intended for Stable;
+- replace the rolling Nightly assets rather than accumulate dated Nightly releases;
+- move the `nightly` tag only after successful build/test/publication;
+- never become GitHub's latest normal Stable release.
+
+During the current cross-platform work, Nightly remains the proving channel. Once the target-aware matrix is implemented, Nightly must require the same complete supported target set as Stable; it must not publish partial platform matrices.
 
 ## Workflow direction
 
-Prefer one broadly named GitHub Actions workflow for build/release behavior unless a concrete limitation requires separation.
+Prefer one broadly named GitHub Actions workflow for build/release behavior unless a concrete platform limitation requires another shape.
 
-The repository is currently main-only development, so future workflow cleanup should not assume feature branches or pull requests. Remove the bespoke branch-hygiene workflow and any branch/PR-only machinery that no longer serves the current process.
+The repository is main-only development. Workflow behavior must not assume feature branches or pull requests.
 
-Use GitHub-native repository features instead of bespoke workflow code where they are sufficient.
+Build/test failures must prevent publication. Stable publication occurs only after all required build/test/aggregate gates succeed.
 
-## Historical packaging failure
+The current workflow is Windows x64 only. Replacing it with the complete target build/test matrix is release-blocking work tracked in `To Do.md`.
 
-The first release-automation Action run failed because Map declared `agents` as a directory in `skill_files`, the old catalog generator recursively embedded the files under it, but the old installer later tried to extract an asset literally named `map/agents`.
+## Current acceptance state
 
-All Map Rust tests passed, the installer compiled, and updater-specific tests passed. The 15 installer regression failures were one packaging failure fanning out across install-dependent tests, not 15 unrelated defects.
+Windows x64 production-path acceptance has passed for installer `0.7.0` / Map `0.4.0`:
 
-That failure is obsolete under the implemented archive model: package directories are installed from the downloaded skill snapshot rather than represented as literal embedded catalog keys. Consolidated validation passed on a clean Windows GitHub Actions runner on 2026-08-29.
+- project-scope install/uninstall worked against real filesystem paths;
+- user-scope install/uninstall worked against the real user home;
+- Codex skill files land under `.agents/skills/map`;
+- Codex native Map subagents land under `.codex/agents` rather than inside the skill directory;
+- scope-local Map runtime/support tooling is installed and removed with the final harness integration;
+- project and user scopes do not share Map runtime binaries;
+- generated `.map` semantic state is separate from ordinary uninstall;
+- empty `AGENTS.md` files and harness parent directories are retained on uninstall;
+- generic redundant install/update/uninstall outro messages have been removed;
+- the rolling Nightly workflow has been exercised repeatedly through real release downloads.
 
-## Remaining work
+This acceptance is sufficient confidence in the Windows lifecycle implementation, but it is not sufficient to publish Stable because the required Linux/macOS/ARM/ABI release targets are not yet implemented and validated.
 
-Work through these sequentially and keep scope narrow.
+## Stable gate
 
-- [x] **1. Update the durable release/update contract.** Record the accepted one-archive-per-skill model, sole stable update-index behavior, local-version sources, main-only repository workflow, and remove stale branch/PR assumptions.
-- [x] **2. Lock the top-level stable `manifest.json` schema.** Use `format`, `installer`, and `skills` as documented above; bind artifact URLs to the immutable timestamped release; use the latest normal release only as the entry point for update discovery.
-- [x] **3. Lock the per-skill package manifest and archive layout.** Source/package metadata is `skills/<name>/manifest.json`; the same file is packaged at archive root; Map's exact manifest and archive contents are documented above.
-- [x] **4. Build skill archives as release artifacts.** The build stages each declared package payload, creates `<skill>.zip`, hashes it, and generates top-level `manifest.json` entries from the built archive. Workflow publication of those outputs is handled in item 7.
-- [x] **5. Change install/update logic to consume the release manifest and skill archives.** Compare running installer version and installed `SKILL.md` metadata against the release manifest, enforce only `min_installer`, then download/verify/install the requested archive.
-- [x] **6. Remove obsolete embedded-skill machinery.** Delete catalog/base64/extraction/update paths that no longer have a job once archive delivery is authoritative; let the old `map/agents` failure disappear through the architecture instead of patching it separately.
-- [x] **7. Simplify Actions around the final package model and main-only workflow.** Use one broad workflow, remove branch-hygiene/PR-only behavior, publish `jl-skills.exe`, `manifest.json`, and every `<skill>.zip`, retain clean build/test, change-aware rolling nightly publication, and explicit manual stable publication.
-- [x] **8. Run consolidated validation of the final package model.** Clean Windows Actions validation passed: 22 Map Rust tests and 46 installer/package tests passed with zero failures; archive installation, minimum-installer compatibility, scope/install/update/uninstall regressions, generated-data preservation, artifact hashes, and exact `map.zip` payload were exercised. The uploaded production-test artifact contained exactly `jl-skills.exe`, `manifest.json`, and `map.zip`, and the manifest hashes matched the actual binaries/archive.
-- [ ] **9. Publish/test nightly.** Produce the rolling nightly through the real release path and perform the planned production install/update/uninstall test with Codex.
-- [ ] **10. Publish first stable snapshot.** After production validation, manually publish the first timestamp-tagged stable release and verify installer/skill update discovery through `releases/latest/download/manifest.json`.
+The first Stable release is blocked until every ordered item in `To Do.md` is complete, including:
+
+- canonical target abstraction;
+- target-qualified public artifact names;
+- target-aware release manifest;
+- per-target native skill packages;
+- target-aware installer self-update and skill selection;
+- complete native build/test matrix;
+- consumer acceptance on every required target;
+- OS-specific distribution-friction/signing review;
+- mechanical verification that the full supported target set exists before publication.
