@@ -1,8 +1,8 @@
 {
   "format": 1,
   "name": "map",
-  "version": "0.4.0",
-  "min_installer": "0.7.0",
+  "version": "0.5.0",
+  "min_installer": "0.8.0",
   "description": "Durable local graph of user intent, questions, decisions, ideas, facts, dependencies, and recovery state.",
   "skill_files": [
     "SKILL.md"
@@ -33,7 +33,14 @@
   },
   "runtime": "rust",
   "runtime_artifacts": {
-    "windows-x64": "runtime/windows-x64/map.exe"
+    "windows-x64": "runtime/windows-x64/map.exe",
+    "windows-arm64": "runtime/windows-arm64/map.exe",
+    "macos-x64": "runtime/macos-x64/map",
+    "macos-arm64": "runtime/macos-arm64/map",
+    "linux-x64-gnu": "runtime/linux-x64-gnu/map",
+    "linux-arm64-gnu": "runtime/linux-arm64-gnu/map",
+    "linux-x64-musl": "runtime/linux-x64-musl/map",
+    "linux-arm64-musl": "runtime/linux-arm64-musl/map"
   },
   "runtime_files": [
     "schema.surql"
