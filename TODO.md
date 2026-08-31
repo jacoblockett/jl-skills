@@ -191,17 +191,15 @@ Nightly and Stable must never publish a partial target set.
 
 Completed implementation:
 
-- `.github/workflows/build.yml` uses `prepare -> eight-target build/test matrix -> aggregate -> publish`;
-- matrix failures use `fail-fast: false` so all target failures remain visible;
+- `.github/workflows/build.yml` uses an eight-target native build/test matrix with `fail-fast: false`;
 - Windows x64 uses `windows-2025`, Windows ARM64 uses the GA `windows-11-vs2026-arm` image, macOS uses native Intel/ARM runners, and Linux uses native x64/ARM64 Ubuntu runners;
 - GNU and musl Linux builds use the same native architecture runners, with `musl`/`musl-tools` plus target-specific Rust linker configuration for musl;
 - every target runs target-specific Map Rust tests, builds its target-qualified installer/package, launches the compiled installer and Map runtime, and runs target-contract tests;
 - Windows x64 additionally retains the established full installer regression suite;
 - every target uploads an isolated `target-<key>` artifact containing its installer, skill package fragment, and target manifest fragment;
 - `scripts/aggregate-release.ts` independently compares downloaded artifacts against all eight canonical targets and the source skill catalog, verifies exact filenames/URLs/SHA-256 values/version metadata, and rejects missing/extra/foreign target coverage;
-- only the verified aggregate release bundle can reach Nightly or Stable publication;
-- rolling Nightly replaces current assets and removes stale assets only after the new complete bundle has passed aggregation;
-- manual `build` produces the same verified aggregate release bundle without publishing it.
+- manual `build` produces the same verified aggregate release bundle without publishing it;
+- Nightly candidate publication occurs only after the complete aggregate gate succeeds.
 
 ### 8. [ ] Run consumer acceptance on every target
 
@@ -221,7 +219,7 @@ Where scope semantics apply, retain the existing project/custom/user scope lifec
 Acceptance implementation is complete; this checkbox remains open until the eight-target workflow has actually passed it:
 
 - `tests/consumer-acceptance.test.ts` drives the compiled target-qualified installer against that target job's real `manifest.json` and Map package through a local release server;
-- every matrix target runs the same consumer acceptance suite;
+- every matrix target runs the same consumer acceptance suite, with Windows x64 including it in the full installer regression command and the other seven invoking `test:consumer` directly;
 - project/custom-path acceptance installs Map into both Codex and Claude, verifies native harness resources and exact-target runtime metadata, executes the installed Map runtime, forces and repairs a stale skill/runtime update, and preserves unrelated plus `.map` generated data;
 - staged Codex then Claude uninstall proves scope-local tooling remains until the final harness integration is removed and generated data survives ordinary uninstall;
 - user-scope acceptance verifies user-local harness resources/tooling and proves the invocation project is untouched;
@@ -240,10 +238,30 @@ At minimum:
 
 Treat required signing/notarization work as a Stable blocker if unsigned artifacts create unacceptable normal-user friction.
 
+Distribution-audit implementation is complete; this checkbox remains open until an actual Nightly passes it and any signing-policy blockers are resolved:
+
+- Nightly first publishes the fully aggregated bundle as candidate GitHub Release assets, with any previous `validation.json` removed before candidate replacement;
+- an eight-target post-publication matrix downloads the exact `nightly` release `manifest.json`, installer, and Map archive that consumers receive;
+- `scripts/audit-distribution.ts` re-verifies release URLs and SHA-256 values, extracts and executes the downloaded target Map runtime, and writes one machine-readable report per target;
+- macOS audit applies a quarantine attribute, requires a Developer ID Application signature, and requires `spctl` Gatekeeper assessment to accept both the installer and Map runtime;
+- Windows audit requires valid Authenticode on both downloaded executables; SmartScreen/Smart App Control reputation remains a consumer-distribution consideration even after signing;
+- Linux audit records whether the raw release download retained an executable bit, applies the required executable permission before launch, executes both binaries, and verifies GNU vs musl ABI identity;
+- failed distribution checks prevent Nightly finalization and prevent creation of a validation receipt;
+- the raw non-Windows installer format may require documented `chmod +x` after download because HTTP release assets do not carry a POSIX executable mode.
+
 ### 10. [ ] Publish Stable only after complete validation
 
 Only after steps 1-9 pass should the first stable snapshot be published.
 
 Stable publication must enforce the complete required target set rather than relying on a manual checklist or memory.
+
+Stable-gate implementation is complete; this checkbox remains open until steps 8 and 9 actually pass and the first Stable snapshot is intentionally published:
+
+- `scripts/validation-receipt.ts` creates a receipt only after all eight post-download distribution reports pass;
+- the receipt binds the exact `main` commit SHA, exact Nightly `manifest.json` SHA-256, and exact eight-target set;
+- the rolling `nightly` tag is advanced only after that validation receipt is created and uploaded;
+- Stable dispatch refuses to proceed unless the current `main` SHA has a matching Nightly validation receipt and the currently published Nightly manifest still matches that receipt;
+- Stable does not rebuild binaries after validation: `scripts/promote-nightly.ts` verifies and promotes the exact validated Nightly installer/package bytes, rewriting only release-manifest URLs to the new immutable timestamped Stable tag;
+- promotion independently rechecks the complete installer target set, source skill catalog, native/portable artifact coverage, filenames, and SHA-256 values before `gh release create` can publish Stable.
 
 The rolling Nightly is the production-test channel for complete aggregated target snapshots.
