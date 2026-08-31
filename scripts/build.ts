@@ -10,9 +10,9 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
-import { arch, platform } from 'node:os'
+import { join, resolve, basename, dirname } from 'node:path'
 import { containedPath, createZipFromDirectory } from '../src/archive'
+import { hostMatchesTarget, targetByKey } from '../src/targets'
 
 const repo = join(import.meta.dir, '..')
 const out = join(repo, 'build')
@@ -21,11 +21,12 @@ const runtimeAssets = join(out, 'runtime-assets')
 const packageStages = join(out, 'packages')
 const semver = /^\d+\.\d+\.\d+$/
 const skillMetaPrefix = 'jl-skills-meta:'
+const buildTarget = targetByKey(process.env.JL_SKILLS_BUILD_TARGET?.trim() || 'windows-x64')
 
 mkdirSync(out, { recursive: true })
 
-if (platform() !== 'win32' || arch() !== 'x64') {
-  throw new Error('current installer build supports Windows x64 only')
+if (buildTarget.key !== 'windows-x64' || !hostMatchesTarget(buildTarget)) {
+  throw new Error('current pre-matrix build supports Windows x64 only')
 }
 
 type SkillManifest = {
@@ -147,7 +148,8 @@ function buildSkillArchive(
 }
 
 const cargoTarget = join(out, 'cargo', 'map')
-const stagedMap = join(runtimeAssets, 'map', 'runtime', 'windows-x64', 'map.exe')
+const mapExecutable = `map${buildTarget.executableSuffix}`
+const stagedMap = join(runtimeAssets, 'map', 'runtime', buildTarget.key, mapExecutable)
 rmSync(runtimeAssets, { recursive: true, force: true })
 rmSync(packageStages, { recursive: true, force: true })
 mkdirSync(dirname(stagedMap), { recursive: true })
@@ -177,7 +179,7 @@ if (suppliedMap) {
   })
   if (mapBuild.exitCode !== 0) process.exit(mapBuild.exitCode)
 
-  copyFileSync(join(cargoTarget, 'release', 'map.exe'), stagedMap)
+  copyFileSync(join(cargoTarget, 'release', mapExecutable), stagedMap)
 }
 
 const output = join(out, 'jl-skills.exe')
@@ -188,6 +190,9 @@ const installerBuild = Bun.spawnSync([
   'build',
   join(repo, 'src', 'jl-skill.ts'),
   '--compile',
+  `--target=${buildTarget.bunCompileTarget}`,
+  '--define',
+  `JL_SKILLS_COMPILED_TARGET=${JSON.stringify(buildTarget.key)}`,
   '--outfile',
   output,
 ], {
