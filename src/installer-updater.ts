@@ -329,7 +329,11 @@ export function parseSkillPackageManifest(value: unknown): SkillPackageManifest 
 }
 
 function validateArchiveEntries(archive: string): void {
-  const listing = spawnSync('tar', ['-tf', archive], { encoding: 'utf8', windowsHide: true })
+  const listing = spawnSync('tar', ['-tf', basename(archive)], {
+    cwd: dirname(archive),
+    encoding: 'utf8',
+    windowsHide: true,
+  })
   if (listing.status !== 0) throw new Error(`could not inspect skill archive: ${(listing.stderr || '').trim()}`)
   for (const raw of listing.stdout.split(/\r?\n/)) {
     if (!raw.trim()) continue
@@ -363,7 +367,11 @@ export async function downloadSkillPackage(
   try {
     await downloadVerified(released, archive, `${name} ${released.version}`, fetcher)
     validateArchiveEntries(archive)
-    const extracted = spawnSync('tar', ['-xf', archive, '-C', root], { encoding: 'utf8', windowsHide: true })
+    const extracted = spawnSync('tar', ['-xf', basename(archive), '-C', basename(root)], {
+      cwd: scratch,
+      encoding: 'utf8',
+      windowsHide: true,
+    })
     if (extracted.status !== 0) throw new Error(`could not extract ${name} archive: ${(extracted.stderr || '').trim()}`)
 
     const manifestPath = join(root, 'manifest.json')
