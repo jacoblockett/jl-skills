@@ -39,9 +39,7 @@ type SkillManifest = {
   runtime_files?: string[]
   runtime?: string
   runtime_artifacts?: Record<string, string>
-  runtime_shared_files?: Record<string, string>
   runtime_cli?: string
-  runtime_cli_destination?: string
   cli_token?: string
   instruction_fragment?: string
   generated_data?: { path: string; marker?: string }[]
@@ -128,7 +126,6 @@ function buildSkillArchive(
     ...manifest.skill_files,
     ...Object.values(manifest.harness_resources ?? {}).flatMap((resources) => Object.values(resources).flat()),
     ...(manifest.runtime_files ?? []),
-    ...Object.keys(manifest.runtime_shared_files ?? {}),
     ...(manifest.instruction_fragment ? [manifest.instruction_fragment] : []),
   ])
   for (const rel of declared) copyDeclared(skillRoot, stageRoot, rel, `${manifest.name} package asset`)
