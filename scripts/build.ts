@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { join, resolve, basename, dirname } from 'node:path'
 import { containedPath, createZipFromDirectory } from '../src/archive'
-import { hostMatchesTarget, targetByKey } from '../src/targets'
+import { hostMatchesTarget, targetByKey, type TargetKey } from '../src/targets'
 
 const repo = join(import.meta.dir, '..')
 const out = join(repo, 'build')
@@ -46,11 +46,15 @@ type SkillManifest = {
   generated_data?: { path: string; marker?: string }[]
 }
 
+type ReleaseArtifact = {
+  url: string
+  sha256: string
+}
+
 type ReleasedSkill = {
   version: string
   min_installer: string
-  url: string
-  sha256: string
+  artifacts: Partial<Record<TargetKey | 'portable', ReleaseArtifact>>
 }
 
 function sha256(path: string): string {
@@ -142,8 +146,12 @@ function buildSkillArchive(
   return {
     version: manifest.version,
     min_installer: manifest.min_installer,
-    url: `${releaseBase}/${manifest.name}.zip`,
-    sha256: sha256(archive),
+    artifacts: {
+      [buildTarget.key]: {
+        url: `${releaseBase}/${manifest.name}.zip`,
+        sha256: sha256(archive),
+      },
+    },
   }
 }
 
@@ -225,11 +233,15 @@ for (const directoryName of readdirSync(skillsRoot).sort()) {
 }
 
 const releaseManifest = {
-  format: 1,
+  format: 2,
   installer: {
     version: installerVersion,
-    url: `${releaseBase}/jl-skills.exe`,
-    sha256: sha256(output),
+    artifacts: {
+      [buildTarget.key]: {
+        url: `${releaseBase}/jl-skills.exe`,
+        sha256: sha256(output),
+      },
+    },
   },
   skills: releasedSkills,
 }
