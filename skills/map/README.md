@@ -15,7 +15,7 @@ cargo build --manifest-path skills/map/Cargo.toml --release
 
 The runtime embeds SurrealDB/SurrealKV and requires no daemon or listening port.
 
-The current Windows release/smoke path is local on the development/release machine. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the release package/manifest, and compiles the TypeScript + `@clack/prompts` installer with Bun into standalone `build/jl-skills.exe`.
+The current pre-stable release/smoke implementation is Windows x64 only. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the release package/manifest, and compiles the TypeScript + `@clack/prompts` installer with Bun into a standalone Windows executable. The first Stable release is blocked until the target-aware Windows/Linux/macOS matrix and explicit architecture-qualified artifact naming in the repo-level `To Do.md` are complete.
 
 Run the full Map + installer regression smoke with:
 
@@ -23,19 +23,21 @@ Run the full Map + installer regression smoke with:
 bun run smoke
 ```
 
-Consumers need only the downloaded standalone installer and the AI harness(es) they intend to target. They do not need Rust, Cargo, Bun, Node, npm, Go, Python, or a SurrealDB server.
+On a supported release target, consumers need only the downloaded standalone installer and the AI harness(es) they intend to target. They do not need Rust, Cargo, Bun, Node, npm, Go, Python, or a SurrealDB server.
 
 Map tooling is local to the selected installation scope and shared only among harness integrations for Map at that same scope:
 
 ```text
 user scope
-  ~/.jl-skills/map/bin/map.exe
+  ~/.jl-skills/map/bin/map[.exe]
   ~/.jl-skills/map/schema.surql
 
 project/custom scope
-  <scope>/.jl-skills/map/bin/map.exe
+  <scope>/.jl-skills/map/bin/map[.exe]
   <scope>/.jl-skills/map/schema.surql
 ```
+
+The `.exe` suffix applies only on Windows.
 
 Project/path installs do not provision Map tooling under the user's home directory. Removing the final Map harness integration from a scope removes that scope's `.jl-skills/map` tooling directory; generated `.map` project data is separate and preserved.
 
@@ -174,7 +176,7 @@ The v2 runtime suite exercises the public binary across separate processes again
 cargo test --manifest-path skills/map/Cargo.toml
 ```
 
-The Windows installer regression suite exercises project and user scope, scope-local runtime isolation, existing Map preservation, managed-instruction injection/idempotency/boundaries, native subagent placement, uninstall cleanup, and user-scope safety. Run it together with the runtime suite and a clean standalone build using:
+The current installer regression suite exercises project and user scope, scope-local runtime isolation, existing Map preservation, managed-instruction injection/idempotency/boundaries, native subagent placement, uninstall cleanup, and user-scope safety. Run it together with the runtime suite and a clean standalone build using:
 
 ```bash
 bun run smoke
