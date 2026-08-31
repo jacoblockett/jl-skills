@@ -1,8 +1,8 @@
 # jl-skills release channels
 
-Status: Windows production-path acceptance has passed, but the first Stable release is blocked until the cross-platform target work in `To Do.md` is complete.
+Status: Windows production-path acceptance has passed, but the first Stable release is blocked until the cross-platform target work in `TODO.md` is complete.
 
-This file is the durable release/update contract. `To Do.md` owns the ordered implementation plan for unfinished cross-platform release work.
+This file is the durable release/update contract. `TODO.md` owns the ordered implementation plan for unfinished cross-platform release work.
 
 ## Core model
 
@@ -12,7 +12,7 @@ This file is the durable release/update contract. `To Do.md` owns the ordered im
 - One stable snapshot contains the current installer and every currently published skill package for every required supported target.
 - Updating the installer and updating a skill are independent operations unless that skill explicitly requires a newer installer capability.
 - Repository work is performed directly on `main`; no feature-branch/PR workflow is assumed unless explicitly reintroduced later.
-- Stable publication is not permitted until every required distribution target is built, tested, represented in the release manifest, and validated as defined in `To Do.md`.
+- Stable publication is not permitted until every required distribution target is built, tested, represented in the release manifest, and validated as defined in `TODO.md`.
 
 ## Stable release identity
 
@@ -38,7 +38,7 @@ Stable release tags are immutable.
 
 Release assets must identify their target operating system and architecture directly. A user must not need to infer compatibility from a file extension.
 
-The required target matrix and exact naming policy are locked in `To Do.md` while the target-aware build/release implementation is developed.
+The required target matrix and exact naming policy are locked in `TODO.md` while the target-aware build/release implementation is developed.
 
 Do not publish the first Stable release using the current ambiguous Windows-only asset names such as:
 
@@ -63,7 +63,7 @@ Nightly remains a prerelease so GitHub `latest` resolves only to a normal Stable
 
 The current pre-stable implementation uses release-manifest format 1 with one installer artifact and one archive per skill. That format is intentionally Windows-only and must not become the first Stable contract.
 
-Before Stable, the release manifest will move to a new target-aware format as specified by `To Do.md`. The new format must retain these existing invariants:
+Before Stable, the release manifest will move to a new target-aware format as specified by `TODO.md`. The new format must retain these existing invariants:
 
 - installer and skill semantic versions remain independent;
 - every downloadable artifact has an immutable snapshot URL and SHA-256;
@@ -219,7 +219,7 @@ The repository is main-only development. Workflow behavior must not assume featu
 
 Build/test failures must prevent publication. Stable publication occurs only after all required build/test/aggregate gates succeed.
 
-The current workflow is Windows x64 only. Replacing it with the complete target build/test matrix is release-blocking work tracked in `To Do.md`.
+The current workflow is Windows x64 only. Replacing it with the complete target build/test matrix is release-blocking work tracked in `TODO.md`.
 
 ## Current acceptance state
 
@@ -240,7 +240,7 @@ This acceptance is sufficient confidence in the Windows lifecycle implementation
 
 ## Stable gate
 
-The first Stable release is blocked until every ordered item in `To Do.md` is complete, including:
+The first Stable release is blocked until every ordered item in `TODO.md` is complete, including:
 
 - canonical target abstraction;
 - target-qualified public artifact names;
