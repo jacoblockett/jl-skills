@@ -199,9 +199,9 @@ Completed implementation:
 - every target uploads an isolated `target-<key>` artifact containing its installer, skill package fragment, and target manifest fragment;
 - `scripts/aggregate-release.ts` independently compares downloaded artifacts against all eight canonical targets and the source skill catalog, verifies exact filenames/URLs/SHA-256 values/version metadata, and rejects missing/extra/foreign target coverage;
 - manual `build` produces the same verified aggregate release bundle without publishing it;
-- Nightly candidate publication occurs only after the complete aggregate gate succeeds.
+- Nightly and Stable publication occur only after the complete aggregate gate succeeds.
 
-### 8. [ ] Run consumer acceptance on every target
+### 8. [x] Run consumer acceptance on every target
 
 For every required target, verify the actual release artifact can:
 
@@ -216,54 +216,42 @@ For every required target, verify the actual release artifact can:
 
 Where scope semantics apply, retain the existing project/custom/user scope lifecycle guarantees.
 
-Acceptance implementation is complete; this checkbox remains open until the eight-target workflow has actually passed it:
+Completed and empirically passed in GitHub Actions run `33438373610` on commit `deb92464e50d9dabe0d1916bcc761f670430912e`:
 
+- all eight target jobs completed successfully;
 - `tests/consumer-acceptance.test.ts` drives the compiled target-qualified installer against that target job's real `manifest.json` and Map package through a local release server;
-- every matrix target runs the same consumer acceptance suite; Windows x64 also runs the established full installer regression suite, while both musl targets execute consumer acceptance inside the pinned Alpine consumer environment required by the Bun musl binaries;
+- Windows x64 runs the established full installer regression suite, which includes consumer acceptance;
+- the other non-musl targets run focused consumer acceptance directly;
+- both musl targets execute launch and consumer acceptance inside pinned Alpine with musl-compatible `libgcc`/`libstdc++`;
 - project/custom-path acceptance installs Map into both Codex and Claude, verifies native harness resources and exact-target runtime metadata, executes the installed Map runtime, forces and repairs a stale skill/runtime update, and preserves unrelated plus `.map` generated data;
 - staged Codex then Claude uninstall proves scope-local tooling remains until the final harness integration is removed and generated data survives ordinary uninstall;
 - user-scope acceptance verifies user-local harness resources/tooling and proves the invocation project is untouched;
-- the target package fixture contains only the current target's release assets, and installed package/runtime assertions reject foreign-target runtime provisioning;
-- the established Windows x64 regression suite remains separate so deeper UI/filesystem boundary coverage is not duplicated across all eight targets.
+- the target package fixture contains only the current target's release assets, and installed package/runtime assertions reject foreign-target runtime provisioning.
 
-### 9. [ ] Validate OS distribution friction
+### 9. [x] Keep distribution qualification intentionally simple
 
-Test the actual downloadable release assets as consumers receive them.
+The fresh native build/test environments are the release qualification boundary. Do not add a second post-publication matrix that downloads and re-runs the same artifacts.
 
-At minimum:
+Accepted policy:
 
-- macOS: record Gatekeeper behavior and signing state;
-- Windows: record SmartScreen/AuthentiCode-relevant signing state;
-- Linux: executable permissions and glibc/musl compatibility.
+- the eight-target build matrix plus consumer acceptance is sufficient release qualification;
+- `scripts/aggregate-release.ts` must still verify the complete target set, filenames, release URLs, versions, and SHA-256 values before publication;
+- macOS and Windows releases remain intentionally unsigned;
+- Gatekeeper, SmartScreen, Smart App Control, and other unsigned-binary friction are accepted and may be handled through documentation/user issues rather than a release-blocking audit;
+- raw macOS/Linux executable downloads may require `chmod +x` before launch;
+- Bun musl installers require a musl environment with compatible `libgcc` and `libstdc++`;
+- user-reported platform-specific issues can be handled through normal issue reports instead of duplicating CI after publication.
 
-Unsigned macOS and Windows artifacts are an explicit accepted release policy. Developer ID/notarization, Authenticode, Gatekeeper rejection caused by the unsigned policy, SmartScreen reputation warnings, and Smart App Control blocking are not Stable blockers. Integrity failures, target/ABI mismatches, malformed packages, and inability to execute after the documented platform preparation remain blockers.
+The former post-download distribution audit, validation receipt, and Nightly promotion machinery were removed as unnecessary complexity.
 
-Distribution-audit implementation is complete; this checkbox remains open until an actual Nightly passes it:
+### 10. [ ] Publish the first Stable snapshot
 
-- Nightly first publishes the fully aggregated bundle as candidate GitHub Release assets, with any previous `validation.json` removed before candidate replacement;
-- an eight-target post-publication matrix downloads the exact `nightly` release `manifest.json`, installer, and Map archive that consumers receive;
-- `scripts/audit-distribution.ts` re-verifies release URLs and SHA-256 values, extracts and executes the downloaded target Map runtime, and writes one machine-readable report per target;
-- macOS audit applies a quarantine attribute and records Developer ID and `spctl` Gatekeeper results as non-blocking distribution-friction observations;
-- Windows audit records Authenticode status as a non-blocking distribution-friction observation;
-- Linux audit records whether the raw release download retained an executable bit, applies the required executable permission before launch, executes both binaries, and verifies GNU vs musl ABI identity;
-- musl post-download execution/audit runs inside pinned `oven/bun:1.4.0-alpine`; Bun's musl standalone installer requires a musl-compatible `libgcc` and `libstdc++`, so another musl distribution must provide equivalent runtime libraries;
-- failed blocking distribution checks prevent Nightly finalization and prevent creation of a validation receipt;
-- each distribution report records the explicit `unsigned-accepted` signing policy;
-- the raw non-Windows installer format may require documented `chmod +x` after download because HTTP release assets do not carry a POSIX executable mode.
+Stable is now intentionally straightforward:
 
-### 10. [ ] Publish Stable only after complete validation
+1. run the same complete eight-target build/test/consumer matrix on `main`;
+2. aggregate and independently verify the complete release bundle;
+3. publish that verified bundle under a new immutable UTC timestamp tag.
 
-Only after steps 1-9 pass should the first stable snapshot be published.
+No prior Nightly validation receipt is required and Stable does not depend on a second post-publication test pass.
 
-Stable publication must enforce the complete required target set rather than relying on a manual checklist or memory.
-
-Stable-gate implementation is complete; this checkbox remains open until steps 8 and 9 actually pass and the first Stable snapshot is intentionally published:
-
-- `scripts/validation-receipt.ts` creates a receipt only after all eight post-download distribution reports pass under the explicit `unsigned-accepted` signing policy;
-- the receipt binds the exact `main` commit SHA, exact Nightly `manifest.json` SHA-256, exact eight-target set, and signing policy;
-- the rolling `nightly` tag is advanced only after that validation receipt is created and uploaded;
-- Stable dispatch refuses to proceed unless the current `main` SHA has a matching Nightly validation receipt and the currently published Nightly manifest still matches that receipt;
-- Stable does not rebuild binaries after validation: `scripts/promote-nightly.ts` verifies and promotes the exact validated Nightly installer/package bytes, rewriting only release-manifest URLs to the new immutable timestamped Stable tag;
-- promotion independently rechecks the complete installer target set, source skill catalog, native/portable artifact coverage, filenames, and SHA-256 values before `gh release create` can publish Stable.
-
-The rolling Nightly is the production-test channel for complete aggregated target snapshots.
+Nightly uses the same verified build path but publishes to the rolling `nightly` prerelease/tag. Manual `build` stops after producing the verified workflow artifact.
