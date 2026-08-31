@@ -2,7 +2,7 @@
 name: map
 description: Define, clarify, and persist durable user intent in the local Map graph. Use when explicitly invoked as $map; ordinary agents may query Map without invoking this workflow.
 ---
-<!-- jl-skills-meta: {"name":"map","version":"0.3.0","format":1} -->
+<!-- jl-skills-meta: {"name":"map","version":"0.4.0","format":1} -->
 
 # Map
 
