@@ -9,7 +9,7 @@ const build = join(repo, 'build')
 test('compiled installer blocks a skill whose minimum installer is newer', async () => {
   if (process.platform !== 'win32') throw new Error('installer compatibility regression currently targets Windows x64')
 
-  const installer = join(build, 'jl-skills.exe')
+  const installer = join(build, 'jl-skills-windows-x64.exe')
   const ready = join(build, 'min-installer-fixture-port.txt')
   const root = join(build, 'min-installer-test')
   const home = join(root, 'home')
@@ -49,7 +49,7 @@ test('compiled installer blocks a skill whose minimum installer is newer', async
     })
 
     expect(result.status).not.toBe(0)
-    expect(result.stderr).toContain('Map 0.4.0 requires jl-skills 0.8.0 or newer; running 0.7.0.')
+    expect(result.stderr).toContain('Map 0.5.0 requires jl-skills 0.8.0 or newer; running 0.7.0.')
     expect(result.stderr).toContain('jl-skills 0.8.0 is available.')
     expect(existsSync(join(project, '.agents', 'skills', 'map'))).toBe(false)
     expect(existsSync(join(project, '.jl-skills', 'map', 'bin', 'map.exe'))).toBe(false)
