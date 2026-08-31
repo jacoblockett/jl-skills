@@ -1,8 +1,8 @@
 {
   "format": 1,
   "name": "map",
-  "version": "0.3.0",
-  "min_installer": "0.6.0",
+  "version": "0.4.0",
+  "min_installer": "0.7.0",
   "description": "Durable local graph of user intent, questions, decisions, ideas, facts, dependencies, and recovery state.",
   "skill_files": [
     "SKILL.md"
@@ -35,11 +35,10 @@
   "runtime_artifacts": {
     "windows-x64": "runtime/windows-x64/map.exe"
   },
+  "runtime_files": [
+    "schema.surql"
+  ],
   "runtime_cli": "map",
-  "runtime_cli_destination": "~/.jl-skills/map/bin/map.exe",
-  "runtime_shared_files": {
-    "schema.surql": "~/.jl-skills/map/schema.surql"
-  },
   "cli_token": "JL_MAP_CLI",
   "instruction_fragment": "AGENTS.fragment.md",
   "generated_data": [
