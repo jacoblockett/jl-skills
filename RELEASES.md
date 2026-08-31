@@ -114,6 +114,8 @@ Nightly remains a prerelease so GitHub `latest` resolves only to a normal Stable
 
 Raw non-Windows executable assets do not carry a POSIX executable mode over HTTP. Consumer instructions for direct macOS/Linux binary downloads must therefore include `chmod +x` before first launch unless the distribution format changes later.
 
+For musl Linux, the Bun standalone installer is dynamically dependent on musl-compatible `libgcc` and `libstdc++`. The pinned acceptance environment is `oven/bun:1.4.0-alpine`, which provides those runtime libraries. Consumers using another musl distribution must provide equivalent libraries before launching `jl-skills-linux-*-musl`.
+
 ## Release manifest
 
 `manifest.json` is the sole remote index used for release/update discovery. `jl-skills` does not enumerate release history or download skill packages merely to discover versions.
@@ -339,7 +341,7 @@ The acceptance path verifies at least:
 - user-scope installation/uninstallation without touching the invocation project;
 - absence of foreign-target runtime provisioning.
 
-Windows x64 additionally retains the broader installer regression suite for UI and filesystem-boundary behavior.
+The GNU Linux targets run directly on their native Ubuntu runners. The musl targets are built on the corresponding native Ubuntu architecture but execute the Bun installer and lifecycle acceptance in pinned Alpine with musl-compatible `libgcc`/`libstdc++`. Windows x64 additionally retains the broader installer regression suite for UI and filesystem-boundary behavior.
 
 ## Distribution-friction gate
 
@@ -351,7 +353,9 @@ The release signing policy is explicitly `unsigned-accepted`:
 
 - macOS: Developer ID signature state and quarantine-time `spctl` Gatekeeper behavior are recorded as non-blocking distribution-friction observations. Gatekeeper rejection attributable to unsigned distribution is accepted.
 - Windows: Authenticode status is recorded as a non-blocking distribution-friction observation. SmartScreen reputation warnings and Smart App Control blocking attributable to unsigned distribution are accepted.
-- Linux: both GNU and musl artifacts must launch on their intended native environment and report the expected ABI. The audit records whether the HTTP download retained executable permission; requiring a documented `chmod +x` for a raw binary is acceptable unless the distribution format is changed later.
+- Linux GNU: artifacts must launch on their intended native Ubuntu environment and report the expected GNU ABI.
+- Linux musl: artifacts must launch in the pinned Alpine consumer environment and report the expected musl ABI. The Bun musl installer requires musl-compatible `libgcc` and `libstdc++`; another musl distribution must provide equivalent runtime libraries.
+- Linux release downloads record whether the HTTP transfer retained executable permission; requiring a documented `chmod +x` for a raw binary is acceptable unless the distribution format is changed later.
 
 Signing/trust observations do not make a report fail under this policy. Integrity failures, missing or foreign-target artifacts, malformed packages, target/ABI mismatches, and inability to execute after ordinary platform preparation remain blocking.
 
