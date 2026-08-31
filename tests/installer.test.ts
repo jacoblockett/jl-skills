@@ -4,8 +4,8 @@ import { dirname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 
 const repo = resolve(import.meta.dir, '..')
-const installer = join(repo, 'build', 'jl-skills.exe')
-const sourceMap = join(repo, 'build', 'cargo', 'map', 'release', 'map.exe')
+const installer = join(repo, 'build', 'jl-skills-windows-x64.exe')
+const sourceMap = join(repo, 'build', 'cargo', 'map', 'x86_64-pc-windows-msvc', 'release', 'map.exe')
 const sourceSkill = join(repo, 'skills', 'map', 'SKILL.md')
 const schema = join(repo, 'skills', 'map', 'schema.surql')
 const scratch = join(repo, 'build', 'installer-tests')
@@ -13,7 +13,7 @@ const fixtureReady = join(scratch, 'release-fixture-port.txt')
 
 const begin = '<!-- jl-skill:begin map -->'
 const end = '<!-- jl-skill:end map -->'
-const metadata = '<!-- jl-skills-meta: {"name":"map","version":"0.4.0","format":1} -->'
+const metadata = '<!-- jl-skills-meta: {"name":"map","version":"0.5.0","format":1} -->'
 const mapAgentNames = [
   'map-completion-auditor',
   'map-context',
@@ -149,9 +149,9 @@ function expectClaudeAgents(root: string, present = true): void {
 
 beforeAll(async () => {
   if (process.platform !== 'win32') throw new Error('installer regression suite currently targets Windows x64')
-  if (!existsSync(installer)) throw new Error('build/jl-skills.exe is missing; run bun run build first')
+  if (!existsSync(installer)) throw new Error('build/jl-skills-windows-x64.exe is missing; run bun run build first')
   if (!existsSync(sourceMap)) throw new Error('built Map runtime is missing; run bun run build first')
-  if (!existsSync(join(repo, 'build', 'map.zip'))) throw new Error('build/map.zip is missing; run bun run build first')
+  if (!existsSync(join(repo, 'build', 'map-windows-x64.zip'))) throw new Error('build/map-windows-x64.zip is missing; run bun run build first')
   if (!existsSync(join(repo, 'build', 'manifest.json'))) throw new Error('build/manifest.json is missing; run bun run build first')
   mkdirSync(scratch, { recursive: true })
   rmSync(fixtureReady, { force: true })
