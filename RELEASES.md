@@ -34,20 +34,73 @@ Use UTC. The release timestamp identifies only the distribution snapshot; compon
 
 Stable release tags are immutable.
 
+## Required distribution targets
+
+The canonical required target keys for the first Stable contract are exactly:
+
+```text
+windows-x64
+windows-arm64
+macos-x64
+macos-arm64
+linux-x64-gnu
+linux-arm64-gnu
+linux-x64-musl
+linux-arm64-musl
+```
+
+These keys are public release-contract identifiers, not display aliases. They are used consistently by build metadata, release-manifest artifact maps, package selection, diagnostics, and public filenames.
+
+Do not add 32-bit x86, ARM32, RISC-V, or another target without a concrete support requirement and an explicit contract update.
+
+## Compiled target identity
+
+Every compiled `jl-skills` executable has exactly one canonical target key embedded at build time.
+
+That embedded target key is authoritative for installer self-update and skill-package artifact selection. The installer must not infer its release target from runtime `platform + arch` checks. Runtime inspection may be used only for diagnostics or consistency checks.
+
+This is required in particular for Linux, where OS and architecture alone do not distinguish GNU/glibc from musl.
+
 ## Release assets and naming
 
-Release assets must identify their target operating system and architecture directly. A user must not need to infer compatibility from a file extension.
+Release assets must identify their target operating system and architecture directly. Linux assets also identify the ABI. A user must not need to infer compatibility from a file extension.
 
-The required target matrix and exact naming policy are locked in `TODO.md` while the target-aware build/release implementation is developed.
+Installer asset names are exactly:
 
-Do not publish the first Stable release using the current ambiguous Windows-only asset names such as:
+```text
+jl-skills-windows-x64.exe
+jl-skills-windows-arm64.exe
+jl-skills-macos-x64
+jl-skills-macos-arm64
+jl-skills-linux-x64-gnu
+jl-skills-linux-arm64-gnu
+jl-skills-linux-x64-musl
+jl-skills-linux-arm64-musl
+```
+
+Map package asset names are exactly:
+
+```text
+map-windows-x64.zip
+map-windows-arm64.zip
+map-macos-x64.zip
+map-macos-arm64.zip
+map-linux-x64-gnu.zip
+map-linux-arm64-gnu.zip
+map-linux-x64-musl.zip
+map-linux-arm64-musl.zip
+```
+
+The filename itself identifies compatibility. `.exe` is only the Windows executable suffix and is not the compatibility signal.
+
+Do not publish the first Stable release using ambiguous assets such as:
 
 ```text
 jl-skills.exe
 map.zip
 ```
 
-Those names remain part of the current pre-stable/Nightly implementation only and are scheduled for replacement by explicit target-qualified names before Stable.
+Those names remain part of the current pre-stable/Nightly implementation only and are replaced when release-manifest format 2 becomes active.
 
 The stable public update index remains:
 
@@ -63,31 +116,76 @@ Nightly remains a prerelease so GitHub `latest` resolves only to a normal Stable
 
 The current pre-stable implementation uses release-manifest format 1 with one installer artifact and one archive per skill. That format is intentionally Windows-only and must not become the first Stable contract.
 
-Before Stable, the release manifest will move to a new target-aware format as specified by `TODO.md`. The new format must retain these existing invariants:
+The first Stable release uses release-manifest format 2. Format 2 has this exact structural contract:
 
-- installer and skill semantic versions remain independent;
-- every downloadable artifact has an immutable snapshot URL and SHA-256;
-- skill entries retain `min_installer` compatibility metadata;
-- artifact URLs point to the immutable timestamped snapshot, not a moving `releases/latest/...` asset URL;
-- the running installer selects only an artifact compatible with its own canonical target;
-- a platform-independent skill may explicitly publish a `portable` artifact;
-- absence of a compatible target artifact is an error, never permission to download another architecture/OS/ABI.
+```json
+{
+  "format": 2,
+  "installer": {
+    "version": "0.8.0",
+    "artifacts": {
+      "windows-x64": {
+        "url": "https://github.com/jacoblockett/jl-skills/releases/download/<snapshot>/jl-skills-windows-x64.exe",
+        "sha256": "<64 lowercase hex characters>"
+      }
+    }
+  },
+  "skills": {
+    "map": {
+      "version": "0.5.0",
+      "min_installer": "0.8.0",
+      "artifacts": {
+        "windows-x64": {
+          "url": "https://github.com/jacoblockett/jl-skills/releases/download/<snapshot>/map-windows-x64.zip",
+          "sha256": "<64 lowercase hex characters>"
+        }
+      }
+    }
+  }
+}
+```
+
+The example shows one artifact entry only to illustrate the shape. A publishable native release must satisfy the complete target-set rules below.
+
+Format-2 invariants:
+
+- `format` is exactly `2`.
+- Installer and skill semantic versions remain independent plain semantic versions.
+- `installer.artifacts` is keyed by canonical target key and never uses `portable`.
+- Each skill entry retains `version` and `min_installer`.
+- Each skill `artifacts` map is keyed by canonical target key and may additionally use the reserved key `portable` only for an explicitly platform-independent package.
+- Every artifact contains exactly the immutable snapshot URL used for that artifact plus its SHA-256.
+- Artifact URLs point to the immutable timestamped snapshot, not a moving `releases/latest/...` asset URL.
+- The installer resolves an artifact by exact canonical target key first. For skills only, if that exact key is absent, an explicitly published `portable` artifact may be used.
+- Absence of a compatible exact-target or allowed portable skill artifact is an incompatibility error. Another OS, architecture, or ABI is never a fallback.
+- Unrelated artifact entries do not change the running installer's embedded target identity.
 
 No distribution-level semantic version exists.
+
+## Skill package target policy
+
+Native skills are packaged per canonical target. Each target package is complete for that target and contains common skill/harness/support files plus only the native runtime payload required by that target.
+
+Map is a native skill and therefore publishes one Map archive for each required target. A Map package must never contain runtimes for foreign targets merely to make the ZIP universal.
+
+A genuinely platform-independent skill may publish one `portable` artifact instead of duplicating identical archives across all targets. `portable` is a release-manifest artifact key, not a ninth canonical machine target.
+
+A package that contains target-specific native runtime content is not portable.
 
 ## Update discovery
 
 ### Installer
 
-The running executable knows its own compiled semantic version.
+The running executable knows its own compiled semantic version and embedded canonical target.
 
 Stable installer update behavior remains:
 
 1. fetch the latest stable `manifest.json`;
 2. compare the running installer semantic version with the published installer version;
 3. if the published version is newer, report it as available;
-4. select only the artifact for the running installer's canonical target;
-5. if requested, download that artifact, verify its SHA-256, and replace only the installer.
+4. select only `installer.artifacts[currentTarget]`;
+5. if that artifact is absent, report the release as incompatible with the running target;
+6. if requested, download that artifact, verify its SHA-256, and replace only the installer.
 
 A newer installer is never forced merely because it exists.
 
@@ -101,8 +199,9 @@ Skill update behavior remains:
 2. fetch/read the corresponding entry in the latest stable `manifest.json`;
 3. compare installed and published semantic versions;
 4. before installation, verify the running installer satisfies the skill's `min_installer`;
-5. select only the skill package for the running installer's canonical target, or an explicitly published `portable` package;
-6. download only that package, verify its SHA-256, and install that snapshot.
+5. select `skill.artifacts[currentTarget]` when present, otherwise the explicitly published `skill.artifacts.portable` when present;
+6. fail clearly if neither compatible artifact exists;
+7. download only the selected package, verify its SHA-256, and install that snapshot.
 
 The manifest inside a skill archive is not used for update discovery. The archive is downloaded only when installing/updating that skill.
 
@@ -167,7 +266,7 @@ Map currently declares native Codex and Claude subagent resources separately and
 
 Current Map semantic/package version is `0.4.0`; current installer version is `0.7.0`. Map requires installer `0.7.0`.
 
-The current Windows-only pre-stable package contains the Windows x64 runtime. Cross-platform work will replace the one-archive model for native skills with target-specific complete packages so a consumer downloads only the runtime for the current target.
+The current Windows-only pre-stable package contains the Windows x64 runtime. Cross-platform work replaces the one-archive model for native skills with target-specific complete packages so a consumer downloads only the runtime for the current target.
 
 Map's development-only material (`README.md`, `SPEC.md`, Cargo files, Rust source, tests) is not release-package payload.
 
@@ -209,7 +308,23 @@ It must:
 - move the `nightly` tag only after successful build/test/publication;
 - never become GitHub's latest normal Stable release.
 
-During the current cross-platform work, Nightly remains the proving channel. Once the target-aware matrix is implemented, Nightly must require the same complete supported target set as Stable; it must not publish partial platform matrices.
+Once format 2 is active, Nightly requires the same complete supported target set as Stable and must not publish a partial matrix.
+
+## Publication completeness gate
+
+Nightly and Stable publication are both mechanically blocked unless all of the following are true in the same release attempt:
+
+1. every required target build/test job succeeded;
+2. the aggregator received an installer artifact for all eight canonical targets;
+3. the aggregator received a package artifact for all eight canonical targets for every native published skill;
+4. every portable published skill has its declared `portable` package artifact;
+5. every expected release asset has a computed SHA-256 and an immutable release URL matching its actual target-qualified filename;
+6. the generated format-2 manifest contains the complete expected installer artifact set and complete compatible artifact coverage for every published skill;
+7. the aggregator independently compares the produced target keys against the canonical required target set rather than trusting matrix job count alone.
+
+Failure of any condition stops publication. The workflow must not create/advance a Stable snapshot, replace Nightly assets, or advance the `nightly` tag with a partial or failed target set.
+
+Additional targets may be added only by updating the canonical contract. Missing required targets are always fatal.
 
 ## Workflow direction
 
