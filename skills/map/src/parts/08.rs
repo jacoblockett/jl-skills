@@ -193,7 +193,12 @@ fn resolve_schema(schema: Option<&Path>, config: Option<&Path>) -> Result<PathBu
             return Ok(path);
         }
     }
-    let path = home_dir()?.join(".jl-skills").join("map").join("schema.surql");
+    let executable = env::current_exe().context("resolving Map runtime executable")?;
+    let runtime_root = executable
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| anyhow!("cannot determine Map runtime root from {}", executable.display()))?;
+    let path = runtime_root.join("schema.surql");
     if !path.is_file() {
         bail!(
             "default schema {} does not exist; supply --schema or configure schema in .maprc",
