@@ -51,8 +51,13 @@ jobs:
           $shouldBuild = $true
           $releaseTag = 'dev'
 
+          if ($mode -eq 'nightly' -or $mode -eq 'stable') {
+            $shouldBuild = $false
+            Write-Host 'Nightly and Stable publication are temporarily blocked while the required cross-platform target matrix is incomplete.'
+          }
+
           if ($mode -eq 'nightly') {
-            if ('${{ github.event_name }}' -eq 'schedule') {
+            if ($shouldBuild -and '${{ github.event_name }}' -eq 'schedule') {
               $eastern = [TimeZoneInfo]::FindSystemTimeZoneById('Eastern Standard Time')
               $local = [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $eastern)
               if ($local.Hour -ne 2) {
@@ -80,19 +85,21 @@ jobs:
             $releaseTag = 'nightly'
           } elseif ($mode -eq 'stable') {
             $releaseTag = [DateTime]::UtcNow.ToString('yyyy.MM.dd-HHmmZ')
-            git fetch origin --tags --force
-            $existingTag = (& git tag --list $releaseTag | Select-Object -First 1)
-            if ($existingTag) { throw "Tag $releaseTag already exists." }
+            if ($shouldBuild) {
+              git fetch origin --tags --force
+              $existingTag = (& git tag --list $releaseTag | Select-Object -First 1)
+              if ($existingTag) { throw "Tag $releaseTag already exists." }
+            }
           }
 
           "mode=$mode" >> $env:GITHUB_OUTPUT
           "should_build=$($shouldBuild.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
 
-      - name: No nightly changes
+      - name: No release build
         if: steps.mode.outputs.should_build != 'true'
         shell: pwsh
-        run: Write-Host 'Nothing to publish.'
+        run: Write-Host 'Nothing to build or publish.'
 
       - uses: oven-sh/setup-bun@v2
         if: steps.mode.outputs.should_build == 'true'
