@@ -84,7 +84,7 @@ Completed implementation:
 - `src/targets.ts` owns the eight canonical target records and toolchain facts.
 - the build selects a canonical target and injects it into the standalone installer as `JL_SKILLS_COMPILED_TARGET`;
 - standalone installer startup validates that the compiled target was injected and is supported;
-- the current pre-matrix build remains intentionally restricted to Windows x64 until step 7;
+- matrix builds pass the canonical target explicitly rather than inferring Linux ABI from the host;
 - Bun is pinned to `1.4.0` in both project metadata and GitHub Actions.
 
 ### 3. [x] Move the release manifest to a target-aware schema
@@ -103,8 +103,8 @@ Completed implementation:
 - `src/installer-updater.ts` parses only format 2 and validates canonical target keys, SHA-256 values, installer non-portability, and optional skill `portable` artifacts;
 - format 1 is obsolete and no longer emitted by the build;
 - release fixtures and updater regression coverage use the format-2 shape;
-- the current pre-matrix build intentionally emits only its `windows-x64` entries until per-target build aggregation exists;
-- Nightly and Stable publication are temporarily blocked so an incomplete one-target format-2 manifest cannot replace a release.
+- each matrix target emits a single-target format-2 fragment;
+- `scripts/aggregate-release.ts` combines only a complete validated target set into the publishable format-2 manifest.
 
 ### 4. [x] Package native skills per target
 
@@ -120,9 +120,9 @@ Completed implementation:
 - build validation requires a complete native runtime declaration matching the canonical target naming contract;
 - a native package is staged for exactly one build target and its packaged `manifest.json` contains only that target's runtime entry;
 - no native package copies foreign-target runtimes;
-- non-native skills are packaged once under the reserved `portable` artifact key;
-- Map package version is now `0.5.0`; its minimum installer remains `0.7.0` because the target-specific package payload does not require a newer package-install capability;
-- the current Windows-x64-only build produces one target-specific Map package; the other seven are produced when the matrix is implemented in step 7.
+- non-native skills are packaged once under the reserved `portable` artifact key, currently emitted by the `windows-x64` package job;
+- Map package version is `0.5.0`; its minimum installer remains `0.7.0` because the target-specific package payload does not require a newer package-install capability;
+- the native matrix produces one Map package for every required target.
 
 ### 5. [x] Make build/release output names explicit
 
@@ -140,12 +140,12 @@ Do not publish ambiguous assets such as bare `jl-skills.exe` or `map.zip` once t
 Completed implementation:
 
 - target naming helpers in `src/targets.ts` own installer, skill archive, and runtime artifact names;
-- current Windows output is `jl-skills-windows-x64.exe` and `map-windows-x64.zip`;
+- every matrix target emits its exact target-qualified installer and native skill archive names;
 - Map runtime package paths use `runtime/<target>/map[.exe]`;
 - format-2 manifest URLs use the same target-qualified names;
-- GitHub Actions artifact/upload/release paths use target-qualified names;
+- GitHub Actions artifacts and GitHub Release assets use target-qualified names;
 - build cleanup removes the obsolete bare `jl-skills.exe` and `map.zip` outputs;
-- release/package regression fixtures now expect qualified filenames.
+- release/package regression fixtures expect qualified filenames.
 
 ### 6. [x] Make install/update selection target-aware
 
@@ -170,7 +170,7 @@ Completed implementation:
 - unit coverage exercises exact-target selection, missing-target failure, portable fallback, and foreign-runtime-package rejection;
 - explicit target arguments exist only for non-standalone unit coverage; production selection defaults to the compiled target embedded in the executable.
 
-### 7. [ ] Replace the Windows-only workflow with a native build/test matrix
+### 7. [x] Replace the Windows-only workflow with a native build/test matrix
 
 Build and test the required targets on appropriate runners/environments.
 
@@ -188,6 +188,20 @@ Use a complete matrix covering the eight required targets. Keep failures visible
 The aggregate/publish job must depend on every required target succeeding and must independently assert that the expected complete target set is present.
 
 Nightly and Stable must never publish a partial target set.
+
+Completed implementation:
+
+- `.github/workflows/build.yml` uses `prepare -> eight-target build/test matrix -> aggregate -> publish`;
+- matrix failures use `fail-fast: false` so all target failures remain visible;
+- Windows x64 uses `windows-2025`, Windows ARM64 uses the GA `windows-11-vs2026-arm` image, macOS uses native Intel/ARM runners, and Linux uses native x64/ARM64 Ubuntu runners;
+- GNU and musl Linux builds use the same native architecture runners, with `musl`/`musl-tools` plus target-specific Rust linker configuration for musl;
+- every target runs target-specific Map Rust tests, builds its target-qualified installer/package, launches the compiled installer and Map runtime, and runs target-contract tests;
+- Windows x64 additionally retains the established full installer regression suite until step 8 generalizes consumer lifecycle acceptance across every target;
+- every target uploads an isolated `target-<key>` artifact containing its installer, skill package fragment, and target manifest fragment;
+- `scripts/aggregate-release.ts` independently compares downloaded artifacts against all eight canonical targets and the source skill catalog, verifies exact filenames/URLs/SHA-256 values/version metadata, and rejects missing/extra/foreign target coverage;
+- only the verified aggregate release bundle can reach Nightly or Stable publication;
+- rolling Nightly replaces current assets and removes stale assets only after the new complete bundle has passed aggregation;
+- manual `build` produces the same verified aggregate release bundle without publishing it.
 
 ### 8. [ ] Run consumer acceptance on every target
 
@@ -222,4 +236,4 @@ Only after steps 1-9 pass should the first stable snapshot be published.
 
 Stable publication must enforce the complete required target set rather than relying on a manual checklist or memory.
 
-The existing rolling Nightly remains the production-test channel once release publication is re-enabled after the matrix/aggregation work is complete.
+The rolling Nightly is the production-test channel for complete aggregated target snapshots.
