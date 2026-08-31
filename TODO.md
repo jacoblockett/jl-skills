@@ -55,13 +55,13 @@ A platform-independent skill may use one `portable` artifact instead of duplicat
 
 ## Work order
 
-### 1. Lock the target and release contract
+### 1. [x] Lock the target and release contract
 
 Update `RELEASES.md` and `INSTALLER_SPEC.md` to make the eight target keys, explicit artifact naming, per-target package policy, platform-aware installer/skill selection, and the stable-release completeness gate authoritative.
 
 Stable must be mechanically blocked unless every required target is present and successful.
 
-### 2. Introduce one canonical target abstraction
+### 2. [ ] Introduce one canonical target abstraction
 
 Replace scattered OS/architecture checks with one target model that owns at least:
 
@@ -79,7 +79,7 @@ The compiled installer should know its own canonical target at build time.
 
 Upgrade the pinned Bun version to a current pinned release that supports the complete required matrix, including Windows ARM64. Do not use an unpinned `latest` dependency/toolchain policy.
 
-### 3. Move the release manifest to a target-aware schema
+### 3. [ ] Move the release manifest to a target-aware schema
 
 Introduce a new release-manifest format rather than changing format-1 semantics in place.
 
@@ -89,7 +89,7 @@ Each skill entry must expose a version, minimum installer version, and artifact 
 
 Every artifact entry retains an immutable release URL and SHA-256.
 
-### 4. Package native skills per target
+### 4. [ ] Package native skills per target
 
 Do not place every platform runtime into one universal skill ZIP.
 
@@ -97,7 +97,7 @@ For a native skill such as Map, build one complete installable package per targe
 
 A user on one target must never download unused runtimes for other targets.
 
-### 5. Make build/release output names explicit
+### 5. [ ] Make build/release output names explicit
 
 Apply the canonical target name to:
 
@@ -110,7 +110,7 @@ Apply the canonical target name to:
 
 Do not publish ambiguous assets such as bare `jl-skills.exe` or `map.zip` once the target-aware format is active.
 
-### 6. Make install/update selection target-aware
+### 6. [ ] Make install/update selection target-aware
 
 The running installer must select exactly its own target artifact for:
 
@@ -123,7 +123,7 @@ Use `portable` only when the skill explicitly publishes that fallback.
 
 If the current target has no compatible artifact, fail clearly. Never fall back to a different OS, architecture, or ABI.
 
-### 7. Replace the Windows-only workflow with a native build/test matrix
+### 7. [ ] Replace the Windows-only workflow with a native build/test matrix
 
 Build and test the required targets on appropriate runners/environments.
 
@@ -142,7 +142,7 @@ The aggregate/publish job must depend on every required target succeeding and mu
 
 Nightly and Stable must never publish a partial target set.
 
-### 8. Run consumer acceptance on every target
+### 8. [ ] Run consumer acceptance on every target
 
 For every required target, verify the actual release artifact can:
 
@@ -157,7 +157,7 @@ For every required target, verify the actual release artifact can:
 
 Where scope semantics apply, retain the existing project/custom/user scope lifecycle guarantees.
 
-### 9. Validate OS distribution friction
+### 9. [ ] Validate OS distribution friction
 
 Test the actual downloadable release assets as consumers receive them.
 
@@ -169,7 +169,7 @@ At minimum:
 
 Treat required signing/notarization work as a Stable blocker if unsigned artifacts create unacceptable normal-user friction.
 
-### 10. Publish Stable only after complete validation
+### 10. [ ] Publish Stable only after complete validation
 
 Only after steps 1-9 pass should the first stable snapshot be published.
 
