@@ -104,7 +104,6 @@ Completed implementation:
 - format 1 is obsolete and no longer emitted by the build;
 - release fixtures and updater regression coverage use the format-2 shape;
 - the current pre-matrix build intentionally emits only its `windows-x64` entries until per-target build aggregation exists;
-- current temporary Windows artifact selection remains isolated from the final compiled-target selection work in step 6;
 - Nightly and Stable publication are temporarily blocked so an incomplete one-target format-2 manifest cannot replace a release.
 
 ### 4. [x] Package native skills per target
@@ -148,7 +147,7 @@ Completed implementation:
 - build cleanup removes the obsolete bare `jl-skills.exe` and `map.zip` outputs;
 - release/package regression fixtures now expect qualified filenames.
 
-### 6. [ ] Make install/update selection target-aware
+### 6. [x] Make install/update selection target-aware
 
 The running installer must select exactly its own target artifact for:
 
@@ -160,6 +159,16 @@ The running installer must select exactly its own target artifact for:
 Use `portable` only when the skill explicitly publishes that fallback.
 
 If the current target has no compatible artifact, fail clearly. Never fall back to a different OS, architecture, or ABI.
+
+Completed implementation:
+
+- installer self-update selects only `installer.artifacts[compiledTarget]` and fails when that exact target is absent;
+- skill install/update selects `skill.artifacts[compiledTarget]` first and uses only an explicitly published `portable` artifact as fallback;
+- downloaded native packages are rejected unless their packaged runtime metadata contains exactly the selected canonical target runtime;
+- runtime provisioning and runtime executable suffix selection use the build-time embedded canonical target rather than host OS/architecture heuristics;
+- target-qualified installer self-update/uninstall management validates the running executable against the canonical installer asset name;
+- unit coverage exercises exact-target selection, missing-target failure, portable fallback, and foreign-runtime-package rejection;
+- explicit target arguments exist only for non-standalone unit coverage; production selection defaults to the compiled target embedded in the executable.
 
 ### 7. [ ] Replace the Windows-only workflow with a native build/test matrix
 
