@@ -13,7 +13,7 @@ const fixtureReady = join(scratch, 'release-fixture-port.txt')
 
 const begin = '<!-- jl-skill:begin map -->'
 const end = '<!-- jl-skill:end map -->'
-const metadata = '<!-- jl-skills-meta: {"name":"map","version":"0.3.0","format":1} -->'
+const metadata = '<!-- jl-skills-meta: {"name":"map","version":"0.4.0","format":1} -->'
 const mapAgentNames = [
   'map-completion-auditor',
   'map-context',
@@ -107,20 +107,24 @@ function uninstall(scope: string, s: Sandbox, agents: string[] = []): RunResult 
   return run(installer, args, s.project, s.env)
 }
 
-function sharedMap(home: string): string {
-  return join(home, '.jl-skills', 'map', 'bin', 'map.exe')
+function tooling(root: string): string {
+  return join(root, '.jl-skills', 'map')
 }
 
-function sharedSchema(home: string): string {
-  return join(home, '.jl-skills', 'map', 'schema.surql')
+function mapCli(root: string): string {
+  return join(tooling(root), 'bin', 'map.exe')
+}
+
+function mapSchema(root: string): string {
+  return join(tooling(root), 'schema.surql')
+}
+
+function mapRegistry(root: string): string {
+  return join(tooling(root), 'registry.json')
 }
 
 function installerRegistry(s: Sandbox): string {
   return join(s.localAppData, 'JL-Skills', 'registry.json')
-}
-
-function mapRegistry(home: string): string {
-  return join(home, '.jl-skills', 'map', 'registry.json')
 }
 
 function occurrences(text: string, needle: string): number {
@@ -172,31 +176,31 @@ afterAll(() => {
 })
 
 describe('jl-skills installer scope regressions', () => {
-  test('cwd scope installs self-describing project discovery/instructions, native agents, and shared Map support', () => {
+  test('cwd scope installs native integration and tooling inside the project scope only', () => {
     const s = sandbox('cwd-scope')
     ok(install('cwd', s))
 
     const skillRoot = join(s.project, '.agents', 'skills', 'map')
-    const skill = join(skillRoot, 'SKILL.md')
-    expect(existsSync(skill)).toBe(true)
-    expect(read(skill)).toContain(metadata)
+    expect(existsSync(join(skillRoot, 'SKILL.md'))).toBe(true)
+    expect(read(join(skillRoot, 'SKILL.md'))).toContain(metadata)
+    expect(existsSync(join(skillRoot, 'manifest.json'))).toBe(true)
     expect(existsSync(join(skillRoot, 'agents'))).toBe(false)
     expectCodexAgents(s.project)
     expect(existsSync(join(s.project, 'AGENTS.md'))).toBe(true)
     expect(existsSync(join(s.project, '.map'))).toBe(false)
-    expect(existsSync(sharedMap(s.home))).toBe(true)
-    expect(existsSync(sharedSchema(s.home))).toBe(true)
-    expect(existsSync(mapRegistry(s.home))).toBe(false)
+    expect(existsSync(mapCli(s.project))).toBe(true)
+    expect(existsSync(mapSchema(s.project))).toBe(true)
+    expect(existsSync(tooling(s.home))).toBe(false)
+    expect(existsSync(mapRegistry(s.project))).toBe(false)
     expect(existsSync(installerRegistry(s))).toBe(false)
-    expect(existsSync(join(s.project, '.jl-skill', 'runtime', 'map'))).toBe(false)
 
     const instructions = read(join(s.project, 'AGENTS.md'))
-    expect(instructions).toContain(sharedMap(s.home))
+    expect(instructions).toContain(mapCli(s.project))
     expect(occurrences(instructions, begin)).toBe(1)
     expect(occurrences(instructions, end)).toBe(1)
   })
 
-  test('user scope installs user discovery and native agents without touching the invocation project', () => {
+  test('user scope installs user integration and user-local tooling without touching invocation project', () => {
     const s = sandbox('user-scope')
     const projectAgents = join(s.project, 'AGENTS.md')
     writeFileSync(projectAgents, 'PROJECT INSTRUCTIONS\n')
@@ -204,26 +208,24 @@ describe('jl-skills installer scope regressions', () => {
     ok(install('user', s))
 
     const skillRoot = join(s.home, '.agents', 'skills', 'map')
-    const skill = join(skillRoot, 'SKILL.md')
-    expect(existsSync(skill)).toBe(true)
-    expect(read(skill)).toContain(metadata)
+    expect(existsSync(join(skillRoot, 'SKILL.md'))).toBe(true)
+    expect(read(join(skillRoot, 'SKILL.md'))).toContain(metadata)
     expect(existsSync(join(skillRoot, 'agents'))).toBe(false)
     expectCodexAgents(s.home)
     expect(existsSync(join(s.home, '.codex', 'AGENTS.md'))).toBe(true)
-    expect(existsSync(sharedMap(s.home))).toBe(true)
-    expect(existsSync(sharedSchema(s.home))).toBe(true)
+    expect(existsSync(mapCli(s.home))).toBe(true)
+    expect(existsSync(mapSchema(s.home))).toBe(true)
     expect(existsSync(join(s.home, '.map'))).toBe(false)
     expect(existsSync(mapRegistry(s.home))).toBe(false)
     expect(existsSync(installerRegistry(s))).toBe(false)
     expect(read(projectAgents)).toBe('PROJECT INSTRUCTIONS\n')
     expect(existsSync(join(s.project, '.agents'))).toBe(false)
-    expect(existsSync(join(s.project, '.map'))).toBe(false)
+    expect(existsSync(tooling(s.project))).toBe(false)
   })
 
   test('installing into a scope with an existing Map does not initialize or mutate semantic state', () => {
     const s = sandbox('existing-map')
     ok(run(sourceMap, ['--path', s.project, 'init', '--schema', schema], repo, s.env))
-    expect(existsSync(mapRegistry(s.home))).toBe(false)
     const created = JSON.parse(ok(run(
       sourceMap,
       ['--path', s.project, 'create', 'intent', 'Persistent intent'],
@@ -234,7 +236,7 @@ describe('jl-skills installer scope regressions', () => {
 
     ok(install(s.project, s))
 
-    const cli = sharedMap(s.home)
+    const cli = mapCli(s.project)
     const after = JSON.parse(ok(run(cli, ['--path', s.project, 'status'], repo, s.env)).stdout)
     const shown = JSON.parse(ok(run(cli, ['--path', s.project, 'show', created.id], repo, s.env)).stdout)
     const validated = JSON.parse(ok(run(cli, ['--path', s.project, 'validate'], repo, s.env)).stdout)
@@ -259,13 +261,7 @@ describe('jl-skills installer scope regressions', () => {
     expect(occurrences(text, begin)).toBe(1)
     expect(occurrences(text, end)).toBe(1)
     expect(text).toContain('Managed by jl-skills')
-    expect(text).toContain(' get intents')
-    expect(text).toContain(' get questions')
-    expect(text).toContain(' show <id>')
-    expect(text).toContain(' context <id>')
-    expect(text).toContain(' search "<query>"')
-    expect(text).toContain(' validate')
-    expect(text).toContain(' --help')
+    expect(text).toContain(mapCli(s.project))
     expect(text).not.toContain('{{JL_MAP_CLI}}')
   })
 
@@ -284,7 +280,6 @@ describe('jl-skills installer scope regressions', () => {
     expect(occurrences(text, begin)).toBe(1)
     expect(occurrences(text, end)).toBe(1)
     expect(occurrences(text, 'Managed by jl-skills')).toBe(1)
-    expect(occurrences(text, ' get intents')).toBe(1)
   })
 
   test('malformed managed boundaries are rejected without rewriting AGENTS.md', () => {
@@ -325,29 +320,30 @@ describe('jl-skills installer scope regressions', () => {
     expect(occurrences(read(agents), begin)).toBe(1)
     expect(existsSync(join(s.home, '.agents', 'skills', 'map', 'SKILL.md'))).toBe(true)
     expectCodexAgents(s.home)
+    expect(existsSync(mapCli(s.home))).toBe(true)
     expect(existsSync(join(s.project, '.agents'))).toBe(false)
-    expect(existsSync(join(s.project, '.map'))).toBe(false)
+    expect(existsSync(tooling(s.project))).toBe(false)
     expect(existsSync(installerRegistry(s))).toBe(false)
   })
 
-  test('Map CLI is shared at ~/.jl-skills/map/bin/map.exe for every scope without installer receipts', () => {
-    const s = sandbox('shared-runtime')
+  test('Map tooling is isolated per installation scope', () => {
+    const s = sandbox('scope-local-runtime')
     const secondProject = join(s.root, 'second', 'nested', 'project')
 
     ok(install('cwd', s))
     ok(install(secondProject, s))
     ok(install('user', s))
 
-    const cli = sharedMap(s.home)
-    expect(existsSync(cli)).toBe(true)
-    expect(existsSync(join(s.project, '.jl-skill', 'runtime', 'map'))).toBe(false)
-    expect(existsSync(join(secondProject, '.jl-skill', 'runtime', 'map'))).toBe(false)
-    expect(existsSync(join(s.localAppData, 'JL-Skills', 'map', 'runtime'))).toBe(false)
+    expect(existsSync(mapCli(s.project))).toBe(true)
+    expect(existsSync(mapSchema(s.project))).toBe(true)
+    expect(existsSync(mapCli(secondProject))).toBe(true)
+    expect(existsSync(mapSchema(secondProject))).toBe(true)
+    expect(existsSync(mapCli(s.home))).toBe(true)
+    expect(existsSync(mapSchema(s.home))).toBe(true)
+    expect(read(join(s.project, 'AGENTS.md'))).toContain(mapCli(s.project))
+    expect(read(join(secondProject, 'AGENTS.md'))).toContain(mapCli(secondProject))
+    expect(read(join(s.home, '.codex', 'AGENTS.md'))).toContain(mapCli(s.home))
     expect(existsSync(installerRegistry(s))).toBe(false)
-
-    expect(read(join(s.project, 'AGENTS.md'))).toContain(cli)
-    expect(read(join(secondProject, 'AGENTS.md'))).toContain(cli)
-    expect(read(join(s.home, '.codex', 'AGENTS.md'))).toContain(cli)
   })
 
   test('instruction injection can be declined without touching an existing AGENTS.md', () => {
@@ -359,8 +355,8 @@ describe('jl-skills installer scope regressions', () => {
 
     expect(existsSync(join(s.project, '.agents', 'skills', 'map', 'SKILL.md'))).toBe(true)
     expectCodexAgents(s.project)
+    expect(existsSync(mapCli(s.project))).toBe(true)
     expect(read(agents)).toBe('USER ONLY\n')
-    expect(existsSync(installerRegistry(s))).toBe(false)
   })
 
   test('update preserves instruction opt-out from actual managed-block state', () => {
@@ -378,10 +374,9 @@ describe('jl-skills installer scope regressions', () => {
 
     ok(update(s.project, s, [], false))
     expect(read(agents)).toBe('USER ONLY\n')
-    expect(existsSync(installerRegistry(s))).toBe(false)
   })
 
-  test('update replaces stale skill/runtime support while preserving generated and unrelated data', () => {
+  test('update replaces stale skill and scope-local tooling while preserving generated and unrelated data', () => {
     const s = sandbox('update-replaces-stale-assets')
     ok(install(s.project, s))
 
@@ -399,7 +394,7 @@ describe('jl-skills installer scope regressions', () => {
     writeFileSync(join(mapDir, 'project.json'), '{"projectId":"aaaaaaaaaaaaaaaaaaaa","createdAtMs":1}\n')
     writeFileSync(join(mapDir, 'keep.txt'), 'KEEP GENERATED\n')
 
-    writeFileSync(sharedSchema(s.home), 'STALE SCHEMA\n')
+    writeFileSync(mapSchema(s.project), 'STALE SCHEMA\n')
 
     ok(update(s.project, s))
 
@@ -412,7 +407,7 @@ describe('jl-skills installer scope regressions', () => {
     expect(read(unrelated)).toBe('KEEP UNRELATED\n')
     expect(read(join(mapDir, 'keep.txt'))).toBe('KEEP GENERATED\n')
     expect(read(join(mapDir, 'project.json'))).toContain('aaaaaaaaaaaaaaaaaaaa')
-    expect(read(sharedSchema(s.home))).toBe(read(schema))
+    expect(read(mapSchema(s.project))).toBe(read(schema))
   })
 
   test('manual self-describing skill installation is discoverable without receipts', () => {
@@ -426,17 +421,18 @@ describe('jl-skills installer scope regressions', () => {
 
     expect(read(join(skillDir, 'SKILL.md'))).toContain(metadata)
     expectCodexAgents(s.project)
-    expect(existsSync(sharedMap(s.home))).toBe(true)
+    expect(existsSync(mapCli(s.project))).toBe(true)
     expect(read(join(s.project, 'AGENTS.md'))).toBe('MANUAL CONTENT\n')
     expect(existsSync(installerRegistry(s))).toBe(false)
 
     ok(uninstall(s.project, s))
     expect(existsSync(skillDir)).toBe(false)
     expectCodexAgents(s.project, false)
+    expect(existsSync(tooling(s.project))).toBe(false)
     expect(read(join(s.project, 'AGENTS.md'))).toBe('MANUAL CONTENT\n')
   })
 
-  test('scoped uninstall removes only owned integration and preserves Map data, unrelated agents, and shared tooling', () => {
+  test('scoped uninstall removes installed tooling but preserves generated data and unrelated integration', () => {
     const s = sandbox('scoped-uninstall')
     const agents = join(s.project, 'AGENTS.md')
     const unrelatedAgent = join(s.project, '.codex', 'agents', 'keep.toml')
@@ -453,13 +449,30 @@ describe('jl-skills installer scope regressions', () => {
     expect(read(unrelatedAgent)).toBe('name = "keep"\n')
     expect(read(agents)).toBe('USER CONTENT\n')
     expect(existsSync(join(s.project, '.map'))).toBe(true)
-    expect(existsSync(sharedMap(s.home))).toBe(true)
-    expect(existsSync(sharedSchema(s.home))).toBe(true)
-    expect(existsSync(mapRegistry(s.home))).toBe(false)
+    expect(existsSync(tooling(s.project))).toBe(false)
+    expect(existsSync(tooling(s.home))).toBe(false)
     expect(existsSync(installerRegistry(s))).toBe(false)
   })
 
-  test('uninstall does not touch instruction files when injection was declined', () => {
+  test('uninstall retains empty instruction file and harness parent directories', () => {
+    const s = sandbox('empty-instruction-retention')
+    ok(install(s.project, s))
+
+    ok(uninstall(s.project, s))
+
+    const agents = join(s.project, 'AGENTS.md')
+    expect(existsSync(agents)).toBe(true)
+    expect(read(agents)).toBe('')
+    expect(existsSync(join(s.project, '.agents'))).toBe(true)
+    expect(existsSync(join(s.project, '.agents', 'skills'))).toBe(true)
+    expect(existsSync(join(s.project, '.codex'))).toBe(true)
+    expect(existsSync(join(s.project, '.codex', 'agents'))).toBe(true)
+    expect(existsSync(join(s.project, '.agents', 'skills', 'map'))).toBe(false)
+    expectCodexAgents(s.project, false)
+    expect(existsSync(tooling(s.project))).toBe(false)
+  })
+
+  test('uninstall does not touch instruction content when injection was declined', () => {
     const s = sandbox('uninstall-no-instructions')
     const agents = join(s.project, 'AGENTS.md')
     writeFileSync(agents, 'DO NOT TOUCH\n')
@@ -470,13 +483,31 @@ describe('jl-skills installer scope regressions', () => {
     expect(read(agents)).toBe('DO NOT TOUCH\n')
     expect(existsSync(join(s.project, '.agents', 'skills', 'map'))).toBe(false)
     expectCodexAgents(s.project, false)
+    expect(existsSync(tooling(s.project))).toBe(false)
   })
 
-  test('agent-filtered uninstall removes only the requested harness integration', () => {
+  test('user uninstall removes user-local Map tooling and retains empty user instruction file', () => {
+    const s = sandbox('user-uninstall')
+    ok(install('user', s))
+    expect(existsSync(tooling(s.home))).toBe(true)
+
+    ok(uninstall('user', s))
+
+    expect(existsSync(join(s.home, '.agents', 'skills', 'map'))).toBe(false)
+    expectCodexAgents(s.home, false)
+    expect(existsSync(tooling(s.home))).toBe(false)
+    expect(existsSync(join(s.home, '.codex', 'AGENTS.md'))).toBe(true)
+    expect(read(join(s.home, '.codex', 'AGENTS.md'))).toBe('')
+    expect(existsSync(join(s.home, '.agents'))).toBe(true)
+    expect(existsSync(join(s.home, '.codex'))).toBe(true)
+  })
+
+  test('agent-filtered uninstall keeps tooling until the final harness integration is removed', () => {
     const s = sandbox('agent-filtered-uninstall')
     ok(install(s.project, s, s.project, ['codex', 'claude']))
     expectCodexAgents(s.project)
     expectClaudeAgents(s.project)
+    expect(existsSync(tooling(s.project))).toBe(true)
 
     ok(uninstall(s.project, s, ['codex']))
 
@@ -484,8 +515,20 @@ describe('jl-skills installer scope regressions', () => {
     expectCodexAgents(s.project, false)
     expect(existsSync(join(s.project, '.claude', 'skills', 'map', 'SKILL.md'))).toBe(true)
     expectClaudeAgents(s.project)
-    expect(existsSync(join(s.project, 'AGENTS.md'))).toBe(false)
+    expect(existsSync(join(s.project, 'AGENTS.md'))).toBe(true)
+    expect(read(join(s.project, 'AGENTS.md'))).toBe('')
     expect(read(join(s.project, 'CLAUDE.md'))).toContain(begin)
+    expect(existsSync(tooling(s.project))).toBe(true)
+
+    ok(uninstall(s.project, s, ['claude']))
+
+    expect(existsSync(join(s.project, '.claude', 'skills', 'map'))).toBe(false)
+    expectClaudeAgents(s.project, false)
+    expect(existsSync(tooling(s.project))).toBe(false)
+    expect(existsSync(join(s.project, 'CLAUDE.md'))).toBe(true)
+    expect(read(join(s.project, 'CLAUDE.md'))).toBe('')
+    expect(existsSync(join(s.project, '.claude'))).toBe(true)
+    expect(existsSync(join(s.project, '.claude', 'agents'))).toBe(true)
     expect(existsSync(installerRegistry(s))).toBe(false)
   })
 })
