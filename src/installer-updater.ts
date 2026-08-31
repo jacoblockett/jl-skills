@@ -13,6 +13,9 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { containedPath, extractZip } from './archive'
+import { compiledTarget } from './targets'
+
+if (Bun.isStandaloneExecutable) compiledTarget()
 
 export const DEFAULT_RELEASE_MANIFEST_URL = 'https://github.com/jacoblockett/jl-skills/releases/latest/download/manifest.json'
 
