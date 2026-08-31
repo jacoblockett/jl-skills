@@ -31,14 +31,14 @@ function sha256(data: Uint8Array | string): string {
   return createHash('sha256').update(data).digest('hex')
 }
 
-function releaseManifest(installerVersion = '0.7.0', mapVersion = '0.4.0', mapSha = '1'.repeat(64)) {
+function releaseManifest(installerVersion = '0.7.0', mapVersion = '0.5.0', mapSha = '1'.repeat(64)) {
   return {
     format: 2,
     installer: {
       version: installerVersion,
       artifacts: {
         'windows-x64': {
-          url: 'https://fixture.invalid/jl-skills.exe',
+          url: 'https://fixture.invalid/jl-skills-windows-x64.exe',
           sha256: '0'.repeat(64),
         },
       },
@@ -49,7 +49,7 @@ function releaseManifest(installerVersion = '0.7.0', mapVersion = '0.4.0', mapSh
         min_installer: '0.7.0',
         artifacts: {
           'windows-x64': {
-            url: 'https://fixture.invalid/map.zip',
+            url: 'https://fixture.invalid/map-windows-x64.zip',
             sha256: mapSha,
           },
         },
@@ -71,8 +71,11 @@ function fixtureFetcher(
         headers: { 'content-type': 'application/json' },
       })
     }
-    if (url === 'https://fixture.invalid/jl-skills.exe') return new Response(installer, { status: 200 })
-    if (url === 'https://fixture.invalid/map.zip' && mapArchive) return new Response(mapArchive, { status: 200 })
+    if (url === 'https://fixture.invalid/jl-skills-windows-x64.exe') return new Response(installer, { status: 200 })
+    if (
+      (url === 'https://fixture.invalid/map-windows-x64.zip' || url === 'https://fixture.invalid/portable-test-portable.zip')
+      && mapArchive
+    ) return new Response(mapArchive, { status: 200 })
     return new Response('missing', { status: 404 })
   }) as typeof fetch
 }
@@ -88,10 +91,10 @@ describe('release metadata', () => {
   test('release manifest requires target-aware format 2', () => {
     const parsed = parseReleaseManifest(releaseManifest())
     expect(parsed.installer.version).toBe('0.7.0')
-    expect(parsed.installer.artifacts['windows-x64']?.url).toBe('https://fixture.invalid/jl-skills.exe')
-    expect(parsed.skills.map.version).toBe('0.4.0')
+    expect(parsed.installer.artifacts['windows-x64']?.url).toBe('https://fixture.invalid/jl-skills-windows-x64.exe')
+    expect(parsed.skills.map.version).toBe('0.5.0')
     expect(parsed.skills.map.min_installer).toBe('0.7.0')
-    expect(parsed.skills.map.artifacts['windows-x64']?.url).toBe('https://fixture.invalid/map.zip')
+    expect(parsed.skills.map.artifacts['windows-x64']?.url).toBe('https://fixture.invalid/map-windows-x64.zip')
 
     expect(() => parseReleaseManifest({ ...releaseManifest(), format: 1 })).toThrow('unsupported release manifest format')
     expect(() => parseReleaseManifest({
@@ -100,7 +103,7 @@ describe('release metadata', () => {
         map: {
           ...releaseManifest().skills.map,
           artifacts: {
-            'windows-x64': { url: 'https://fixture.invalid/map.zip', sha256: 'BAD' },
+            'windows-x64': { url: 'https://fixture.invalid/map-windows-x64.zip', sha256: 'BAD' },
           },
         },
       },
@@ -111,16 +114,16 @@ describe('release metadata', () => {
     const portable = releaseManifest()
     portable.skills.map.artifacts = {
       portable: {
-        url: 'https://fixture.invalid/map.zip',
+        url: 'https://fixture.invalid/map-portable.zip',
         sha256: '1'.repeat(64),
       },
     } as any
-    expect(parseReleaseManifest(portable).skills.map.artifacts.portable?.url).toBe('https://fixture.invalid/map.zip')
+    expect(parseReleaseManifest(portable).skills.map.artifacts.portable?.url).toBe('https://fixture.invalid/map-portable.zip')
 
     const invalidInstaller = releaseManifest()
     invalidInstaller.installer.artifacts = {
       portable: {
-        url: 'https://fixture.invalid/jl-skills.exe',
+        url: 'https://fixture.invalid/jl-skills-portable',
         sha256: '0'.repeat(64),
       },
     } as any
@@ -129,7 +132,7 @@ describe('release metadata', () => {
     const invalidTarget = releaseManifest()
     invalidTarget.skills.map.artifacts = {
       'linux-x86': {
-        url: 'https://fixture.invalid/map.zip',
+        url: 'https://fixture.invalid/map-linux-x86.zip',
         sha256: '1'.repeat(64),
       },
     } as any
@@ -140,7 +143,7 @@ describe('release metadata', () => {
     const parsed = parseSkillPackageManifest({
       format: 1,
       name: 'map',
-      version: '0.4.0',
+      version: '0.5.0',
       min_installer: '0.7.0',
       description: 'Map',
       skill_files: ['SKILL.md'],
@@ -159,7 +162,7 @@ describe('release metadata', () => {
     expect(() => parseSkillPackageManifest({
       format: 1,
       name: 'map',
-      version: '0.4.0',
+      version: '0.5.0',
       min_installer: '0.7.0',
       description: 'Map',
       skill_files: ['../escape'],
@@ -172,26 +175,28 @@ describe('release metadata', () => {
       fixtureFetcher(releaseManifest()),
     )
     expect(parsed?.installer.version).toBe('0.7.0')
-    expect(parsed?.installer.artifacts['windows-x64']?.url).toBe('https://fixture.invalid/jl-skills.exe')
-    expect(parsed?.skills.map.version).toBe('0.4.0')
+    expect(parsed?.installer.artifacts['windows-x64']?.url).toBe('https://fixture.invalid/jl-skills-windows-x64.exe')
+    expect(parsed?.skills.map.version).toBe('0.5.0')
     expect(parsed?.skills.map.min_installer).toBe('0.7.0')
   })
 
-  test('release build emits installer, skill archive, and matching manifest hashes', () => {
-    const executable = join(repo, 'build', 'jl-skills.exe')
-    const mapArchive = join(repo, 'build', 'map.zip')
+  test('release build emits qualified installer and skill archive with matching manifest hashes', () => {
+    const executable = join(repo, 'build', 'jl-skills-windows-x64.exe')
+    const mapArchive = join(repo, 'build', 'map-windows-x64.zip')
     const manifestPath = join(repo, 'build', 'manifest.json')
     expect(existsSync(executable)).toBe(true)
     expect(existsSync(mapArchive)).toBe(true)
+    expect(existsSync(join(repo, 'build', 'jl-skills.exe'))).toBe(false)
+    expect(existsSync(join(repo, 'build', 'map.zip'))).toBe(false)
     expect(existsSync(manifestPath)).toBe(true)
 
     const manifest = parseReleaseManifest(JSON.parse(readFileSync(manifestPath, 'utf8')))
     const installerArtifact = manifest.installer.artifacts['windows-x64']
     const mapArtifact = manifest.skills.map.artifacts['windows-x64']
     expect(installerArtifact?.sha256).toBe(sha256(readFileSync(executable)))
-    expect(installerArtifact?.url).toEndWith('/jl-skills.exe')
+    expect(installerArtifact?.url).toEndWith('/jl-skills-windows-x64.exe')
     expect(mapArtifact?.sha256).toBe(sha256(readFileSync(mapArchive)))
-    expect(mapArtifact?.url).toEndWith('/map.zip')
+    expect(mapArtifact?.url).toEndWith('/map-windows-x64.zip')
   })
 
   test('no-update path returns null for equal or older installer releases', async () => {
@@ -215,7 +220,7 @@ describe('release metadata', () => {
       fixtureFetcher(manifest, bytes),
     )
     expect(update?.version).toBe('0.8.0')
-    expect(update?.artifact.url).toBe('https://fixture.invalid/jl-skills.exe')
+    expect(update?.artifact.url).toBe('https://fixture.invalid/jl-skills-windows-x64.exe')
   })
 })
 
@@ -227,24 +232,24 @@ describe('skill package download', () => {
     const manifest = {
       format: 1,
       name: 'map',
-      version: '0.4.0',
+      version: '0.5.0',
       min_installer: '0.7.0',
       description: 'Map',
       skill_files: ['SKILL.md'],
     }
     writeFileSync(join(packageRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
-    writeFileSync(join(packageRoot, 'SKILL.md'), '<!-- jl-skills-meta: {"name":"map","version":"0.4.0","format":1} -->\n')
+    writeFileSync(join(packageRoot, 'SKILL.md'), '<!-- jl-skills-meta: {"name":"map","version":"0.5.0","format":1} -->\n')
 
     const zip = new AdmZip()
     zip.addLocalFile(join(packageRoot, 'manifest.json'))
     zip.addLocalFile(join(packageRoot, 'SKILL.md'))
     const bytes = new Uint8Array(zip.toBuffer())
     const released: ReleasedSkill = {
-      version: '0.4.0',
+      version: '0.5.0',
       min_installer: '0.7.0',
       artifacts: {
         'windows-x64': {
-          url: 'https://fixture.invalid/map.zip',
+          url: 'https://fixture.invalid/map-windows-x64.zip',
           sha256: sha256(bytes),
         },
       },
@@ -256,7 +261,7 @@ describe('skill package download', () => {
       const downloaded = await downloadSkillPackage('map', released, fixtureFetcher({}, 'unused', bytes))
       try {
         expect(downloaded.manifest.name).toBe('map')
-        expect(downloaded.manifest.version).toBe('0.4.0')
+        expect(downloaded.manifest.version).toBe('0.5.0')
         expect(existsSync(join(downloaded.root, 'SKILL.md'))).toBe(true)
       } finally {
         downloaded.cleanup()
@@ -289,7 +294,7 @@ describe('skill package download', () => {
       min_installer: '0.7.0',
       artifacts: {
         portable: {
-          url: 'https://fixture.invalid/map.zip',
+          url: 'https://fixture.invalid/portable-test-portable.zip',
           sha256: sha256(bytes),
         },
       },
@@ -308,11 +313,11 @@ describe('skill package download', () => {
     zip.addFile('C:/escape.txt', Buffer.from('bad'))
     const bytes = new Uint8Array(zip.toBuffer())
     const released: ReleasedSkill = {
-      version: '0.4.0',
+      version: '0.5.0',
       min_installer: '0.7.0',
       artifacts: {
         'windows-x64': {
-          url: 'https://fixture.invalid/map.zip',
+          url: 'https://fixture.invalid/map-windows-x64.zip',
           sha256: sha256(bytes),
         },
       },
@@ -326,7 +331,7 @@ describe('skill package download', () => {
 describe('installer update artifact staging', () => {
   test('verified replacement is staged without modifying the running executable or neighboring data', async () => {
     const root = reset('stage-success')
-    const executable = join(root, 'jl-skills.exe')
+    const executable = join(root, 'jl-skills-windows-x64.exe')
     const neighboring = join(root, 'keep.txt')
     const bytes = 'replacement-exe'
     writeFileSync(executable, 'current-exe')
@@ -334,7 +339,7 @@ describe('installer update artifact staging', () => {
 
     const update: InstallerUpdate = {
       version: '0.8.0',
-      artifact: { url: 'https://fixture.invalid/jl-skills.exe', sha256: sha256(bytes) },
+      artifact: { url: 'https://fixture.invalid/jl-skills-windows-x64.exe', sha256: sha256(bytes) },
     }
     const staged = await stageInstallerUpdate(executable, update, fixtureFetcher({}, bytes))
 
@@ -350,7 +355,7 @@ describe('installer update artifact staging', () => {
     const destination = join(root, 'replacement.exe')
     const update: InstallerUpdate = {
       version: '0.8.0',
-      artifact: { url: 'https://fixture.invalid/jl-skills.exe', sha256: '0'.repeat(64) },
+      artifact: { url: 'https://fixture.invalid/jl-skills-windows-x64.exe', sha256: '0'.repeat(64) },
     }
 
     await expect(downloadVerifiedInstaller(update, destination, fixtureFetcher({}, 'wrong-bytes'))).rejects.toThrow('SHA-256 mismatch')
@@ -358,11 +363,14 @@ describe('installer update artifact staging', () => {
   })
 
   test('Windows replacement command waits and replaces the executable from the staged sibling', () => {
-    const command = windowsReplacementCommand('C:\\Tools\\.jl-skills.exe.update-1', 'C:\\Tools\\jl-skills.exe')
+    const command = windowsReplacementCommand(
+      'C:\\Tools\\.jl-skills-windows-x64.exe.update-1',
+      'C:\\Tools\\jl-skills-windows-x64.exe',
+    )
     expect(command).toContain('ping 127.0.0.1 -n 2')
     expect(command).toContain('move /y')
-    expect(command).toContain('.jl-skills.exe.update-1')
-    expect(command).toContain('jl-skills.exe')
+    expect(command).toContain('.jl-skills-windows-x64.exe.update-1')
+    expect(command).toContain('jl-skills-windows-x64.exe')
   })
 
   test('installer self-uninstall delegates silent cleanup and exits without an outro', () => {
