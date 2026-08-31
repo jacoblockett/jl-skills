@@ -66,7 +66,8 @@ function auditMac(path: string): void {
   record(
     `${basename(path)} Developer ID signature`,
     developerId,
-    developerId ? 'Developer ID Application authority present' : (signatureText.trim() || 'no code-signing details'),
+    developerId ? 'Developer ID Application authority present' : (signatureText.trim() || 'unsigned'),
+    false,
   )
 
   const quarantine = command('/usr/bin/xattr', [
@@ -87,6 +88,7 @@ function auditMac(path: string): void {
     `${basename(path)} Gatekeeper assessment`,
     gatekeeper.status === 0,
     gatekeeperText || `spctl exit ${gatekeeper.status}`,
+    false,
   )
 }
 
@@ -103,6 +105,7 @@ function auditWindows(path: string): void {
     `${basename(path)} Authenticode signature`,
     signature.status === 0 && status === 'Valid',
     status || signature.stderr.trim() || `PowerShell exit ${signature.status}`,
+    false,
   )
 }
 
@@ -198,6 +201,7 @@ writeFileSync(reportPath, `${JSON.stringify({
   format: 1,
   target: target.key,
   release_tag: releaseTag,
+  signing_policy: 'unsigned-accepted',
   generated_at: new Date().toISOString(),
   ok: blockers.length === 0,
   checks,
