@@ -28,8 +28,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: windows-latest
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      should_build: ${{ steps.mode.outputs.should_build }}
+      release_tag: ${{ steps.mode.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,107 +41,190 @@ jobs:
 
       - name: Resolve mode
         id: mode
-        shell: pwsh
+        shell: bash
         run: |
-          $mode = 'nightly'
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $mode = '${{ inputs.action }}'
-          }
+          set -euo pipefail
 
-          if ('${{ github.ref }}' -ne 'refs/heads/main') {
-            throw 'Build and release automation may only run from main.'
-          }
+          mode=nightly
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then
+            mode='${{ inputs.action }}'
+          fi
 
-          $shouldBuild = $true
-          $releaseTag = 'dev'
+          if [[ '${{ github.ref }}' != 'refs/heads/main' ]]; then
+            echo 'Build and release automation may only run from main.' >&2
+            exit 1
+          fi
 
-          if ($mode -eq 'nightly' -or $mode -eq 'stable') {
-            $shouldBuild = $false
-            Write-Host 'Nightly and Stable publication are temporarily blocked while the required cross-platform target matrix is incomplete.'
-          }
+          should_build=true
+          release_tag=dev
 
-          if ($mode -eq 'nightly') {
-            if ($shouldBuild -and '${{ github.event_name }}' -eq 'schedule') {
-              $eastern = [TimeZoneInfo]::FindSystemTimeZoneById('Eastern Standard Time')
-              $local = [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $eastern)
-              if ($local.Hour -ne 2) {
-                $shouldBuild = $false
-                Write-Host "Skipping duplicate DST cron at local hour $($local.Hour)."
-              }
-            }
+          if [[ "$mode" == nightly ]]; then
+            if [[ '${{ github.event_name }}' == 'schedule' ]]; then
+              local_hour="$(TZ=America/New_York date +%H)"
+              if [[ "$local_hour" != 02 ]]; then
+                should_build=false
+                echo "Skipping duplicate DST cron at local hour $local_hour."
+              fi
+            fi
 
-            $force = '${{ inputs.force }}' -eq 'true'
-            if ($shouldBuild -and -not $force) {
+            force='${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}'
+            if [[ "$should_build" == true && "$force" != true ]]; then
               git fetch origin --tags --force
-              $base = (& git tag --list nightly | Select-Object -First 1)
-              if ($base) {
-                $files = @(git diff --name-only "$base..HEAD" -- src scripts skills package.json bun.lock)
-                if ($LASTEXITCODE -ne 0) { throw 'Could not compare against the previous nightly tag.' }
-                $shouldBuild = $files.Count -gt 0
-                if ($shouldBuild) {
-                  Write-Host 'Build-relevant changes:'
-                  $files | ForEach-Object { Write-Host "  $_" }
-                } else {
-                  Write-Host 'No build-relevant changes since the last successful nightly.'
-                }
-              }
-            }
-            $releaseTag = 'nightly'
-          } elseif ($mode -eq 'stable') {
-            $releaseTag = [DateTime]::UtcNow.ToString('yyyy.MM.dd-HHmmZ')
-            if ($shouldBuild) {
-              git fetch origin --tags --force
-              $existingTag = (& git tag --list $releaseTag | Select-Object -First 1)
-              if ($existingTag) { throw "Tag $releaseTag already exists." }
-            }
-          }
+              if git rev-parse -q --verify refs/tags/nightly >/dev/null; then
+                mapfile -t files < <(git diff --name-only nightly..HEAD -- .github/workflows/build.yml src scripts skills tests package.json bun.lock)
+                if (( ${#files[@]} > 0 )); then
+                  echo 'Build-relevant changes:'
+                  printf '  %s\n' "${files[@]}"
+                else
+                  should_build=false
+                  echo 'No build-relevant changes since the last successful nightly.'
+                fi
+              fi
+            fi
+            release_tag=nightly
+          elif [[ "$mode" == stable ]]; then
+            release_tag="$(date -u +%Y.%m.%d-%H%MZ)"
+            git fetch origin --tags --force
+            if git rev-parse -q --verify "refs/tags/$release_tag" >/dev/null; then
+              echo "Tag $release_tag already exists." >&2
+              exit 1
+            fi
+          elif [[ "$mode" != build ]]; then
+            echo "Unknown build mode: $mode" >&2
+            exit 1
+          fi
 
-          "mode=$mode" >> $env:GITHUB_OUTPUT
-          "should_build=$($shouldBuild.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
 
       - name: No release build
         if: steps.mode.outputs.should_build != 'true'
-        shell: pwsh
-        run: Write-Host 'Nothing to build or publish.'
+        run: echo 'Nothing to build or publish.'
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-2025
+            rust_target: x86_64-pc-windows-msvc
+            installer: jl-skills-windows-x64.exe
+            map_executable: map.exe
+          - target: windows-arm64
+            runner: windows-11-vs2026-arm
+            rust_target: aarch64-pc-windows-msvc
+            installer: jl-skills-windows-arm64.exe
+            map_executable: map.exe
+          - target: macos-x64
+            runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            installer: jl-skills-macos-x64
+            map_executable: map
+          - target: macos-arm64
+            runner: macos-15
+            rust_target: aarch64-apple-darwin
+            installer: jl-skills-macos-arm64
+            map_executable: map
+          - target: linux-x64-gnu
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-gnu
+            installer: jl-skills-linux-x64-gnu
+            map_executable: map
+          - target: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            installer: jl-skills-linux-arm64-gnu
+            map_executable: map
+          - target: linux-x64-musl
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-musl
+            installer: jl-skills-linux-x64-musl
+            map_executable: map
+          - target: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-musl
+            installer: jl-skills-linux-arm64-musl
+            map_executable: map
+    runs-on: ${{ matrix.runner }}
+    env:
+      JL_SKILLS_BUILD_TARGET: ${{ matrix.target }}
+      JL_SKILLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
-        if: steps.mode.outputs.should_build == 'true'
         with:
           bun-version: 1.4.0
 
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.mode.outputs.should_build == 'true'
         with:
           toolchain: 1.97.1
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install musl toolchain
+        if: endsWith(matrix.target, '-musl')
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y musl musl-tools
+          if [[ '${{ matrix.target }}' == 'linux-x64-musl' ]]; then
+            echo 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
+          else
+            echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
+          fi
 
       - name: Restore Rust build cache
         id: rust-cache
-        if: steps.mode.outputs.should_build == 'true'
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             build/cargo/map
-          key: windows-x64-rust-1.97.1-map-${{ hashFiles('skills/map/Cargo.lock', 'skills/map/Cargo.toml') }}
+          key: ${{ matrix.target }}-rust-1.97.1-map-${{ hashFiles('skills/map/Cargo.lock', 'skills/map/Cargo.toml') }}
           restore-keys: |
-            windows-x64-rust-1.97.1-map-
+            ${{ matrix.target }}-rust-1.97.1-map-
 
       - name: Install dependencies
-        if: steps.mode.outputs.should_build == 'true'
-        shell: pwsh
+        shell: bash
         run: bun install --frozen-lockfile
 
-      - name: Build and test from source
-        if: steps.mode.outputs.should_build == 'true'
-        shell: pwsh
-        env:
-          JL_SKILLS_RELEASE_TAG: ${{ steps.mode.outputs.release_tag }}
-        run: bun run smoke
+      - name: Test Map runtime for target
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --release \
+            --manifest-path skills/map/Cargo.toml \
+            --target '${{ matrix.rust_target }}' \
+            --target-dir build/cargo/map
+
+      - name: Build target release artifacts
+        shell: bash
+        run: bun run build
+
+      - name: Launch compiled target artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          './build/${{ matrix.installer }}' --version
+          './build/cargo/map/${{ matrix.rust_target }}/release/${{ matrix.map_executable }}' --help >/dev/null
+
+      - name: Run full installer regression suite
+        if: matrix.target == 'windows-x64'
+        shell: bash
+        run: bun run test:installer
+
+      - name: Run target contract tests
+        shell: bash
+        run: bun test --timeout 20000 tests/targets.test.ts
 
       - name: Save Rust build cache
-        if: always() && steps.mode.outputs.should_build == 'true' && steps.rust-cache.outputs.cache-hit != 'true'
+        if: always() && steps.rust-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -146,46 +233,100 @@ jobs:
             build/cargo/map
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
-      - name: Upload production-test artifacts
-        if: steps.mode.outputs.should_build == 'true'
+      - name: Upload target artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-x64
+          name: target-${{ matrix.target }}
           if-no-files-found: error
           retention-days: 14
           path: |
-            build/jl-skills-windows-x64.exe
+            build/${{ matrix.installer }}
             build/manifest.json
-            build/*-windows-x64.zip
+            build/*-${{ matrix.target }}.zip
+            build/*-portable.zip
+
+  aggregate:
+    needs:
+      - prepare
+      - build
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Download all target artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: target-*
+          path: build/targets
+          merge-multiple: false
+
+      - name: Aggregate and verify complete release
+        env:
+          JL_SKILLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          JL_SKILLS_AGGREGATE_INPUT: build/targets
+          JL_SKILLS_AGGREGATE_OUTPUT: build/release
+        run: bun scripts/aggregate-release.ts
+
+      - name: Upload verified release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          if-no-files-found: error
+          retention-days: 14
+          path: build/release/*
 
       - name: Publish rolling nightly
-        if: steps.mode.outputs.should_build == 'true' && steps.mode.outputs.mode == 'nightly'
-        shell: pwsh
+        if: needs.prepare.outputs.mode == 'nightly'
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $assets = @('build/jl-skills-windows-x64.exe', 'build/manifest.json') + @(Get-ChildItem build/*-windows-x64.zip | ForEach-Object { $_.FullName })
-          $existingRelease = (& gh release list --limit 100 --json tagName --jq '.[] | select(.tagName == "nightly") | .tagName' | Select-Object -First 1)
-          if (-not $existingRelease) {
-            gh release create nightly @assets --title 'Nightly' --notes 'Rolling production-test build from main. Not part of the stable update channel.' --prerelease --target $env:GITHUB_SHA
-            if ($LASTEXITCODE -ne 0) { throw 'Could not create the nightly prerelease.' }
-          } else {
-            gh release upload nightly @assets --clobber
-            if ($LASTEXITCODE -ne 0) { throw 'Could not upload nightly artifacts.' }
+          set -euo pipefail
+          mapfile -t assets < <(find build/release -maxdepth 1 -type f -print | sort)
+          if (( ${#assets[@]} == 0 )); then
+            echo 'Verified release bundle is empty.' >&2
+            exit 1
+          fi
+
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release upload nightly "${assets[@]}" --clobber
+            mapfile -t existing < <(gh release view nightly --json assets --jq '.assets[].name')
+            for name in "${existing[@]}"; do
+              if [[ ! -f "build/release/$name" ]]; then
+                gh release delete-asset nightly "$name" -y
+              fi
+            done
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git tag -f nightly $env:GITHUB_SHA
+            git tag -f nightly "$GITHUB_SHA"
             git push origin refs/tags/nightly --force
-            if ($LASTEXITCODE -ne 0) { throw 'Could not advance the nightly tag.' }
-          }
+          else
+            gh release create nightly "${assets[@]}" \
+              --title 'Nightly' \
+              --notes 'Rolling production-test build from main. Not part of the stable update channel.' \
+              --prerelease \
+              --target "$GITHUB_SHA"
+          fi
 
       - name: Publish stable snapshot
-        if: steps.mode.outputs.should_build == 'true' && steps.mode.outputs.mode == 'stable'
-        shell: pwsh
+        if: needs.prepare.outputs.mode == 'stable'
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = '${{ steps.mode.outputs.release_tag }}'
-          $assets = @('build/jl-skills-windows-x64.exe', 'build/manifest.json') + @(Get-ChildItem build/*-windows-x64.zip | ForEach-Object { $_.FullName })
-          gh release create $tag @assets --title $tag --generate-notes --target $env:GITHUB_SHA
-          if ($LASTEXITCODE -ne 0) { throw "Could not publish stable release $tag." }
+          set -euo pipefail
+          tag='${{ needs.prepare.outputs.release_tag }}'
+          mapfile -t assets < <(find build/release -maxdepth 1 -type f -print | sort)
+          if (( ${#assets[@]} == 0 )); then
+            echo 'Verified release bundle is empty.' >&2
+            exit 1
+          fi
+          gh release create "$tag" "${assets[@]}" \
+            --title "$tag" \
+            --generate-notes \
+            --target "$GITHUB_SHA"
