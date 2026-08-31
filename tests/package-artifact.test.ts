@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
+import AdmZip from 'adm-zip'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
 
 const repo = resolve(import.meta.dir, '..')
 const build = join(repo, 'build')
@@ -12,21 +12,10 @@ test('Map release archive contains only the documented installable snapshot', ()
   expect(existsSync(join(build, 'map.exe'))).toBe(false)
   expect(existsSync(join(build, 'jl-skills-manifest.json'))).toBe(false)
 
-  const listed = spawnSync('tar', ['-tf', archive], { encoding: 'utf8', windowsHide: true })
-  expect(listed.status).toBe(0)
-
-  const directories = new Set([
-    'agents',
-    'agents/',
-    'runtime',
-    'runtime/',
-    'runtime/windows-x64',
-    'runtime/windows-x64/',
-  ])
-  const files = listed.stdout
-    .split(/\r?\n/)
-    .map((entry) => entry.trim().replaceAll('\\', '/').replace(/^\.\//, ''))
-    .filter((entry) => entry && !directories.has(entry))
+  const files = new AdmZip(archive)
+    .getEntries()
+    .filter((entry) => !entry.isDirectory)
+    .map((entry) => entry.entryName.replaceAll('\\', '/').replace(/^\.\//, ''))
     .sort()
 
   expect(files).toEqual([
