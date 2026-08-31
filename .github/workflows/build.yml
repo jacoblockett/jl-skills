@@ -33,6 +33,7 @@ jobs:
     outputs:
       mode: ${{ steps.mode.outputs.mode }}
       should_build: ${{ steps.mode.outputs.should_build }}
+      should_promote: ${{ steps.mode.outputs.should_promote }}
       release_tag: ${{ steps.mode.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +57,7 @@ jobs:
           fi
 
           should_build=true
+          should_promote=false
           release_tag=dev
 
           if [[ "$mode" == nightly ]]; then
@@ -77,12 +79,14 @@ jobs:
                   printf '  %s\n' "${files[@]}"
                 else
                   should_build=false
-                  echo 'No build-relevant changes since the last successful nightly.'
+                  echo 'No build-relevant changes since the last validated nightly.'
                 fi
               fi
             fi
             release_tag=nightly
           elif [[ "$mode" == stable ]]; then
+            should_build=false
+            should_promote=true
             release_tag="$(date -u +%Y.%m.%d-%H%MZ)"
             git fetch origin --tags --force
             if git rev-parse -q --verify "refs/tags/$release_tag" >/dev/null; then
@@ -96,10 +100,31 @@ jobs:
 
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          echo "should_promote=$should_promote" >> "$GITHUB_OUTPUT"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
 
+      - uses: oven-sh/setup-bun@v2
+        if: steps.mode.outputs.mode == 'stable'
+        with:
+          bun-version: 1.4.0
+
+      - name: Require validated Nightly for Stable
+        if: steps.mode.outputs.mode == 'stable'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JL_SKILLS_VALIDATION_SHA: ${{ github.sha }}
+          JL_SKILLS_VALIDATION_RECEIPT: build/validation/validation.json
+          JL_SKILLS_VALIDATION_MANIFEST: build/validation/manifest.json
+        run: |
+          set -euo pipefail
+          mkdir -p build/validation
+          gh release download nightly -p validation.json -D build/validation --clobber
+          gh release download nightly -p manifest.json -D build/validation --clobber
+          bun scripts/validation-receipt.ts verify
+
       - name: No release build
-        if: steps.mode.outputs.should_build != 'true'
+        if: steps.mode.outputs.should_build != 'true' && steps.mode.outputs.should_promote != 'true'
         run: echo 'Nothing to build or publish.'
 
   build:
@@ -214,14 +239,15 @@ jobs:
           './build/${{ matrix.installer }}' --version
           './build/cargo/map/${{ matrix.rust_target }}/release/${{ matrix.map_executable }}' --help >/dev/null
 
-      - name: Run consumer acceptance
-        shell: bash
-        run: bun run test:consumer
-
       - name: Run full installer regression suite
         if: matrix.target == 'windows-x64'
         shell: bash
         run: bun run test:installer
+
+      - name: Run consumer acceptance
+        if: matrix.target != 'windows-x64'
+        shell: bash
+        run: bun run test:consumer
 
       - name: Run target contract tests
         shell: bash
@@ -284,8 +310,19 @@ jobs:
           retention-days: 14
           path: build/release/*
 
-      - name: Publish rolling nightly
-        if: needs.prepare.outputs.mode == 'nightly'
+  publish-nightly:
+    needs:
+      - prepare
+      - aggregate
+    if: needs.prepare.outputs.should_build == 'true' && needs.prepare.outputs.mode == 'nightly'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: build/release
+
+      - name: Publish Nightly candidate assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -298,17 +335,17 @@ jobs:
           fi
 
           if gh release view nightly >/dev/null 2>&1; then
+            gh release delete-asset nightly validation.json -y >/dev/null 2>&1 || true
             gh release upload nightly "${assets[@]}" --clobber
             mapfile -t existing < <(gh release view nightly --json assets --jq '.assets[].name')
             for name in "${existing[@]}"; do
+              if [[ "$name" == validation.json ]]; then
+                continue
+              fi
               if [[ ! -f "build/release/$name" ]]; then
                 gh release delete-asset nightly "$name" -y
               fi
             done
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git tag -f nightly "$GITHUB_SHA"
-            git push origin refs/tags/nightly --force
           else
             gh release create nightly "${assets[@]}" \
               --title 'Nightly' \
@@ -317,8 +354,198 @@ jobs:
               --target "$GITHUB_SHA"
           fi
 
-      - name: Publish stable snapshot
-        if: needs.prepare.outputs.mode == 'stable'
+  distribution:
+    needs:
+      - prepare
+      - publish-nightly
+    if: needs.prepare.outputs.should_build == 'true' && needs.prepare.outputs.mode == 'nightly'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-2025
+            installer: jl-skills-windows-x64.exe
+            map_archive: map-windows-x64.zip
+          - target: windows-arm64
+            runner: windows-11-vs2026-arm
+            installer: jl-skills-windows-arm64.exe
+            map_archive: map-windows-arm64.zip
+          - target: macos-x64
+            runner: macos-15-intel
+            installer: jl-skills-macos-x64
+            map_archive: map-macos-x64.zip
+          - target: macos-arm64
+            runner: macos-15
+            installer: jl-skills-macos-arm64
+            map_archive: map-macos-arm64.zip
+          - target: linux-x64-gnu
+            runner: ubuntu-24.04
+            installer: jl-skills-linux-x64-gnu
+            map_archive: map-linux-x64-gnu.zip
+          - target: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+            installer: jl-skills-linux-arm64-gnu
+            map_archive: map-linux-arm64-gnu.zip
+          - target: linux-x64-musl
+            runner: ubuntu-24.04
+            installer: jl-skills-linux-x64-musl
+            map_archive: map-linux-x64-musl.zip
+          - target: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            installer: jl-skills-linux-arm64-musl
+            map_archive: map-linux-arm64-musl.zip
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Install Linux distribution tools
+        if: startsWith(matrix.target, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y binutils file
+          if [[ '${{ matrix.target }}' == *-musl ]]; then
+            sudo apt-get install -y musl
+          fi
+
+      - name: Download actual Nightly release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root='build/distribution/${{ matrix.target }}'
+          mkdir -p "$root"
+          gh release download nightly -p manifest.json -D "$root" --clobber
+          gh release download nightly -p '${{ matrix.installer }}' -D "$root" --clobber
+          gh release download nightly -p '${{ matrix.map_archive }}' -D "$root" --clobber
+
+      - name: Audit consumer distribution behavior
+        shell: bash
+        env:
+          JL_SKILLS_DISTRIBUTION_TARGET: ${{ matrix.target }}
+          JL_SKILLS_DISTRIBUTION_ROOT: build/distribution/${{ matrix.target }}
+          JL_SKILLS_DISTRIBUTION_REPORT: build/distribution-reports/${{ matrix.target }}.json
+          JL_SKILLS_RELEASE_TAG: nightly
+        run: bun scripts/audit-distribution.ts
+
+      - name: Upload distribution report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: distribution-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 30
+          path: build/distribution-reports/${{ matrix.target }}.json
+
+  finalize-nightly:
+    needs:
+      - prepare
+      - distribution
+    if: needs.prepare.outputs.should_build == 'true' && needs.prepare.outputs.mode == 'nightly'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Download distribution reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: distribution-*
+          path: build/distribution-reports
+          merge-multiple: true
+
+      - name: Download validated Nightly manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/validation
+          gh release download nightly -p manifest.json -D build/validation --clobber
+
+      - name: Create validation receipt
+        env:
+          JL_SKILLS_VALIDATION_REPORTS: build/distribution-reports
+          JL_SKILLS_VALIDATION_MANIFEST: build/validation/manifest.json
+          JL_SKILLS_VALIDATION_OUTPUT: build/validation/validation.json
+          JL_SKILLS_VALIDATION_SHA: ${{ github.sha }}
+          JL_SKILLS_VALIDATION_RUN_ID: ${{ github.run_id }}
+        run: bun scripts/validation-receipt.ts create
+
+      - name: Finalize validated Nightly
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload nightly build/validation/validation.json --clobber
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f nightly "$GITHUB_SHA"
+          git push origin refs/tags/nightly --force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-validation
+          if-no-files-found: error
+          retention-days: 90
+          path: build/validation/validation.json
+
+  publish-stable:
+    needs: prepare
+    if: needs.prepare.outputs.should_promote == 'true' && needs.prepare.outputs.mode == 'stable'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Download validated Nightly snapshot
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/promotion-source
+          gh release download nightly -D build/promotion-source --clobber
+
+      - name: Reverify Nightly validation receipt
+        env:
+          JL_SKILLS_VALIDATION_SHA: ${{ github.sha }}
+          JL_SKILLS_VALIDATION_RECEIPT: build/promotion-source/validation.json
+          JL_SKILLS_VALIDATION_MANIFEST: build/promotion-source/manifest.json
+        run: bun scripts/validation-receipt.ts verify
+
+      - name: Promote exact validated assets
+        env:
+          JL_SKILLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          JL_SKILLS_PROMOTION_INPUT: build/promotion-source
+          JL_SKILLS_PROMOTION_OUTPUT: build/release
+        run: bun scripts/promote-nightly.ts
+
+      - name: Upload Stable candidate bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: stable-${{ needs.prepare.outputs.release_tag }}
+          if-no-files-found: error
+          retention-days: 90
+          path: build/release/*
+
+      - name: Publish immutable Stable snapshot
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -327,7 +554,7 @@ jobs:
           tag='${{ needs.prepare.outputs.release_tag }}'
           mapfile -t assets < <(find build/release -maxdepth 1 -type f -print | sort)
           if (( ${#assets[@]} == 0 )); then
-            echo 'Verified release bundle is empty.' >&2
+            echo 'Stable promotion bundle is empty.' >&2
             exit 1
           fi
           gh release create "$tag" "${assets[@]}" \
