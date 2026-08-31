@@ -90,7 +90,7 @@ jobs:
             release_tag="$(date -u +%Y.%m.%d-%H%MZ)"
             git fetch origin --tags --force
             if git rev-parse -q --verify "refs/tags/$release_tag" >/dev/null; then
-              echo "Tag $releaseTag already exists." >&2
+              echo "Tag $release_tag already exists." >&2
               exit 1
             fi
           elif [[ "$mode" != build ]]; then
