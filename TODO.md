@@ -99,16 +99,15 @@ Every artifact entry retains an immutable release URL and SHA-256.
 
 Completed implementation:
 
-- `scripts/build.ts` now emits release-manifest format 2 with installer and skill `artifacts` maps;
+- `scripts/build.ts` emits release-manifest format 2 with installer and skill `artifacts` maps;
 - `src/installer-updater.ts` parses only format 2 and validates canonical target keys, SHA-256 values, installer non-portability, and optional skill `portable` artifacts;
 - format 1 is obsolete and no longer emitted by the build;
 - release fixtures and updater regression coverage use the format-2 shape;
-- the current pre-matrix build intentionally emits only its `windows-x64` entries until per-target packaging/build aggregation exists;
-- current temporary Windows artifact use remains isolated from the final compiled-target selection work in step 6;
-- ambiguous pre-matrix output filenames remain intentionally unchanged until step 5;
+- the current pre-matrix build intentionally emits only its `windows-x64` entries until per-target build aggregation exists;
+- current temporary Windows artifact selection remains isolated from the final compiled-target selection work in step 6;
 - Nightly and Stable publication are temporarily blocked so an incomplete one-target format-2 manifest cannot replace a release.
 
-### 4. [ ] Package native skills per target
+### 4. [x] Package native skills per target
 
 Do not place every platform runtime into one universal skill ZIP.
 
@@ -116,7 +115,17 @@ For a native skill such as Map, build one complete installable package per targe
 
 A user on one target must never download unused runtimes for other targets.
 
-### 5. [ ] Make build/release output names explicit
+Completed implementation:
+
+- Map source metadata declares the exact native runtime location for all eight canonical targets;
+- build validation requires a complete native runtime declaration matching the canonical target naming contract;
+- a native package is staged for exactly one build target and its packaged `manifest.json` contains only that target's runtime entry;
+- no native package copies foreign-target runtimes;
+- non-native skills are packaged once under the reserved `portable` artifact key;
+- Map package version is now `0.5.0`; its minimum installer remains `0.7.0` because the target-specific package payload does not require a newer package-install capability;
+- the current Windows-x64-only build produces one target-specific Map package; the other seven are produced when the matrix is implemented in step 7.
+
+### 5. [x] Make build/release output names explicit
 
 Apply the canonical target name to:
 
@@ -128,6 +137,16 @@ Apply the canonical target name to:
 - generated manifest URLs.
 
 Do not publish ambiguous assets such as bare `jl-skills.exe` or `map.zip` once the target-aware format is active.
+
+Completed implementation:
+
+- target naming helpers in `src/targets.ts` own installer, skill archive, and runtime artifact names;
+- current Windows output is `jl-skills-windows-x64.exe` and `map-windows-x64.zip`;
+- Map runtime package paths use `runtime/<target>/map[.exe]`;
+- format-2 manifest URLs use the same target-qualified names;
+- GitHub Actions artifact/upload/release paths use target-qualified names;
+- build cleanup removes the obsolete bare `jl-skills.exe` and `map.zip` outputs;
+- release/package regression fixtures now expect qualified filenames.
 
 ### 6. [ ] Make install/update selection target-aware
 
