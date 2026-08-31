@@ -61,7 +61,7 @@ Update `RELEASES.md` and `INSTALLER_SPEC.md` to make the eight target keys, expl
 
 Stable must be mechanically blocked unless every required target is present and successful.
 
-### 2. [ ] Introduce one canonical target abstraction
+### 2. [x] Introduce one canonical target abstraction
 
 Replace scattered OS/architecture checks with one target model that owns at least:
 
@@ -78,6 +78,15 @@ Rust target triple
 The compiled installer should know its own canonical target at build time.
 
 Upgrade the pinned Bun version to a current pinned release that supports the complete required matrix, including Windows ARM64. Do not use an unpinned `latest` dependency/toolchain policy.
+
+Completed implementation:
+
+- `src/targets.ts` owns the eight canonical target records and toolchain facts.
+- the build selects a canonical target and injects it into the standalone installer as `JL_SKILLS_COMPILED_TARGET`;
+- standalone installer startup validates that the compiled target was injected and is supported;
+- the current pre-matrix build remains intentionally restricted to Windows x64 until step 7;
+- Bun is pinned to `1.4.0` in both project metadata and GitHub Actions;
+- target-aware release-manifest/package selection remains intentionally deferred to steps 3 and 6 rather than changing format-1 behavior early.
 
 ### 3. [ ] Move the release manifest to a target-aware schema
 
