@@ -43,7 +43,7 @@ import {
   type SkillPackageManifest,
 } from './installer-updater'
 
-const VERSION = '0.6.0'
+const VERSION = '0.7.0'
 const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
 const HOME = Symbol('jl-skills-home')
@@ -280,8 +280,12 @@ function installerDataRoot(): string {
   return canonicalPath(join(data, 'JL-Skills'))
 }
 
-function jlSkillsRoot(): string {
-  return join(userHome(), '.jl-skills')
+function skillMetadataRoot(): string {
+  return join(installerDataRoot(), 'skill-manifests')
+}
+
+function scopeSkillRoot(scope: Scope, skill: string): string {
+  return join(scope.root, '.jl-skills', skill)
 }
 
 function resolveScope(raw: string): Scope {
@@ -405,7 +409,7 @@ function validatePackageMetadata(pkg: DownloadedSkillPackage): void {
 }
 
 function cachedManifestPath(name: string): string {
-  return join(jlSkillsRoot(), name, 'manifest.json')
+  return join(skillMetadataRoot(), `${name}.json`)
 }
 
 function cachePackageManifest(pkg: DownloadedSkillPackage): void {
@@ -413,12 +417,12 @@ function cachePackageManifest(pkg: DownloadedSkillPackage): void {
 }
 
 function cachedManifests(): Manifest[] {
-  const root = jlSkillsRoot()
+  const root = skillMetadataRoot()
   if (!existsSync(root) || !statSync(root).isDirectory()) return []
   const manifests: Manifest[] = []
   for (const entry of readdirSync(root).sort()) {
-    const path = join(root, entry, 'manifest.json')
-    if (!existsSync(path) || !statSync(path).isFile()) continue
+    const path = join(root, entry)
+    if (!entry.endsWith('.json') || !existsSync(path) || !statSync(path).isFile()) continue
     try {
       manifests.push(parseSkillPackageManifest(JSON.parse(readFileSync(path, 'utf8'))))
     } catch {}
@@ -506,7 +510,7 @@ function removeManagedBlock(path: string, skill: string): void {
   const before = current.slice(0, beginIndex).replace(/[\r\n]+$/, '')
   const after = current.slice(endIndex + end.length).replace(/^[\r\n]+/, '')
   const next = [before, after].filter((part) => part.length > 0).join('\n\n')
-  if (!next.trim()) rmSync(path, { force: true })
+  if (!next.trim()) atomicWrite(path, '')
   else atomicWrite(path, `${next.replace(/[\r\n]+$/, '')}\n`)
 }
 
@@ -662,16 +666,12 @@ function runtimePlatformKey(): string {
 }
 
 function runtimeRoot(manifest: Manifest, scope: Scope): string {
-  if (manifest.runtime_cli_destination) return dirname(canonicalPath(manifest.runtime_cli_destination))
-  if (scope.kind === 'user') return join(jlSkillsRoot(), manifest.name, 'runtime', manifest.version)
-  return join(scope.root, '.jl-skill', 'runtime', manifest.name, manifest.version)
+  return scopeSkillRoot(scope, manifest.name)
 }
 
 function runtimeCliPath(manifest: Manifest, scope: Scope): string {
   if (!manifest.runtime_cli) throw new Error(`${manifest.name} manifest is missing runtime_cli`)
-  if (manifest.runtime_cli_destination) return canonicalPath(manifest.runtime_cli_destination)
-  const root = runtimeRoot(manifest, scope)
-  return join(root, isWindows ? `${manifest.runtime_cli}.exe` : manifest.runtime_cli)
+  return join(runtimeRoot(manifest, scope), 'bin', isWindows ? `${manifest.runtime_cli}.exe` : manifest.runtime_cli)
 }
 
 function renderInstructionFragment(pkg: DownloadedSkillPackage, cli?: string): string {
@@ -695,9 +695,6 @@ function provisionRuntime(pkg: DownloadedSkillPackage, scope: Scope): { cli?: st
   copyPackageEntry(join(pkg.root, artifact), cli)
   try { chmodSync(cli, 0o755) } catch {}
   for (const rel of manifest.runtime_files ?? []) copyPackageEntry(join(pkg.root, rel), join(root, rel))
-  for (const [rel, destination] of Object.entries(manifest.runtime_shared_files ?? {})) {
-    copyPackageEntry(join(pkg.root, rel), canonicalPath(destination))
-  }
   return { cli, root }
 }
 
@@ -777,6 +774,9 @@ function uninstallGroup(group: InstallGroup, interactive = false): void {
       console.log(`Uninstalled ${group.skill} for ${target.agent} from ${group.scope.identity}`)
     }
   }
+
+  const stillInstalled = discoverInstallations(group.scope).some((candidate) => candidate.skill === group.skill)
+  if (!stillInstalled) rmSync(scopeSkillRoot(group.scope, group.skill), { recursive: true, force: true })
 }
 
 function parseAction(args: string[], command: 'install' | 'update' | 'uninstall'): ParsedAction {
@@ -1022,9 +1022,6 @@ function uninstallSummary(groups: InstallGroup[]): string {
     '',
     'Affected AI harnesses',
     indentedCommaList(harnessNames),
-    '',
-    'Preserved data',
-    indentedCommaList(['Skill-generated data', 'shared skill runtime/tooling']),
   ].join('\n')
 }
 
