@@ -93,14 +93,14 @@ map-linux-arm64-musl.zip
 
 The filename itself identifies compatibility. `.exe` is only the Windows executable suffix and is not the compatibility signal.
 
-Do not publish the first Stable release using ambiguous assets such as:
+Do not publish ambiguous assets such as:
 
 ```text
 jl-skills.exe
 map.zip
 ```
 
-Those ambiguous names remain temporary pre-matrix build outputs only. Release-manifest format 2 is now active in source/build output, but target-qualified public filenames are still pending `TODO.md` step 5. Nightly and Stable publication are temporarily blocked while the release output is incomplete.
+Target-qualified naming is now active in build output, manifest URLs, GitHub Actions artifact paths, and release commands. The current pre-matrix build emits only the Windows x64 members of this naming contract; the remaining seven are produced once the native matrix is implemented.
 
 The stable public update index remains:
 
@@ -118,13 +118,13 @@ Release-manifest format 2 is the active source/build contract. Format 1 is obsol
 
 During the current migration, the Windows-only pre-matrix build emits a valid format-2 manifest containing only its `windows-x64` artifacts. That partial manifest is suitable for development/build validation only and must not be published to Nightly or Stable. Publication remains blocked until the complete target set is produced and aggregated.
 
-The first Stable release uses release-manifest format 2. Format 2 has this exact structural contract:
+Format 2 has this exact structural contract:
 
 ```json
 {
   "format": 2,
   "installer": {
-    "version": "0.8.0",
+    "version": "0.7.0",
     "artifacts": {
       "windows-x64": {
         "url": "https://github.com/jacoblockett/jl-skills/releases/download/<snapshot>/jl-skills-windows-x64.exe",
@@ -135,7 +135,7 @@ The first Stable release uses release-manifest format 2. Format 2 has this exact
   "skills": {
     "map": {
       "version": "0.5.0",
-      "min_installer": "0.8.0",
+      "min_installer": "0.7.0",
       "artifacts": {
         "windows-x64": {
           "url": "https://github.com/jacoblockett/jl-skills/releases/download/<snapshot>/map-windows-x64.zip",
@@ -173,6 +173,8 @@ Map is a native skill and therefore publishes one Map archive for each required 
 A genuinely platform-independent skill may publish one `portable` artifact instead of duplicating identical archives across all targets. `portable` is a release-manifest artifact key, not a ninth canonical machine target.
 
 A package that contains target-specific native runtime content is not portable.
+
+The source skill manifest may declare the complete native runtime map for every supported target. Package generation selects only the current build target's runtime and writes a package-local manifest containing only that selected runtime entry. This lets source metadata remain complete while every distributed package stays target-specific.
 
 ## Update discovery
 
@@ -266,9 +268,9 @@ Harness-specific resources are declared by the skill package but their installat
 
 Map currently declares native Codex and Claude subagent resources separately and keeps its runtime/support files outside harness skill-discovery directories.
 
-Current Map semantic/package version is `0.4.0`; current installer version is `0.7.0`. Map requires installer `0.7.0`.
+Current Map semantic/package version is `0.5.0`; current installer version is `0.7.0`. Map requires installer `0.7.0`.
 
-The current Windows-only pre-matrix package contains the Windows x64 runtime. Cross-platform work replaces the one-archive model for native skills with target-specific complete packages so a consumer downloads only the runtime for the current target.
+The target-specific package model is active. The current pre-matrix Windows build emits `map-windows-x64.zip`, containing common Map resources plus only `runtime/windows-x64/map.exe`. The same builder contract applies to the other seven targets once their native jobs are introduced.
 
 Map's development-only material (`README.md`, `SPEC.md`, Cargo files, Rust source, tests) is not release-package payload.
 
@@ -310,7 +312,7 @@ It must:
 - move the `nightly` tag only after successful build/test/publication;
 - never become GitHub's latest normal Stable release.
 
-Format 2 is now active in source/build output. Until the complete native matrix and aggregation gate are implemented, scheduled/manual Nightly publication is intentionally blocked rather than publishing a partial format-2 target set.
+Format 2 and target-qualified output naming are active in source/build output. Until the complete native matrix and aggregation gate are implemented, scheduled/manual Nightly publication is intentionally blocked rather than publishing a partial target set.
 
 Once release publication is re-enabled, Nightly requires the same complete supported target set as Stable and must not publish a partial matrix.
 
@@ -355,7 +357,9 @@ Windows x64 production-path acceptance has passed for installer `0.7.0` / Map `0
 - generic redundant install/update/uninstall outro messages have been removed;
 - the rolling Nightly workflow was exercised repeatedly through real release downloads before the current cross-platform publication block.
 
-This acceptance is sufficient confidence in the Windows lifecycle implementation, but it is not sufficient to publish Stable because the required Linux/macOS/ARM/ABI release targets are not yet implemented and validated.
+That acceptance predates the Map `0.5.0` target-package change. It remains evidence for the Windows lifecycle behavior, not acceptance of the new cross-platform release work.
+
+This acceptance is insufficient to publish Stable because the required Linux/macOS/ARM/ABI release targets are not yet implemented and validated.
 
 ## Stable gate
 
