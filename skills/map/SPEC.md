@@ -109,9 +109,11 @@ Schema resolution:
 1. `--schema PATH`;
 2. schema entry from `.maprc` at the `--config` location;
 3. schema entry from `.maprc` in cwd;
-4. `~/.jl-skills/map/schema.surql`.
+4. `schema.surql` in the installed runtime's own scope-local tooling root, resolved from the running executable (`<scope>/.jl-skills/map/bin/map[.exe]` -> `<scope>/.jl-skills/map/schema.surql`).
 
 If an explicitly/config-selected schema path cannot be resolved, reject rather than falling back.
+
+A direct development build that is not running from the installed scope-local tooling layout should supply `--schema` or configure a schema path explicitly.
 
 The exact `.maprc` serialization format is an implementation detail for the rewrite, but it must support the path/schema lookup semantics above.
 
@@ -1135,7 +1137,7 @@ Minimum behavioral coverage:
 
 - path/config resolution and no-fallback rejection;
 - init refusal when `.map` already exists;
-- schema resolution;
+- schema resolution, including installed scope-local executable-relative fallback;
 - Map depth/stance inheritance and intent overrides;
 - explicit explored semantics;
 - closure invariants and automatic reopening triggers;
