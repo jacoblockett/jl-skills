@@ -80,7 +80,14 @@ The requested scope is authoritative. Harness detection or availability must nev
 
 For a project/path install, a machine-level Codex or Claude installation permits those harness adapters to target only the requested project. It does not authorize user-scope skill copies or user-scope instruction injection.
 
-Scope-independent runtime/support artifacts explicitly declared by a skill may still be provisioned at their declared destination. Map's shared CLI and schema are examples. They are support infrastructure, not user-scope skill discovery.
+Skill runtime/tooling is also scope-local. Each installed skill receives one neutral tooling directory at the selected scope, shared by every harness using that skill at that scope:
+
+```text
+user scope       ~/.jl-skills/<skill>/
+project/custom   <scope>/.jl-skills/<skill>/
+```
+
+A project/path install must never provision that skill's tooling under the user's home scope. A user-scope install must never provision tooling into the invocation project.
 
 ## Scope semantics and path normalization
 
@@ -142,7 +149,7 @@ metadata format version
 Current representation:
 
 ```html
-<!-- jl-skills-meta: {"name":"map","version":"0.2.0","format":1} -->
+<!-- jl-skills-meta: {"name":"map","version":"0.4.0","format":1} -->
 ```
 
 The manifest version and source `SKILL.md` self-report must agree at build/catalog-generation time and runtime validation time.
@@ -429,9 +436,9 @@ Classify each target as:
 
 A current or newer installed version alone does not make the request satisfied. The managed instruction state must also match what the user just confirmed.
 
-If a current/newer Map installation has no managed `AGENTS.md` block and the confirmed request includes Map instruction injection, add the managed block as configuration work.
+If a current or newer installation has no managed instruction block and the confirmed request includes instruction injection, add the managed block as configuration work.
 
-If a current/newer Map installation has a managed `AGENTS.md` block and the confirmed request excludes Map instruction injection, remove only that managed block as configuration work.
+If a current or newer installation has a managed instruction block and the confirmed request excludes instruction injection, remove only that managed block as configuration work.
 
 Configuration-only work must not rewrite or downgrade the installed skill/runtime simply to change the instruction setting.
 
@@ -464,7 +471,7 @@ Some selected skills are already installed but out of date.
 
 Which would you like to update instead?
 
-Map  0.1.0 → 0.2.0
+Map  0.3.0 → 0.4.0
 Other Skill  unknown → 1.3.0
 ```
 
@@ -528,7 +535,7 @@ When installations are found, show:
 Checking for updates...
 ```
 
-Compare each installed self-reported version against the bundled catalog version.
+Compare each installed self-reported version against the published catalog version.
 
 Only skills with an applicable update appear in the normal interactive update multiselect.
 
@@ -543,7 +550,7 @@ Then return to the same `Where would you like to update skills?` scope question 
 Update choices render aligned skill/version columns where practical:
 
 ```text
-Map       0.2.0 → 0.3.0
+Map       0.3.0 → 0.4.0
 Other     1.4.1 → 1.5.0
 ```
 
@@ -553,7 +560,7 @@ Unknown installed version metadata is labeled unknown rather than invented.
 
 - installed `SKILL.md`;
 - other manifest-declared skill files;
-- declared runtime artifacts/support files where appropriate;
+- declared scope-local runtime artifacts/support files where appropriate;
 - managed instruction fragments only according to actual existing instruction state or an explicit CLI override.
 
 Update never adds a newly selected harness. Adding another harness belongs to Install.
@@ -579,14 +586,20 @@ Otherwise show only installed skills as substantive choices.
 Uninstall removes the selected skill integration from discovered/explicit harness targets at that scope:
 
 - skill discovery/resource directory;
+- harness-specific resources owned by that skill;
 - matching installer-managed instruction block if present.
 
-It preserves:
+Scope-local tooling is shared only among harness integrations for that same skill at that same scope. Removing one harness leaves `<scope>/.jl-skills/<skill>/` intact while another harness at that scope still has the skill installed. Removing the final harness integration for that skill at that scope removes the skill's scope-local tooling directory.
+
+Uninstall preserves:
 
 - unrelated `AGENTS.md` / `CLAUDE.md` content;
+- the instruction file itself even if removing the managed block leaves it empty;
+- harness parent directories such as `.agents`, `.agents/skills`, `.codex`, `.codex/agents`, `.claude`, and `.claude/agents`;
 - unrelated harness configuration and user files;
-- skill-generated project data such as `.map/`;
-- shared skill runtime/tooling such as Map's shared CLI/schema.
+- skill-generated project data such as `.map/`.
+
+The `Uninstall Summary` contains only the selected skills, uninstall location, and affected AI harnesses. Do not add a `Preserved data` section.
 
 The confirmation note title is:
 
@@ -618,9 +631,10 @@ Required behavior:
 - use safe/atomic writes;
 - reject malformed/duplicate/conflicting boundaries rather than guessing;
 - uninstall removes only the matching managed block;
+- if that removal leaves the instruction file empty, retain the file as an empty file rather than deleting it;
 - opting out leaves an unrelated existing instruction file untouched.
 
-Instruction fragments render actual provisioned CLI paths when a skill uses a shared runtime rather than assuming the CLI is on `PATH`.
+Instruction fragments render the actual scope-local provisioned CLI path rather than assuming the CLI is on `PATH`.
 
 ## Package model
 
@@ -630,14 +644,16 @@ A package may declare:
 
 - name/version/description;
 - skill files;
+- harness-specific resources such as native subagent definitions;
 - runtime kind;
 - platform runtime artifacts;
 - runtime support files;
-- scope-independent CLI destination;
-- scope-independent support artifacts;
+- runtime CLI name;
 - instruction fragment;
 - generated-data locations;
 - future harness/subagent resources or migrations when explicitly needed.
+
+Skill packages do not choose absolute or scope-independent runtime destinations. The installer owns runtime placement under the selected scope's `.jl-skills/<skill>/` directory.
 
 Harness filesystem knowledge belongs in adapters, not duplicated in every skill package.
 
@@ -659,6 +675,8 @@ Example for Map:
   }
 ]
 ```
+
+The installer may retain a small installer-owned copy of declarative skill metadata under its own data directory so the separate generated-data removal flow can recognize declared data after ordinary skill uninstall. This cache is not an authoritative installation receipt and is never used as the source of truth for whether a skill is installed.
 
 ### Remove skill-generated data
 
@@ -689,46 +707,50 @@ It is available only from the compiled `jl-skills` executable, not from an arbit
 
 ### Published update contract
 
-Default public manifest location:
+Default public stable manifest location:
 
 ```text
-https://github.com/jacoblockett/jl-skills/releases/latest/download/jl-skills-manifest.json
+https://github.com/jacoblockett/jl-skills/releases/latest/download/manifest.json
 ```
 
-The URL may be overridden for deterministic development/testing with:
+The URL may be overridden for deterministic development/Nightly testing with:
 
 ```text
 JL_SKILLS_UPDATE_MANIFEST_URL
 ```
 
-A manifest contains at least:
+The consolidated release manifest has format 1 and contains installer plus skill release metadata, including semantic versions, immutable/pinned release URLs, minimum installer versions for skills, and SHA-256 hashes.
+
+Example shape:
 
 ```json
 {
-  "version": "0.6.0",
-  "artifacts": {
-    "windows-x64": {
-      "url": "https://.../jl-skills.exe",
-      "sha256": "<64 hex characters>"
+  "format": 1,
+  "installer": {
+    "version": "0.7.0",
+    "url": "https://github.com/jacoblockett/jl-skills/releases/download/<release-tag>/jl-skills.exe",
+    "sha256": "<64 lowercase hex characters>"
+  },
+  "skills": {
+    "map": {
+      "version": "0.4.0",
+      "min_installer": "0.7.0",
+      "url": "https://github.com/jacoblockett/jl-skills/releases/download/<release-tag>/map.zip",
+      "sha256": "<64 lowercase hex characters>"
     }
   }
 }
 ```
 
-The local Windows build emits both:
+The current Windows release build emits at least:
 
 ```text
 build/jl-skills.exe
-build/jl-skills-manifest.json
+build/map.zip
+build/manifest.json
 ```
 
-The generated manifest's Windows artifact URL follows the release-tag contract:
-
-```text
-https://github.com/jacoblockett/jl-skills/releases/download/v<VERSION>/jl-skills.exe
-```
-
-A manual installer release therefore uses tag `v<VERSION>` and uploads both generated files. The `latest/download` manifest URL then resolves the newest published release while the manifest itself points at the exact versioned executable.
+Stable release tags are immutable UTC timestamp snapshot identities. Nightly uses the rolling `nightly` tag. Component update and compatibility decisions use semantic installer/skill versions, not the distribution tag.
 
 The installer:
 
@@ -744,7 +766,7 @@ The installer:
 10. validates SHA-256 before replacement;
 11. leaves the currently running executable untouched while staging;
 12. on Windows, starts the smallest detached post-exit replacement command;
-13. preserves installed skills, skill runtime/tooling, and skill-generated data.
+13. preserves installed skills, their scope-local tooling, and skill-generated data.
 
 A failed hash/version/manifest check must fail rather than install an unverifiable executable.
 
@@ -778,7 +800,7 @@ The helper must use ignored stdio and must not present a visible helper shell/wi
 The helper must preserve:
 
 - installed skills and self-reported metadata;
-- skill-specific shared support/runtime directories such as `~/.jl-skills/map/...`;
+- every skill's scope-local runtime/tooling directories;
 - all generated project data.
 
 Do not describe or delete a nonexistent central installer registry.
@@ -808,15 +830,23 @@ Windows x64 release flow:
 ```text
 Map Rust source
   -> release map.exe
-  -> bundled installer payload
-  -> ~/.jl-skills/map/bin/map.exe
+  -> bundled Map package
+  -> selected scope .jl-skills/map/bin/map.exe
 ```
 
-The shared default schema lives at:
+Scope-local destinations are:
 
 ```text
-~/.jl-skills/map/schema.surql
+user scope
+  ~/.jl-skills/map/bin/map.exe
+  ~/.jl-skills/map/schema.surql
+
+project/custom scope
+  <scope>/.jl-skills/map/bin/map.exe
+  <scope>/.jl-skills/map/schema.surql
 ```
+
+One copy exists per Map installation scope and is shared among Map's harness integrations inside that scope. It is never shared across different scopes.
 
 There is no SurrealDB daemon/listening port.
 
@@ -849,12 +879,13 @@ The build produces:
 
 ```text
 build/jl-skills.exe
-build/jl-skills-manifest.json
+build/map.zip
+build/manifest.json
 ```
 
 and removes stale singular `build/jl-skill.exe` output.
 
-Catalog generation validates each source skill's self-report metadata against its manifest before shipping the catalog.
+Package generation validates each source skill's self-report metadata against its manifest before shipping the package.
 
 Regression coverage includes at least:
 
@@ -868,11 +899,14 @@ Regression coverage includes at least:
 - no downgrade of newer installed versions during Install handling;
 - install continuation status only when whole requested skills were skipped;
 - managed instruction opt-in/opt-out and boundary safety;
+- retention of empty instruction files and harness parent directories during uninstall;
 - stale installed skill/version/content replacement;
 - preservation of unrelated/generated data during update;
+- scope-local runtime/tooling placement and cross-scope isolation;
 - update discovery/version comparison;
 - Update Skills no-update return to the chosen-scope picker;
-- uninstall preservation of generated data and shared tooling;
+- final-harness uninstall removal of scope-local tooling while preserving generated data;
+- partial-harness uninstall retention of tooling while another harness still owns the skill at that scope;
 - keyboard multiselect/back/select-all behavior;
 - removal of visible navigation pseudo-options;
 - one-line explicit navigation-footer vocabulary;
@@ -897,5 +931,6 @@ Do not add without a demonstrated need:
 - Clack fork/monkey patch;
 - harness-by-harness instruction-injection matrices;
 - speculative plugin/package-manager abstractions beyond the current manifest model;
+- absolute or cross-scope runtime destinations selected by skill packages;
 - automatic deletion of skill-generated data during ordinary skill uninstall;
 - automatic deletion of installed skills or skill runtime/tooling during installer self-uninstall.
