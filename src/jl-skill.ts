@@ -1193,7 +1193,6 @@ async function installAtScope(
               }
             })
           }
-          prompts.outro('Installation complete')
           return 0
         }
       }
@@ -1322,7 +1321,6 @@ async function updateAtScope(
         'update',
       ))
     }
-    if (process.stdin.isTTY) prompts.outro('Update complete')
     return 0
   }
 }
@@ -1413,7 +1411,6 @@ async function uninstallAtScope(
     }
 
     for (const group of groups) uninstallGroup(group, !!process.stdin.isTTY)
-    if (process.stdin.isTTY) prompts.outro('Uninstall complete')
     return 0
   }
 }
