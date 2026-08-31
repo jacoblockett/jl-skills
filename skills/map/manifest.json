@@ -1,13 +1,36 @@
 {
   "format": 1,
   "name": "map",
-  "version": "0.2.0",
-  "min_installer": "0.5.0",
+  "version": "0.3.0",
+  "min_installer": "0.6.0",
   "description": "Durable local graph of user intent, questions, decisions, ideas, facts, dependencies, and recovery state.",
   "skill_files": [
-    "SKILL.md",
-    "agents"
+    "SKILL.md"
   ],
+  "harness_resources": {
+    "codex": {
+      "agents": [
+        "harnesses/codex/agents/map-completion-auditor.toml",
+        "harnesses/codex/agents/map-context.toml",
+        "harnesses/codex/agents/map-discovery-reviewer.toml",
+        "harnesses/codex/agents/map-discovery.toml",
+        "harnesses/codex/agents/map-linguist.toml",
+        "harnesses/codex/agents/map-state-reviewer.toml",
+        "harnesses/codex/agents/map-state-writer.toml"
+      ]
+    },
+    "claude": {
+      "agents": [
+        "harnesses/claude/agents/map-completion-auditor.md",
+        "harnesses/claude/agents/map-context.md",
+        "harnesses/claude/agents/map-discovery-reviewer.md",
+        "harnesses/claude/agents/map-discovery.md",
+        "harnesses/claude/agents/map-linguist.md",
+        "harnesses/claude/agents/map-state-reviewer.md",
+        "harnesses/claude/agents/map-state-writer.md"
+      ]
+    }
+  },
   "runtime": "rust",
   "runtime_artifacts": {
     "windows-x64": "runtime/windows-x64/map.exe"

@@ -44,6 +44,8 @@ export type GeneratedDataSpec = {
   marker?: string
 }
 
+export type HarnessResources = Record<string, Record<string, string[]>>
+
 export type SkillPackageManifest = {
   format: 1
   name: string
@@ -51,6 +53,7 @@ export type SkillPackageManifest = {
   min_installer: string
   description: string
   skill_files: string[]
+  harness_resources?: HarnessResources
   runtime_files?: string[]
   runtime?: string
   runtime_artifacts?: Record<string, string>
@@ -275,6 +278,25 @@ function sharedPathRecord(value: unknown, label: string): Record<string, string>
   return result
 }
 
+function harnessResources(value: unknown, label: string): HarnessResources | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
+  const result: HarnessResources = {}
+  for (const [harness, rawResources] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(harness)) throw new Error(`${label} has invalid harness ${harness}`)
+    if (!rawResources || typeof rawResources !== 'object' || Array.isArray(rawResources)) {
+      throw new Error(`${label}.${harness} must be an object`)
+    }
+    const resources: Record<string, string[]> = {}
+    for (const [kind, rawPaths] of Object.entries(rawResources as Record<string, unknown>)) {
+      if (!/^[a-z][a-z0-9_-]*$/.test(kind)) throw new Error(`${label}.${harness} has invalid resource type ${kind}`)
+      resources[kind] = pathArray(rawPaths, `${label}.${harness}.${kind}`, true)!
+    }
+    result[harness] = resources
+  }
+  return result
+}
+
 export function parseSkillPackageManifest(value: unknown): SkillPackageManifest {
   if (!value || typeof value !== 'object') throw new Error('invalid skill package manifest')
   const raw = value as Record<string, unknown>
@@ -309,6 +331,7 @@ export function parseSkillPackageManifest(value: unknown): SkillPackageManifest 
     min_installer: raw.min_installer,
     description: raw.description,
     skill_files: pathArray(raw.skill_files, `${raw.name} skill_files`, true)!,
+    harness_resources: harnessResources(raw.harness_resources, `${raw.name} harness_resources`),
     runtime_files: pathArray(raw.runtime_files, `${raw.name} runtime_files`),
     runtime: optionalString(raw.runtime, `${raw.name} runtime`),
     runtime_artifacts: pathRecord(raw.runtime_artifacts, `${raw.name} runtime_artifacts`),
@@ -326,6 +349,7 @@ export function parseSkillPackageManifest(value: unknown): SkillPackageManifest 
 function assertPackageFiles(root: string, manifest: SkillPackageManifest): void {
   const declared = new Set<string>([
     ...manifest.skill_files,
+    ...Object.values(manifest.harness_resources ?? {}).flatMap((resources) => Object.values(resources).flat()),
     ...(manifest.runtime_files ?? []),
     ...Object.values(manifest.runtime_artifacts ?? {}),
     ...Object.keys(manifest.runtime_shared_files ?? {}),

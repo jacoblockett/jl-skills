@@ -35,6 +35,7 @@ type SkillManifest = {
   min_installer: string
   description: string
   skill_files: string[]
+  harness_resources?: Record<string, Record<string, string[]>>
   runtime_files?: string[]
   runtime?: string
   runtime_artifacts?: Record<string, string>
@@ -125,6 +126,7 @@ function buildSkillArchive(
 
   const declared = new Set<string>([
     ...manifest.skill_files,
+    ...Object.values(manifest.harness_resources ?? {}).flatMap((resources) => Object.values(resources).flat()),
     ...(manifest.runtime_files ?? []),
     ...Object.keys(manifest.runtime_shared_files ?? {}),
     ...(manifest.instruction_fragment ? [manifest.instruction_fragment] : []),

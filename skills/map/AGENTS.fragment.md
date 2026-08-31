@@ -21,7 +21,7 @@ Common read-only commands:
 {{JL_MAP_CLI}} validate
 ```
 
-If the user explicitly invokes `$map` or asks to start/resume Map clarification, load the installed `map` skill and follow that workflow. Its bundled Map specialist role contracts own discovery, semantic writing/review, language cleanup, context acquisition, and completion audit. The parent should spawn a fresh child for each required stage and have that child load the matching role contract from the installed Map skill. Do not replace a required specialist stage with improvised parent-thread judgment; if a required child cannot run or load its contract, report that stage as blocked.
+If the user explicitly invokes `$map` or asks to start/resume Map clarification, load the installed `map` skill and follow that workflow. `jl-skills` installs Map's required specialists into the selected harness's native subagent directory. The parent should invoke the exact named specialist for each required stage; the registered subagent definition owns its semantic contract. Do not replace a required specialist with a generic child or improvised parent-thread judgment; if a required named subagent cannot run, report that stage as blocked.
 
 Outside an explicit Map workflow, ordinary agents may query Map as a read-only primitive. Do not silently create questions, decisions, intents, replacements, abandonment, forced deletion, or closure merely because Map exists.
 

@@ -13,7 +13,16 @@ const fixtureReady = join(scratch, 'release-fixture-port.txt')
 
 const begin = '<!-- jl-skill:begin map -->'
 const end = '<!-- jl-skill:end map -->'
-const metadata = '<!-- jl-skills-meta: {"name":"map","version":"0.2.0","format":1} -->'
+const metadata = '<!-- jl-skills-meta: {"name":"map","version":"0.3.0","format":1} -->'
+const mapAgentNames = [
+  'map-completion-auditor',
+  'map-context',
+  'map-discovery-reviewer',
+  'map-discovery',
+  'map-linguist',
+  'map-state-reviewer',
+  'map-state-writer',
+]
 
 let fixtureServer: ReturnType<typeof spawn> | undefined
 let fixtureManifestUrl = ''
@@ -122,6 +131,18 @@ function read(path: string): string {
   return readFileSync(path, 'utf8')
 }
 
+function expectCodexAgents(root: string, present = true): void {
+  for (const name of mapAgentNames) {
+    expect(existsSync(join(root, '.codex', 'agents', `${name}.toml`))).toBe(present)
+  }
+}
+
+function expectClaudeAgents(root: string, present = true): void {
+  for (const name of mapAgentNames) {
+    expect(existsSync(join(root, '.claude', 'agents', `${name}.md`))).toBe(present)
+  }
+}
+
 beforeAll(async () => {
   if (process.platform !== 'win32') throw new Error('installer regression suite currently targets Windows x64')
   if (!existsSync(installer)) throw new Error('build/jl-skills.exe is missing; run bun run build first')
@@ -151,13 +172,16 @@ afterAll(() => {
 })
 
 describe('jl-skills installer scope regressions', () => {
-  test('cwd scope installs self-describing project discovery/instructions and shared Map support', () => {
+  test('cwd scope installs self-describing project discovery/instructions, native agents, and shared Map support', () => {
     const s = sandbox('cwd-scope')
     ok(install('cwd', s))
 
-    const skill = join(s.project, '.agents', 'skills', 'map', 'SKILL.md')
+    const skillRoot = join(s.project, '.agents', 'skills', 'map')
+    const skill = join(skillRoot, 'SKILL.md')
     expect(existsSync(skill)).toBe(true)
     expect(read(skill)).toContain(metadata)
+    expect(existsSync(join(skillRoot, 'agents'))).toBe(false)
+    expectCodexAgents(s.project)
     expect(existsSync(join(s.project, 'AGENTS.md'))).toBe(true)
     expect(existsSync(join(s.project, '.map'))).toBe(false)
     expect(existsSync(sharedMap(s.home))).toBe(true)
@@ -172,16 +196,19 @@ describe('jl-skills installer scope regressions', () => {
     expect(occurrences(instructions, end)).toBe(1)
   })
 
-  test('user scope installs user discovery without touching the invocation project', () => {
+  test('user scope installs user discovery and native agents without touching the invocation project', () => {
     const s = sandbox('user-scope')
     const projectAgents = join(s.project, 'AGENTS.md')
     writeFileSync(projectAgents, 'PROJECT INSTRUCTIONS\n')
 
     ok(install('user', s))
 
-    const skill = join(s.home, '.agents', 'skills', 'map', 'SKILL.md')
+    const skillRoot = join(s.home, '.agents', 'skills', 'map')
+    const skill = join(skillRoot, 'SKILL.md')
     expect(existsSync(skill)).toBe(true)
     expect(read(skill)).toContain(metadata)
+    expect(existsSync(join(skillRoot, 'agents'))).toBe(false)
+    expectCodexAgents(s.home)
     expect(existsSync(join(s.home, '.codex', 'AGENTS.md'))).toBe(true)
     expect(existsSync(sharedMap(s.home))).toBe(true)
     expect(existsSync(sharedSchema(s.home))).toBe(true)
@@ -273,27 +300,31 @@ describe('jl-skills installer scope regressions', () => {
     expect(read(agents)).toBe(malformed)
   })
 
-  test('user-scope install preserves unrelated Codex user configuration and content', () => {
+  test('user-scope install preserves unrelated Codex user configuration, agents, and content', () => {
     const s = sandbox('user-scope-safety')
     const codex = join(s.home, '.codex')
     const agents = join(codex, 'AGENTS.md')
     const config = join(codex, 'config.toml')
     const unrelated = join(codex, 'unrelated.txt')
+    const unrelatedAgent = join(codex, 'agents', 'keep.toml')
     const projectFile = join(s.project, 'project.txt')
-    mkdirSync(codex, { recursive: true })
+    mkdirSync(dirname(unrelatedAgent), { recursive: true })
     writeFileSync(agents, 'USER AGENT INSTRUCTIONS\n')
     writeFileSync(config, 'model = "keep-me"\n')
     writeFileSync(unrelated, 'DO NOT TOUCH\n')
+    writeFileSync(unrelatedAgent, 'name = "keep"\n')
     writeFileSync(projectFile, 'PROJECT DATA\n')
 
     ok(install('user', s))
 
     expect(read(config)).toBe('model = "keep-me"\n')
     expect(read(unrelated)).toBe('DO NOT TOUCH\n')
+    expect(read(unrelatedAgent)).toBe('name = "keep"\n')
     expect(read(projectFile)).toBe('PROJECT DATA\n')
     expect(read(agents)).toContain('USER AGENT INSTRUCTIONS')
     expect(occurrences(read(agents), begin)).toBe(1)
     expect(existsSync(join(s.home, '.agents', 'skills', 'map', 'SKILL.md'))).toBe(true)
+    expectCodexAgents(s.home)
     expect(existsSync(join(s.project, '.agents'))).toBe(false)
     expect(existsSync(join(s.project, '.map'))).toBe(false)
     expect(existsSync(installerRegistry(s))).toBe(false)
@@ -327,6 +358,7 @@ describe('jl-skills installer scope regressions', () => {
     ok(install(s.project, s, s.project, ['codex'], false))
 
     expect(existsSync(join(s.project, '.agents', 'skills', 'map', 'SKILL.md'))).toBe(true)
+    expectCodexAgents(s.project)
     expect(read(agents)).toBe('USER ONLY\n')
     expect(existsSync(installerRegistry(s))).toBe(false)
   })
@@ -375,6 +407,7 @@ describe('jl-skills installer scope regressions', () => {
     expect(updatedSkill).toContain(metadata)
     expect(updatedSkill).not.toContain(staleMetadata)
     expect(updatedSkill).not.toContain('STALE_INSTALL_MARKER')
+    expectCodexAgents(s.project)
     expect(read(agents)).toBe(agentsBefore)
     expect(read(unrelated)).toBe('KEEP UNRELATED\n')
     expect(read(join(mapDir, 'keep.txt'))).toBe('KEEP GENERATED\n')
@@ -392,18 +425,23 @@ describe('jl-skills installer scope regressions', () => {
     ok(update(s.project, s))
 
     expect(read(join(skillDir, 'SKILL.md'))).toContain(metadata)
+    expectCodexAgents(s.project)
     expect(existsSync(sharedMap(s.home))).toBe(true)
     expect(read(join(s.project, 'AGENTS.md'))).toBe('MANUAL CONTENT\n')
     expect(existsSync(installerRegistry(s))).toBe(false)
 
     ok(uninstall(s.project, s))
     expect(existsSync(skillDir)).toBe(false)
+    expectCodexAgents(s.project, false)
     expect(read(join(s.project, 'AGENTS.md'))).toBe('MANUAL CONTENT\n')
   })
 
-  test('scoped uninstall removes only owned integration and preserves Map data and shared tooling', () => {
+  test('scoped uninstall removes only owned integration and preserves Map data, unrelated agents, and shared tooling', () => {
     const s = sandbox('scoped-uninstall')
     const agents = join(s.project, 'AGENTS.md')
+    const unrelatedAgent = join(s.project, '.codex', 'agents', 'keep.toml')
+    mkdirSync(dirname(unrelatedAgent), { recursive: true })
+    writeFileSync(unrelatedAgent, 'name = "keep"\n')
     writeFileSync(agents, 'USER CONTENT\n')
     ok(run(sourceMap, ['--path', s.project, 'init', '--schema', schema], repo, s.env))
     ok(install(s.project, s))
@@ -411,6 +449,8 @@ describe('jl-skills installer scope regressions', () => {
     ok(uninstall(s.project, s))
 
     expect(existsSync(join(s.project, '.agents', 'skills', 'map'))).toBe(false)
+    expectCodexAgents(s.project, false)
+    expect(read(unrelatedAgent)).toBe('name = "keep"\n')
     expect(read(agents)).toBe('USER CONTENT\n')
     expect(existsSync(join(s.project, '.map'))).toBe(true)
     expect(existsSync(sharedMap(s.home))).toBe(true)
@@ -429,16 +469,21 @@ describe('jl-skills installer scope regressions', () => {
 
     expect(read(agents)).toBe('DO NOT TOUCH\n')
     expect(existsSync(join(s.project, '.agents', 'skills', 'map'))).toBe(false)
+    expectCodexAgents(s.project, false)
   })
 
   test('agent-filtered uninstall removes only the requested harness integration', () => {
     const s = sandbox('agent-filtered-uninstall')
     ok(install(s.project, s, s.project, ['codex', 'claude']))
+    expectCodexAgents(s.project)
+    expectClaudeAgents(s.project)
 
     ok(uninstall(s.project, s, ['codex']))
 
     expect(existsSync(join(s.project, '.agents', 'skills', 'map'))).toBe(false)
+    expectCodexAgents(s.project, false)
     expect(existsSync(join(s.project, '.claude', 'skills', 'map', 'SKILL.md'))).toBe(true)
+    expectClaudeAgents(s.project)
     expect(existsSync(join(s.project, 'AGENTS.md'))).toBe(false)
     expect(read(join(s.project, 'CLAUDE.md'))).toContain(begin)
     expect(existsSync(installerRegistry(s))).toBe(false)

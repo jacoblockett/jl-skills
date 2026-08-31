@@ -2,7 +2,7 @@
 name: map
 description: Define, clarify, and persist durable user intent in the local Map graph. Use when explicitly invoked as $map; ordinary agents may query Map without invoking this workflow.
 ---
-<!-- jl-skills-meta: {"name":"map","version":"0.2.0","format":1} -->
+<!-- jl-skills-meta: {"name":"map","version":"0.3.0","format":1} -->
 
 # Map
 
@@ -28,7 +28,7 @@ Never read or modify `.map/db` directly and never use SurrealQL instead of the C
 
 ## Required specialists
 
-The skill bundles seven specialist role contracts under `agents/`:
+`jl-skills` installs seven Map specialists as native subagents for the selected harness:
 
 - `map-state-writer`
 - `map-state-reviewer`
@@ -38,11 +38,9 @@ The skill bundles seven specialist role contracts under `agents/`:
 - `map-context`
 - `map-completion-auditor`
 
-Each contract is `agents/<role>.toml`, resolved relative to this `SKILL.md`. The TOML is a bundled role contract, not a requirement that the host register it globally. A fresh child must read its `developer_instructions` before doing the delegated work.
+For each specialist stage, spawn one fresh child using the exact registered specialist name. The installed subagent definition owns its semantic contract; the parent prompt supplies only the dynamic arguments/evidence required by that stage. Do not spawn a generic child and ask it to load a role file from this skill, and do not inline, paraphrase, or expand the specialist contract into the parent prompt. Close the child after consuming its result.
 
-For each specialist stage, spawn one fresh child and instruct that child to load and obey its exact bundled role contract, then provide only the dynamic arguments/evidence required by that stage. Do not inline, paraphrase, or expand the role contract into the parent prompt. Close the child after consuming its result.
-
-If a required child cannot run or cannot load its role contract, fail that stage closed. Do not replace its semantic judgment with the parent thread.
+If a required named specialist cannot run, fail that stage closed. Do not replace its semantic judgment with the parent thread.
 
 Normal fresh flow with no external context need should normally use three children before questions: State Writer, Discovery, Discovery Reviewer. Linguist is a fourth child only when needed.
 

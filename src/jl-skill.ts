@@ -16,6 +16,13 @@ import { arch, homedir, platform } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path'
 import { exclusiveMultiselect, type ExclusiveOption } from './exclusive-multiselect'
 import {
+  HARNESS_ADAPTERS,
+  harnessAdapter,
+  normalizeHarnessId,
+  type HarnessAdapter,
+  type HarnessPaths,
+} from './harnesses'
+import {
   classifyInstallTargets,
   satisfiedSkills,
   staleSkills,
@@ -36,7 +43,7 @@ import {
   type SkillPackageManifest,
 } from './installer-updater'
 
-const VERSION = '0.5.0'
+const VERSION = '0.6.0'
 const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
 const HOME = Symbol('jl-skills-home')
@@ -50,7 +57,7 @@ type Scope = {
   root: string
 }
 
-type AgentSpec = { id: string; label: string; command: string }
+type AgentSpec = HarnessAdapter
 type AgentInfo = AgentSpec & { detected: boolean }
 type ParsedAction = { skills: string[]; scope?: string; agents: string[]; instructions?: boolean }
 type ChoiceItem = { value: string; label: string; disabled?: boolean; disabledSuffix?: string }
@@ -88,11 +95,9 @@ type InstallResult = NavResult<number> | typeof HOME
 type UpdateResult = NavResult<number> | typeof HOME
 type AvailableSkillVersions = Record<string, string>
 type InstallTarget = { agent: string; instructions: boolean }
+type HarnessResourceTarget = { source: string; destination: string }
 
-const agentCatalog: AgentSpec[] = [
-  { id: 'codex', label: 'OpenAI Codex', command: 'codex' },
-  { id: 'claude', label: 'Claude Code', command: 'claude' },
-]
+const agentCatalog: AgentSpec[] = HARNESS_ADAPTERS
 
 function newWizardState(): WizardState {
   return { shown: false, steps: new Map() }
@@ -336,28 +341,12 @@ function commandExists(command: string): boolean {
 }
 
 function normalizeAgents(raw: string[]): string[] {
-  const out = new Set<string>()
-  for (const item of raw) {
-    let id = item.trim().toLowerCase()
-    if (id === 'claude-code') id = 'claude'
-    if (!agentCatalog.some((agent) => agent.id === id)) throw new Error(`unsupported agent "${item}"`)
-    out.add(id)
-  }
-  return [...out].sort()
+  return [...new Set(raw.map(normalizeHarnessId))].sort()
 }
 
 function harnessDetected(spec: AgentSpec): boolean {
   if (commandExists(spec.command)) return true
-  const home = userHome()
-  if (spec.id === 'codex') {
-    return [join(home, '.codex', 'config.toml'), join(home, '.codex', 'sessions'), join(home, '.codex', 'AGENTS.md')]
-      .some(existsSync)
-  }
-  if (spec.id === 'claude') {
-    return [join(home, '.claude', 'settings.json'), join(home, '.claude', 'projects'), join(home, '.claude.json')]
-      .some(existsSync)
-  }
-  return false
+  return spec.detectionPaths(userHome()).some(existsSync)
 }
 
 function detectedAgents(): AgentInfo[] {
@@ -368,21 +357,8 @@ function agentLabel(id: string, agents: AgentSpec[] = agentCatalog): string {
   return agents.find((item) => item.id === id)?.label ?? id
 }
 
-function agentPaths(agent: string, scope: Scope): { skillRoot: string; instruction: string } {
-  const home = userHome()
-  if (agent === 'codex') {
-    if (scope.kind === 'user') {
-      return { skillRoot: join(home, '.agents', 'skills'), instruction: join(home, '.codex', 'AGENTS.md') }
-    }
-    return { skillRoot: join(scope.root, '.agents', 'skills'), instruction: join(scope.root, 'AGENTS.md') }
-  }
-  if (agent === 'claude') {
-    if (scope.kind === 'user') {
-      return { skillRoot: join(home, '.claude', 'skills'), instruction: join(home, '.claude', 'CLAUDE.md') }
-    }
-    return { skillRoot: join(scope.root, '.claude', 'skills'), instruction: join(scope.root, 'CLAUDE.md') }
-  }
-  throw new Error(`unsupported agent "${agent}"`)
+function agentPaths(agent: string, scope: Scope): HarnessPaths {
+  return harnessAdapter(agent).paths(scope, userHome())
 }
 
 function parseSkillMetadata(text: string): SkillMetadata | undefined {
@@ -543,6 +519,51 @@ function installedMetadata(skillPath: string, expectedSkill?: string): SkillMeta
   return metadata
 }
 
+function installedPackageManifest(skillPath: string): Manifest | undefined {
+  const path = join(skillPath, 'manifest.json')
+  if (!existsSync(path) || !statSync(path).isFile()) return undefined
+  try {
+    return parseSkillPackageManifest(JSON.parse(readFileSync(path, 'utf8')))
+  } catch {
+    return undefined
+  }
+}
+
+function harnessResourceTargets(manifest: Manifest, agent: string, scope: Scope): HarnessResourceTarget[] {
+  const declared = manifest.harness_resources?.[agent] ?? {}
+  const roots = agentPaths(agent, scope).resources
+  const targets: HarnessResourceTarget[] = []
+  for (const [kind, files] of Object.entries(declared)) {
+    const root = roots[kind]
+    if (!root) throw new Error(`${agent} does not support harness resource type "${kind}"`)
+    for (const source of files) targets.push({ source, destination: join(root, basename(source)) })
+  }
+  return targets
+}
+
+function harnessResourcesPresent(skillPath: string, agent: string, scope: Scope): boolean {
+  const manifest = installedPackageManifest(skillPath)
+  if (!manifest) return true
+  return harnessResourceTargets(manifest, agent, scope).every(({ destination }) => existsSync(destination))
+}
+
+function removeHarnessResources(manifest: Manifest, agent: string, scope: Scope): void {
+  for (const { destination } of harnessResourceTargets(manifest, agent, scope)) {
+    rmSync(destination, { force: true })
+  }
+}
+
+function installHarnessResources(
+  pkg: DownloadedSkillPackage,
+  agent: string,
+  scope: Scope,
+  tokens: Record<string, string>,
+): void {
+  for (const { source, destination } of harnessResourceTargets(pkg.manifest, agent, scope)) {
+    copyPackageEntry(join(pkg.root, source), destination, tokens)
+  }
+}
+
 function discoverInstallations(scope: Scope): InstallGroup[] {
   const groups = new Map<string, InstallGroup>()
   for (const agent of agentCatalog) {
@@ -618,12 +639,14 @@ function installPreflight(
   availableVersions: AvailableSkillVersions,
 ): InstallTargetState[] {
   const requestedInstructions = Object.fromEntries(skills.map((skill) => [skill, injectedSkills.includes(skill)]))
-  const installedTargets = discoverInstallations(scope).flatMap((group) => group.targets.map((target) => ({
-    skill: group.skill,
-    agent: target.agent,
-    version: target.version,
-    instructions: target.instructions,
-  })))
+  const installedTargets = discoverInstallations(scope).flatMap((group) => group.targets
+    .filter((target) => harnessResourcesPresent(target.skillPath, target.agent, scope))
+    .map((target) => ({
+      skill: group.skill,
+      agent: target.agent,
+      version: target.version,
+      instructions: target.instructions,
+    })))
   return classifyInstallTargets(skills, agents, availableVersions, requestedInstructions, installedTargets)
 }
 
@@ -697,10 +720,13 @@ function installTargets(
   for (const target of targets) {
     const paths = agentPaths(target.agent, scope)
     const dest = join(paths.skillRoot, manifest.name)
+    const previous = installedPackageManifest(dest)
+    if (previous) removeHarnessResources(previous, target.agent, scope)
     rmSync(dest, { recursive: true, force: true })
     mkdirSync(dest, { recursive: true })
     for (const rel of manifest.skill_files) copyPackageEntry(join(pkg.root, rel), join(dest, rel), tokens)
     copyPackageEntry(join(pkg.root, 'manifest.json'), join(dest, 'manifest.json'))
+    installHarnessResources(pkg, target.agent, scope, tokens)
 
     if (target.instructions && fragment) managedBlock(paths.instruction, manifest.name, fragment)
     else removeManagedBlock(paths.instruction, manifest.name)
@@ -741,6 +767,8 @@ function configureInstruction(
 
 function uninstallGroup(group: InstallGroup, interactive = false): void {
   for (const target of group.targets) {
+    const manifest = installedPackageManifest(target.skillPath)
+    if (manifest) removeHarnessResources(manifest, target.agent, group.scope)
     rmSync(target.skillPath, { recursive: true, force: true })
     removeManagedBlock(target.instructionPath, group.skill)
     if (interactive) {
