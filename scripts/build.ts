@@ -12,7 +12,15 @@ import {
 } from 'node:fs'
 import { join, resolve, basename, dirname } from 'node:path'
 import { containedPath, createZipFromDirectory } from '../src/archive'
-import { hostMatchesTarget, targetByKey, type TargetKey } from '../src/targets'
+import {
+  TARGET_KEYS,
+  hostMatchesTarget,
+  installerAssetName,
+  runtimeArtifactPath,
+  skillArchiveName,
+  targetByKey,
+  type TargetKey,
+} from '../src/targets'
 
 const repo = join(import.meta.dir, '..')
 const out = join(repo, 'build')
@@ -78,6 +86,21 @@ function readManifest(skillRoot: string, directoryName: string): SkillManifest {
   if (!Array.isArray(manifest.skill_files) || manifest.skill_files.length === 0) {
     throw new Error(`${directoryName} manifest requires skill_files`)
   }
+
+  if (manifest.runtime) {
+    if (!manifest.runtime_cli) throw new Error(`${directoryName} native runtime requires runtime_cli`)
+    if (!manifest.runtime_artifacts) throw new Error(`${directoryName} native runtime requires runtime_artifacts`)
+    for (const key of TARGET_KEYS) {
+      const target = targetByKey(key)
+      const expected = runtimeArtifactPath(manifest.runtime_cli, target)
+      if (manifest.runtime_artifacts[key] !== expected) {
+        throw new Error(`${directoryName} runtime_artifacts.${key} must be ${expected}`)
+      }
+    }
+  } else if (manifest.runtime_artifacts && Object.keys(manifest.runtime_artifacts).length > 0) {
+    throw new Error(`${directoryName} cannot declare runtime_artifacts without a runtime`)
+  }
+
   return manifest
 }
 
@@ -116,16 +139,29 @@ function buildSkillArchive(
   directoryName: string,
   manifest: SkillManifest,
   releaseBase: string,
-): ReleasedSkill {
+): { released: ReleasedSkill; archive: string } {
   const skillRoot = join(skillsRoot, directoryName)
-  const stageRoot = join(packageStages, directoryName)
-  const archive = join(out, `${manifest.name}.zip`)
+  const native = !!manifest.runtime
+  const artifactKey: TargetKey | 'portable' = native ? buildTarget.key : 'portable'
+  const archiveName = skillArchiveName(manifest.name, native ? buildTarget : 'portable')
+  const stageRoot = join(packageStages, `${manifest.name}-${artifactKey}`)
+  const archive = join(out, archiveName)
   rmSync(stageRoot, { recursive: true, force: true })
   rmSync(archive, { force: true })
   mkdirSync(stageRoot, { recursive: true })
 
   validateSkillMetadata(skillRoot, manifest)
-  copyFileSync(join(skillRoot, 'manifest.json'), join(stageRoot, 'manifest.json'))
+
+  const packageManifest: SkillManifest = { ...manifest }
+  let selectedRuntime: string | undefined
+  if (native) {
+    selectedRuntime = manifest.runtime_artifacts?.[buildTarget.key]
+    if (!selectedRuntime) throw new Error(`${manifest.name} has no runtime for ${buildTarget.key}`)
+    packageManifest.runtime_artifacts = { [buildTarget.key]: selectedRuntime }
+  } else {
+    delete packageManifest.runtime_artifacts
+  }
+  writeFileSync(join(stageRoot, 'manifest.json'), `${JSON.stringify(packageManifest, null, 2)}\n`)
 
   const declared = new Set<string>([
     ...manifest.skill_files,
@@ -135,8 +171,8 @@ function buildSkillArchive(
   ])
   for (const rel of declared) copyDeclared(skillRoot, stageRoot, rel, `${manifest.name} package asset`)
 
-  for (const rel of Object.values(manifest.runtime_artifacts ?? {})) {
-    copyDeclared(join(runtimeAssets, directoryName), stageRoot, rel, `${manifest.name} runtime artifact`)
+  if (selectedRuntime) {
+    copyDeclared(join(runtimeAssets, directoryName), stageRoot, selectedRuntime, `${manifest.name} runtime artifact`)
   }
 
   const entries = readdirSync(stageRoot)
@@ -144,20 +180,23 @@ function buildSkillArchive(
   createZipFromDirectory(stageRoot, archive)
 
   return {
-    version: manifest.version,
-    min_installer: manifest.min_installer,
-    artifacts: {
-      [buildTarget.key]: {
-        url: `${releaseBase}/${manifest.name}.zip`,
-        sha256: sha256(archive),
+    released: {
+      version: manifest.version,
+      min_installer: manifest.min_installer,
+      artifacts: {
+        [artifactKey]: {
+          url: `${releaseBase}/${archiveName}`,
+          sha256: sha256(archive),
+        },
       },
     },
+    archive,
   }
 }
 
 const cargoTarget = join(out, 'cargo', 'map')
 const mapExecutable = `map${buildTarget.executableSuffix}`
-const stagedMap = join(runtimeAssets, 'map', 'runtime', buildTarget.key, mapExecutable)
+const stagedMap = join(runtimeAssets, 'map', runtimeArtifactPath('map', buildTarget))
 rmSync(runtimeAssets, { recursive: true, force: true })
 rmSync(packageStages, { recursive: true, force: true })
 mkdirSync(dirname(stagedMap), { recursive: true })
@@ -177,6 +216,8 @@ if (suppliedMap) {
     '--manifest-path',
     join(repo, 'skills', 'map', 'Cargo.toml'),
     '--release',
+    '--target',
+    buildTarget.rustTargetTriple,
     '--target-dir',
     cargoTarget,
   ], {
@@ -187,11 +228,13 @@ if (suppliedMap) {
   })
   if (mapBuild.exitCode !== 0) process.exit(mapBuild.exitCode)
 
-  copyFileSync(join(cargoTarget, 'release', mapExecutable), stagedMap)
+  copyFileSync(join(cargoTarget, buildTarget.rustTargetTriple, 'release', mapExecutable), stagedMap)
 }
 
-const output = join(out, 'jl-skills.exe')
+const installerName = installerAssetName(buildTarget)
+const output = join(out, installerName)
 rmSync(join(out, 'jl-skill.exe'), { force: true })
+rmSync(join(out, 'jl-skills.exe'), { force: true })
 rmSync(output, { force: true })
 const installerBuild = Bun.spawnSync([
   process.execPath,
@@ -223,13 +266,16 @@ const releaseBase = `https://github.com/jacoblockett/jl-skills/releases/download
 
 mkdirSync(packageStages, { recursive: true })
 const releasedSkills: Record<string, ReleasedSkill> = {}
+const skillArchives: string[] = []
 for (const directoryName of readdirSync(skillsRoot).sort()) {
   const skillRoot = join(skillsRoot, directoryName)
   if (!statSync(skillRoot).isDirectory()) continue
   const manifestPath = join(skillRoot, 'manifest.json')
   if (!existsSync(manifestPath)) continue
   const manifest = readManifest(skillRoot, directoryName)
-  releasedSkills[manifest.name] = buildSkillArchive(directoryName, manifest, releaseBase)
+  const built = buildSkillArchive(directoryName, manifest, releaseBase)
+  releasedSkills[manifest.name] = built.released
+  skillArchives.push(built.archive)
 }
 
 const releaseManifest = {
@@ -238,7 +284,7 @@ const releaseManifest = {
     version: installerVersion,
     artifacts: {
       [buildTarget.key]: {
-        url: `${releaseBase}/jl-skills.exe`,
+        url: `${releaseBase}/${installerName}`,
         sha256: sha256(output),
       },
     },
@@ -248,8 +294,9 @@ const releaseManifest = {
 const manifestOutput = join(out, 'manifest.json')
 rmSync(join(out, 'jl-skills-manifest.json'), { force: true })
 rmSync(join(out, 'map.exe'), { force: true })
+rmSync(join(out, 'map.zip'), { force: true })
 writeFileSync(manifestOutput, `${JSON.stringify(releaseManifest, null, 2)}\n`)
 
 console.log(`Built ${output}`)
-for (const skill of Object.keys(releasedSkills)) console.log(`Built ${join(out, `${skill}.zip`)}`)
+for (const archive of skillArchives) console.log(`Built ${archive}`)
 console.log(`Built ${manifestOutput}`)
