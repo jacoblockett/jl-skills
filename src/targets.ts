@@ -115,6 +115,21 @@ export function hostMatchesTarget(target: DistributionTarget): boolean {
   return hostOs === target.os && arch() === target.arch
 }
 
+export function installerAssetName(target: DistributionTarget): string {
+  return `jl-skills-${target.key}${target.executableSuffix}`
+}
+
+export function skillArchiveName(skill: string, target: DistributionTarget | 'portable'): string {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(skill)) throw new Error(`invalid skill name for release artifact: ${skill}`)
+  const key = target === 'portable' ? 'portable' : target.key
+  return `${skill}-${key}.zip`
+}
+
+export function runtimeArtifactPath(cli: string, target: DistributionTarget): string {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(cli)) throw new Error(`invalid runtime CLI name: ${cli}`)
+  return `runtime/${target.key}/${cli}${target.executableSuffix}`
+}
+
 declare const JL_SKILLS_COMPILED_TARGET: string | undefined
 
 export function compiledTarget(): DistributionTarget {
