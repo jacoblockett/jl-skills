@@ -30,11 +30,12 @@ const packageStages = join(out, 'packages')
 const semver = /^\d+\.\d+\.\d+$/
 const skillMetaPrefix = 'jl-skills-meta:'
 const buildTarget = targetByKey(process.env.JL_SKILLS_BUILD_TARGET?.trim() || 'windows-x64')
+const portableBuildTarget: TargetKey = 'windows-x64'
 
 mkdirSync(out, { recursive: true })
 
-if (buildTarget.key !== 'windows-x64' || !hostMatchesTarget(buildTarget)) {
-  throw new Error('current pre-matrix build supports Windows x64 only')
+if (!hostMatchesTarget(buildTarget)) {
+  throw new Error(`build target ${buildTarget.key} does not match this host OS/architecture`)
 }
 
 type SkillManifest = {
@@ -273,6 +274,7 @@ for (const directoryName of readdirSync(skillsRoot).sort()) {
   const manifestPath = join(skillRoot, 'manifest.json')
   if (!existsSync(manifestPath)) continue
   const manifest = readManifest(skillRoot, directoryName)
+  if (!manifest.runtime && buildTarget.key !== portableBuildTarget) continue
   const built = buildSkillArchive(directoryName, manifest, releaseBase)
   releasedSkills[manifest.name] = built.released
   skillArchives.push(built.archive)
