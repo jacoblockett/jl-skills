@@ -19,8 +19,8 @@ const server = Bun.serve({
         skill.url = `${base}/${name}.zip`
       }
       if (url.pathname === '/incompatible-manifest.json') {
-        manifest.installer.version = '0.6.0'
-        manifest.skills.map.min_installer = '0.6.0'
+        manifest.installer.version = '0.7.0'
+        manifest.skills.map.min_installer = '0.7.0'
       }
       return Response.json(manifest)
     }
