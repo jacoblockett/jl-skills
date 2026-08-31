@@ -11,6 +11,8 @@ import {
   fetchStableReleaseManifest,
   parseReleaseManifest,
   parseSkillPackageManifest,
+  selectInstallerArtifact,
+  selectSkillArtifact,
   stageInstallerUpdate,
   windowsReplacementCommand,
   type InstallerUpdate,
@@ -139,6 +141,41 @@ describe('release metadata', () => {
     expect(() => parseReleaseManifest(invalidTarget)).toThrow('invalid target linux-x86')
   })
 
+  test('artifact selection is exact target with portable fallback only for skills', () => {
+    const manifest = parseReleaseManifest({
+      format: 2,
+      installer: {
+        version: '0.8.0',
+        artifacts: {
+          'windows-x64': { url: 'https://fixture.invalid/jl-skills-windows-x64.exe', sha256: '0'.repeat(64) },
+          'linux-x64-gnu': { url: 'https://fixture.invalid/jl-skills-linux-x64-gnu', sha256: '2'.repeat(64) },
+        },
+      },
+      skills: {
+        native: {
+          version: '1.0.0',
+          min_installer: '0.7.0',
+          artifacts: {
+            'windows-x64': { url: 'https://fixture.invalid/native-windows-x64.zip', sha256: '3'.repeat(64) },
+          },
+        },
+        portable: {
+          version: '1.0.0',
+          min_installer: '0.7.0',
+          artifacts: {
+            portable: { url: 'https://fixture.invalid/portable-portable.zip', sha256: '4'.repeat(64) },
+          },
+        },
+      },
+    })
+
+    expect(selectInstallerArtifact(manifest, 'linux-x64-gnu').url).toEndWith('/jl-skills-linux-x64-gnu')
+    expect(() => selectInstallerArtifact(manifest, 'linux-x64-musl')).toThrow('no linux-x64-musl artifact')
+    expect(selectSkillArtifact('native', manifest.skills.native, 'windows-x64').key).toBe('windows-x64')
+    expect(() => selectSkillArtifact('native', manifest.skills.native, 'linux-x64-gnu')).toThrow('no linux-x64-gnu or portable')
+    expect(selectSkillArtifact('portable', manifest.skills.portable, 'linux-arm64-musl').key).toBe('portable')
+  })
+
   test('skill package manifest validates install semantics independently', () => {
     const parsed = parseSkillPackageManifest({
       format: 1,
@@ -201,16 +238,26 @@ describe('release metadata', () => {
 
   test('no-update path returns null for equal or older installer releases', async () => {
     const manifest = releaseManifest('0.7.0')
-    const update = await checkInstallerUpdate('0.7.0', 'https://fixture.invalid/manifest.json', fixtureFetcher(manifest))
+    const update = await checkInstallerUpdate(
+      '0.7.0',
+      'https://fixture.invalid/manifest.json',
+      fixtureFetcher(manifest),
+      'windows-x64',
+    )
     expect(update).toBeNull()
   })
 
   test('missing published manifest is treated as no update', async () => {
     const fetcher = (async () => new Response('missing', { status: 404 })) as typeof fetch
-    expect(await checkInstallerUpdate('0.7.0', 'https://fixture.invalid/missing.json', fetcher)).toBeNull()
+    expect(await checkInstallerUpdate(
+      '0.7.0',
+      'https://fixture.invalid/missing.json',
+      fetcher,
+      'windows-x64',
+    )).toBeNull()
   })
 
-  test('newer installer uses the pre-matrix Windows artifact', async () => {
+  test('newer installer selects the requested canonical target artifact', async () => {
     const bytes = 'replacement-exe'
     const manifest = releaseManifest('0.8.0')
     manifest.installer.artifacts['windows-x64'].sha256 = sha256(bytes)
@@ -218,6 +265,7 @@ describe('release metadata', () => {
       '0.7.0',
       'https://fixture.invalid/manifest.json',
       fixtureFetcher(manifest, bytes),
+      'windows-x64',
     )
     expect(update?.version).toBe('0.8.0')
     expect(update?.artifact.url).toBe('https://fixture.invalid/jl-skills-windows-x64.exe')
@@ -258,7 +306,12 @@ describe('skill package download', () => {
     const originalPath = process.env.PATH
     process.env.PATH = ''
     try {
-      const downloaded = await downloadSkillPackage('map', released, fixtureFetcher({}, 'unused', bytes))
+      const downloaded = await downloadSkillPackage(
+        'map',
+        released,
+        fixtureFetcher({}, 'unused', bytes),
+        'windows-x64',
+      )
       try {
         expect(downloaded.manifest.name).toBe('map')
         expect(downloaded.manifest.version).toBe('0.5.0')
@@ -271,7 +324,7 @@ describe('skill package download', () => {
     }
   })
 
-  test('portable skill artifacts are valid during the transition', async () => {
+  test('portable skill artifacts are the only cross-target fallback', async () => {
     const root = reset('portable-skill-package')
     const packageRoot = join(root, 'package')
     mkdirSync(packageRoot, { recursive: true })
@@ -300,12 +353,57 @@ describe('skill package download', () => {
       },
     }
 
-    const downloaded = await downloadSkillPackage('portable-test', released, fixtureFetcher({}, 'unused', bytes))
+    const downloaded = await downloadSkillPackage(
+      'portable-test',
+      released,
+      fixtureFetcher({}, 'unused', bytes),
+      'linux-arm64-musl',
+    )
     try {
       expect(downloaded.manifest.name).toBe('portable-test')
     } finally {
       downloaded.cleanup()
     }
+  })
+
+  test('native package runtime metadata must match the selected target', async () => {
+    const root = reset('wrong-target-package')
+    const packageRoot = join(root, 'package')
+    mkdirSync(join(packageRoot, 'runtime', 'linux-x64-gnu'), { recursive: true })
+    const manifest = {
+      format: 1,
+      name: 'map',
+      version: '0.5.0',
+      min_installer: '0.7.0',
+      description: 'Map',
+      skill_files: ['SKILL.md'],
+      runtime: 'rust',
+      runtime_cli: 'map',
+      runtime_artifacts: { 'linux-x64-gnu': 'runtime/linux-x64-gnu/map' },
+    }
+    writeFileSync(join(packageRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+    writeFileSync(join(packageRoot, 'SKILL.md'), '<!-- jl-skills-meta: {"name":"map","version":"0.5.0","format":1} -->\n')
+    writeFileSync(join(packageRoot, 'runtime', 'linux-x64-gnu', 'map'), 'runtime')
+    const zip = new AdmZip()
+    zip.addLocalFolder(packageRoot)
+    const bytes = new Uint8Array(zip.toBuffer())
+    const released: ReleasedSkill = {
+      version: '0.5.0',
+      min_installer: '0.7.0',
+      artifacts: {
+        'windows-x64': {
+          url: 'https://fixture.invalid/map-windows-x64.zip',
+          sha256: sha256(bytes),
+        },
+      },
+    }
+
+    await expect(downloadSkillPackage(
+      'map',
+      released,
+      fixtureFetcher({}, 'unused', bytes),
+      'windows-x64',
+    )).rejects.toThrow('must contain only its windows-x64 runtime artifact')
   })
 
   test('archive entry paths cannot escape the extraction root', async () => {
@@ -323,8 +421,12 @@ describe('skill package download', () => {
       },
     }
 
-    await expect(downloadSkillPackage('map', released, fixtureFetcher({}, 'unused', bytes)))
-      .rejects.toThrow('relative contained path')
+    await expect(downloadSkillPackage(
+      'map',
+      released,
+      fixtureFetcher({}, 'unused', bytes),
+      'windows-x64',
+    )).rejects.toThrow('relative contained path')
   })
 })
 
