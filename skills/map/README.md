@@ -15,7 +15,7 @@ cargo build --manifest-path skills/map/Cargo.toml --release
 
 The runtime embeds SurrealDB/SurrealKV and requires no daemon or listening port.
 
-The current Windows release/smoke path is local on the development/release machine. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the installer catalog, and compiles the TypeScript + `@clack/prompts` installer with Bun into standalone `build/jl-skills.exe`.
+The current Windows release/smoke path is local on the development/release machine. `bun run build` builds release `map.exe`, stages the declared Map payload, generates the release package/manifest, and compiles the TypeScript + `@clack/prompts` installer with Bun into standalone `build/jl-skills.exe`.
 
 Run the full Map + installer regression smoke with:
 
@@ -25,19 +25,19 @@ bun run smoke
 
 Consumers need only the downloaded standalone installer and the AI harness(es) they intend to target. They do not need Rust, Cargo, Bun, Node, npm, Go, Python, or a SurrealDB server.
 
-The installed Map CLI is a scope-independent support artifact. User, cwd, and explicit-path installs all provision the same executable at:
+Map tooling is local to the selected installation scope and shared only among harness integrations for Map at that same scope:
 
 ```text
-~/.jl-skills/map/bin/map.exe
+user scope
+  ~/.jl-skills/map/bin/map.exe
+  ~/.jl-skills/map/schema.surql
+
+project/custom scope
+  <scope>/.jl-skills/map/bin/map.exe
+  <scope>/.jl-skills/map/schema.surql
 ```
 
-The default schema is shared at:
-
-```text
-~/.jl-skills/map/schema.surql
-```
-
-Skill discovery and managed harness instructions still obey the requested install scope; the shared CLI does not make Map discoverable at user scope by itself.
+Project/path installs do not provision Map tooling under the user's home directory. Removing the final Map harness integration from a scope removes that scope's `.jl-skills/map` tooling directory; generated `.map` project data is separate and preserved.
 
 ## Initialization
 
@@ -47,7 +47,7 @@ Installing Map does not create project `.map` state. The first explicit runtime 
 map --path /path/to/project init
 ```
 
-The installed runtime resolves its packaged default schema automatically. During direct source development, `--schema skills/map/schema.surql` may be supplied explicitly when needed.
+The installed runtime resolves `schema.surql` from its own scope-local tooling directory automatically. During direct source development, `--schema skills/map/schema.surql` may be supplied explicitly when needed.
 
 Normal commands reject when the selected target has no `.map`.
 
@@ -174,7 +174,7 @@ The v2 runtime suite exercises the public binary across separate processes again
 cargo test --manifest-path skills/map/Cargo.toml
 ```
 
-The Windows installer regression suite exercises cwd scope, user scope, existing Map preservation, managed-instruction injection/idempotency/boundaries, user-scope safety, recursive explicit paths, and the shared CLI destination. Run it together with the runtime suite and a clean standalone build using:
+The Windows installer regression suite exercises project and user scope, scope-local runtime isolation, existing Map preservation, managed-instruction injection/idempotency/boundaries, native subagent placement, uninstall cleanup, and user-scope safety. Run it together with the runtime suite and a clean standalone build using:
 
 ```bash
 bun run smoke
