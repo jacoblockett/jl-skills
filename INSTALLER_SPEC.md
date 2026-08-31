@@ -6,7 +6,35 @@ Status: accepted installer lifecycle contract aligned to the Bun/Clack implement
 
 `jl-skills` is the user-facing installer, updater, uninstaller, and lifecycle utility for the `jl-skills` catalog. Consumers should not need to know where skill discovery files, harness-specific resources, runtimes, instruction fragments, support assets, or installer update mechanics belong.
 
-Public releases use one self-contained installer executable per supported target. Release asset names must identify the target OS/architecture/ABI directly; users must not be expected to infer compatibility from the file extension. The required target matrix and naming policy are defined in `TODO.md` until that release work is implemented.
+Public releases use one self-contained installer executable per supported target. Release asset names identify the target OS/architecture/ABI directly; users must not be expected to infer compatibility from the file extension.
+
+Required canonical targets:
+
+```text
+windows-x64
+windows-arm64
+macos-x64
+macos-arm64
+linux-x64-gnu
+linux-arm64-gnu
+linux-x64-musl
+linux-arm64-musl
+```
+
+Exact public installer filenames:
+
+```text
+jl-skills-windows-x64.exe
+jl-skills-windows-arm64.exe
+jl-skills-macos-x64
+jl-skills-macos-arm64
+jl-skills-linux-x64-gnu
+jl-skills-linux-arm64-gnu
+jl-skills-linux-x64-musl
+jl-skills-linux-arm64-musl
+```
+
+These target keys and filenames are part of the durable installer/release contract. `RELEASES.md` owns the complete release-manifest and publication contract; `TODO.md` owns implementation order.
 
 Consumers must not need Python, Node, npm, pnpm, Bun, Go, Rust, Cargo, or a SurrealDB server merely to install or use a released skill.
 
@@ -30,6 +58,8 @@ Release compilation is conceptually:
 ```text
 Bun --compile -> target-qualified jl-skills executable
 ```
+
+Every compiled installer carries exactly one canonical target key injected at build time. That embedded value is authoritative for installer self-update, skill-package selection, native-runtime selection, output naming, and target diagnostics. Do not derive release identity from runtime `platform + arch` alone, because Linux also requires GNU/glibc vs musl ABI identity.
 
 The product and executable name are always plural: `jl-skills`, never `jl-skill`.
 
@@ -649,6 +679,29 @@ Harness filesystem knowledge belongs in adapters, not duplicated in every skill 
 
 Semantic project initialization is never an installer hook.
 
+### Target-specific and portable release packages
+
+The release manifest chooses which complete skill package is downloaded before package extraction.
+
+For a native skill, release packaging is target-specific. Each package contains common skill/harness/support files plus only the runtime for one canonical target. The installer must never download a foreign-target package to obtain common files.
+
+Map therefore uses these exact release archive names:
+
+```text
+map-windows-x64.zip
+map-windows-arm64.zip
+map-macos-x64.zip
+map-macos-arm64.zip
+map-linux-x64-gnu.zip
+map-linux-arm64-gnu.zip
+map-linux-x64-musl.zip
+map-linux-arm64-musl.zip
+```
+
+A genuinely platform-independent skill may publish one release artifact under the reserved `portable` artifact key. `portable` is not a machine target. A skill containing target-specific native runtime content is not portable.
+
+Artifact selection is exact-target first, then explicit `portable` fallback for skills only. Never fall back to another OS, architecture, or ABI.
+
 ## Skill-generated data contract
 
 Skills may declare generated project data in their manifest. Each declaration is a relative path beneath the user-selected scope and may include a narrow marker used to verify that the path is actually that skill's generated data.
@@ -711,9 +764,11 @@ JL_SKILLS_UPDATE_MANIFEST_URL
 
 The current pre-stable implementation uses consolidated release-manifest format 1 with one Windows installer artifact and one Windows skill archive per skill. That format is temporary and must not become the first Stable contract.
 
-The first Stable release requires the target-aware manifest revision, explicit target-qualified artifacts, and complete platform matrix defined in `TODO.md`. The target-aware contract must retain semantic versions, immutable/pinned snapshot URLs, minimum installer versions for skills, and SHA-256 hashes.
+The first Stable release uses release-manifest format 2. Its installer entry contains `version` plus `artifacts`, keyed by the eight canonical target keys. Each skill entry contains `version`, `min_installer`, and `artifacts`, keyed by canonical target with optional `portable` fallback for truly platform-independent skill packages. Every artifact contains an immutable snapshot URL and SHA-256. The exact format-2 structure and publication completeness gate are authoritative in `RELEASES.md`.
 
-The installer update flow must select only the artifact for the running installer's canonical target. Missing current-target support is an incompatibility error; never fall back to a different OS, architecture, or ABI.
+The installer update flow selects only `installer.artifacts[currentTarget]`, where `currentTarget` is the running executable's build-time embedded canonical target. Missing current-target support is an incompatibility error; never fall back to a different OS, architecture, or ABI.
+
+Skill install/update selection uses `skill.artifacts[currentTarget]` first and may use `skill.artifacts.portable` only when the skill explicitly publishes it. No other fallback is allowed.
 
 Stable release tags remain immutable UTC timestamp snapshot identities. Nightly uses the rolling `nightly` tag. Component update and compatibility decisions use semantic installer/skill versions, not the distribution tag.
 
@@ -852,7 +907,9 @@ build/map.zip
 build/manifest.json
 ```
 
-These ambiguous platform names must be replaced by explicit target-qualified artifact names before Stable, as defined in `TODO.md`.
+These ambiguous platform names must be replaced by the exact target-qualified installer and Map archive names defined above before Stable.
+
+Once target-aware release output is active, Nightly and Stable publication must both be mechanically blocked unless the complete required target set is present and successful. The aggregate/publish stage must independently compare produced target keys against the canonical eight-target set rather than relying on a manual checklist or matrix job count alone. No partial Nightly or Stable release is allowed.
 
 Package generation validates each source skill's self-report metadata against its manifest before shipping the package.
 
