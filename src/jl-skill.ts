@@ -12,7 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { arch, homedir, platform } from 'node:os'
+import { homedir, platform } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path'
 import { exclusiveMultiselect, type ExclusiveOption } from './exclusive-multiselect'
 import {
@@ -42,6 +42,7 @@ import {
   type ReleaseManifest,
   type SkillPackageManifest,
 } from './installer-updater'
+import { compiledTarget, installerAssetName } from './targets'
 
 const VERSION = '0.7.0'
 const PROMPTS_VERSION = '1.7.0'
@@ -347,7 +348,6 @@ function commandExists(command: string): boolean {
 function normalizeAgents(raw: string[]): string[] {
   return [...new Set(raw.map(normalizeHarnessId))].sort()
 }
-
 function harnessDetected(spec: AgentSpec): boolean {
   if (commandExists(spec.command)) return true
   return spec.detectionPaths(userHome()).some(existsSync)
@@ -659,10 +659,7 @@ function staleInstallLabel(group: ReturnType<typeof staleSkills>[number]): strin
 }
 
 function runtimePlatformKey(): string {
-  if (platform() === 'win32' && arch() === 'x64') return 'windows-x64'
-  if (platform() === 'linux' && arch() === 'x64') return 'linux-x64'
-  if (platform() === 'darwin' && arch() === 'arm64') return 'macos-arm64'
-  return `${platform()}-${arch()}`
+  return compiledTarget().key
 }
 
 function runtimeRoot(manifest: Manifest, scope: Scope): string {
@@ -671,7 +668,7 @@ function runtimeRoot(manifest: Manifest, scope: Scope): string {
 
 function runtimeCliPath(manifest: Manifest, scope: Scope): string {
   if (!manifest.runtime_cli) throw new Error(`${manifest.name} manifest is missing runtime_cli`)
-  return join(runtimeRoot(manifest, scope), 'bin', isWindows ? `${manifest.runtime_cli}.exe` : manifest.runtime_cli)
+  return join(runtimeRoot(manifest, scope), 'bin', `${manifest.runtime_cli}${compiledTarget().executableSuffix}`)
 }
 
 function renderInstructionFragment(pkg: DownloadedSkillPackage, cli?: string): string {
@@ -687,8 +684,9 @@ function provisionRuntime(pkg: DownloadedSkillPackage, scope: Scope): { cli?: st
   if (!manifest.runtime) return {}
   if (manifest.runtime !== 'rust') throw new Error(`unsupported runtime "${manifest.runtime}"`)
   if (!manifest.runtime_cli) throw new Error(`${manifest.name} manifest is missing runtime_cli`)
-  const artifact = manifest.runtime_artifacts?.[runtimePlatformKey()]
-  if (!artifact) throw new Error(`${manifest.name} has no bundled runtime for ${runtimePlatformKey()}`)
+  const target = runtimePlatformKey()
+  const artifact = manifest.runtime_artifacts?.[target]
+  if (!artifact) throw new Error(`${manifest.name} has no bundled runtime for ${target}`)
   const root = runtimeRoot(manifest, scope)
   mkdirSync(root, { recursive: true })
   const cli = runtimeCliPath(manifest, scope)
@@ -697,7 +695,6 @@ function provisionRuntime(pkg: DownloadedSkillPackage, scope: Scope): { cli?: st
   for (const rel of manifest.runtime_files ?? []) copyPackageEntry(join(pkg.root, rel), join(root, rel))
   return { cli, root }
 }
-
 function installTargets(
   pkg: DownloadedSkillPackage,
   scope: Scope,
@@ -1526,7 +1523,7 @@ async function removeSkillGeneratedDataWizard(state: WizardState): Promise<NavRe
 function installerExecutable(): string {
   const executable = canonicalPath(process.execPath)
   const name = basename(executable).toLowerCase()
-  const expected = isWindows ? 'jl-skills.exe' : 'jl-skills'
+  const expected = installerAssetName(compiledTarget()).toLowerCase()
   if (name !== expected) {
     throw new Error('installer management is only available from the compiled jl-skills executable')
   }
