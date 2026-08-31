@@ -154,9 +154,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            build/jl-skills.exe
+            build/jl-skills-windows-x64.exe
             build/manifest.json
-            build/*.zip
+            build/*-windows-x64.zip
 
       - name: Publish rolling nightly
         if: steps.mode.outputs.should_build == 'true' && steps.mode.outputs.mode == 'nightly'
@@ -164,7 +164,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $assets = @('build/jl-skills.exe', 'build/manifest.json') + @(Get-ChildItem build/*.zip | ForEach-Object { $_.FullName })
+          $assets = @('build/jl-skills-windows-x64.exe', 'build/manifest.json') + @(Get-ChildItem build/*-windows-x64.zip | ForEach-Object { $_.FullName })
           $existingRelease = (& gh release list --limit 100 --json tagName --jq '.[] | select(.tagName == "nightly") | .tagName' | Select-Object -First 1)
           if (-not $existingRelease) {
             gh release create nightly @assets --title 'Nightly' --notes 'Rolling production-test build from main. Not part of the stable update channel.' --prerelease --target $env:GITHUB_SHA
@@ -186,6 +186,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = '${{ steps.mode.outputs.release_tag }}'
-          $assets = @('build/jl-skills.exe', 'build/manifest.json') + @(Get-ChildItem build/*.zip | ForEach-Object { $_.FullName })
+          $assets = @('build/jl-skills-windows-x64.exe', 'build/manifest.json') + @(Get-ChildItem build/*-windows-x64.zip | ForEach-Object { $_.FullName })
           gh release create $tag @assets --title $tag --generate-notes --target $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw "Could not publish stable release $tag." }
