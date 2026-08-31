@@ -1,12 +1,12 @@
 # jl-skills installer
 
-Status: accepted installer lifecycle contract aligned to the Bun/Clack implementation and native Map runtime. Windows x64 lifecycle behavior has been production-path validated; the first Stable release remains blocked on the cross-platform release work in `To Do.md`.
+Status: accepted installer lifecycle contract aligned to the Bun/Clack implementation and native Map runtime. Windows x64 lifecycle behavior has been production-path validated; the first Stable release remains blocked on the cross-platform release work in `TODO.md`.
 
 ## Product goal
 
 `jl-skills` is the user-facing installer, updater, uninstaller, and lifecycle utility for the `jl-skills` catalog. Consumers should not need to know where skill discovery files, harness-specific resources, runtimes, instruction fragments, support assets, or installer update mechanics belong.
 
-Public releases use one self-contained installer executable per supported target. Release asset names must identify the target OS/architecture/ABI directly; users must not be expected to infer compatibility from the file extension. The required target matrix and naming policy are defined in `To Do.md` until that release work is implemented.
+Public releases use one self-contained installer executable per supported target. Release asset names must identify the target OS/architecture/ABI directly; users must not be expected to infer compatibility from the file extension. The required target matrix and naming policy are defined in `TODO.md` until that release work is implemented.
 
 Consumers must not need Python, Node, npm, pnpm, Bun, Go, Rust, Cargo, or a SurrealDB server merely to install or use a released skill.
 
@@ -711,7 +711,7 @@ JL_SKILLS_UPDATE_MANIFEST_URL
 
 The current pre-stable implementation uses consolidated release-manifest format 1 with one Windows installer artifact and one Windows skill archive per skill. That format is temporary and must not become the first Stable contract.
 
-The first Stable release requires the target-aware manifest revision, explicit target-qualified artifacts, and complete platform matrix defined in `To Do.md`. The target-aware contract must retain semantic versions, immutable/pinned snapshot URLs, minimum installer versions for skills, and SHA-256 hashes.
+The first Stable release requires the target-aware manifest revision, explicit target-qualified artifacts, and complete platform matrix defined in `TODO.md`. The target-aware contract must retain semantic versions, immutable/pinned snapshot URLs, minimum installer versions for skills, and SHA-256 hashes.
 
 The installer update flow must select only the artifact for the running installer's canonical target. Missing current-target support is an incompatibility error; never fall back to a different OS, architecture, or ABI.
 
@@ -790,7 +790,7 @@ Section headings inside those notes may remain sentence case.
 
 Map is a native Rust CLI using embedded SurrealKV through the pinned SurrealDB/SurrealKV stack.
 
-The current pre-stable release flow is Windows x64 only. Cross-platform runtime artifacts are release-blocking work tracked in `To Do.md`.
+The current pre-stable release flow is Windows x64 only. Cross-platform runtime artifacts are release-blocking work tracked in `TODO.md`.
 
 Current Windows x64 flow:
 
@@ -852,7 +852,7 @@ build/map.zip
 build/manifest.json
 ```
 
-These ambiguous platform names must be replaced by explicit target-qualified artifact names before Stable, as defined in `To Do.md`.
+These ambiguous platform names must be replaced by explicit target-qualified artifact names before Stable, as defined in `TODO.md`.
 
 Package generation validates each source skill's self-report metadata against its manifest before shipping the package.
 
