@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { containedPath, extractZip } from './archive'
-import { compiledTarget } from './targets'
+import { compiledTarget, isTargetKey, type TargetKey } from './targets'
 
 if (Bun.isStandaloneExecutable) compiledTarget()
 
@@ -26,14 +26,21 @@ export type ReleaseArtifact = {
   sha256: string
 }
 
-export type ReleasedSkill = ReleaseArtifact & {
+export type TargetArtifactMap = Partial<Record<TargetKey, ReleaseArtifact>>
+export type SkillArtifactMap = Partial<Record<TargetKey | 'portable', ReleaseArtifact>>
+
+export type ReleasedSkill = {
   version: string
   min_installer: string
+  artifacts: SkillArtifactMap
 }
 
 export type ReleaseManifest = {
-  format: 1
-  installer: ReleaseArtifact & { version: string }
+  format: 2
+  installer: {
+    version: string
+    artifacts: TargetArtifactMap
+  }
   skills: Record<string, ReleasedSkill>
 }
 
@@ -96,7 +103,7 @@ function parseSha256(value: unknown, label: string): string {
 }
 
 function parseArtifact(value: unknown, label: string): ReleaseArtifact {
-  if (!value || typeof value !== 'object') throw new Error(`invalid ${label}`)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`invalid ${label}`)
   const raw = value as Record<string, unknown>
   if (typeof raw.url !== 'string' || !raw.url.trim()) throw new Error(`${label} is missing a URL`)
   return {
@@ -105,23 +112,53 @@ function parseArtifact(value: unknown, label: string): ReleaseArtifact {
   }
 }
 
+function parseArtifactMap(
+  value: unknown,
+  label: string,
+  allowPortable: false,
+): TargetArtifactMap
+function parseArtifactMap(
+  value: unknown,
+  label: string,
+  allowPortable: true,
+): SkillArtifactMap
+function parseArtifactMap(
+  value: unknown,
+  label: string,
+  allowPortable: boolean,
+): TargetArtifactMap | SkillArtifactMap {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length === 0) throw new Error(`${label} must contain at least one artifact`)
+
+  const artifacts: Record<string, ReleaseArtifact> = {}
+  for (const [key, artifact] of entries) {
+    if (key !== 'portable' && !isTargetKey(key)) throw new Error(`${label} has invalid target ${key}`)
+    if (key === 'portable' && !allowPortable) throw new Error(`${label} cannot publish a portable artifact`)
+    artifacts[key] = parseArtifact(artifact, `${label}.${key}`)
+  }
+  return artifacts
+}
+
 export function parseReleaseManifest(value: unknown): ReleaseManifest {
   if (!value || typeof value !== 'object') throw new Error('invalid release manifest')
   const raw = value as Record<string, unknown>
-  if (raw.format !== 1) throw new Error('unsupported release manifest format')
+  if (raw.format !== 2) throw new Error('unsupported release manifest format')
 
   if (!raw.installer || typeof raw.installer !== 'object') throw new Error('release manifest is missing installer metadata')
   const installerRaw = raw.installer as Record<string, unknown>
   if (typeof installerRaw.version !== 'string' || !semverParts(installerRaw.version)) {
     throw new Error('invalid installer release version')
   }
-  const installerArtifact = parseArtifact(installerRaw, 'installer release artifact')
+  const installerArtifacts = parseArtifactMap(installerRaw.artifacts, 'installer release artifacts', false)
 
-  if (!raw.skills || typeof raw.skills !== 'object') throw new Error('release manifest is missing skills metadata')
+  if (!raw.skills || typeof raw.skills !== 'object' || Array.isArray(raw.skills)) {
+    throw new Error('release manifest is missing skills metadata')
+  }
   const skills: Record<string, ReleasedSkill> = {}
   for (const [name, value] of Object.entries(raw.skills as Record<string, unknown>)) {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`invalid released skill name ${name}`)
-    if (!value || typeof value !== 'object') throw new Error(`invalid released skill ${name}`)
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`invalid released skill ${name}`)
     const skill = value as Record<string, unknown>
     if (typeof skill.version !== 'string' || !semverParts(skill.version)) {
       throw new Error(`invalid released skill version ${name}`)
@@ -129,19 +166,18 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
     if (typeof skill.min_installer !== 'string' || !semverParts(skill.min_installer)) {
       throw new Error(`invalid minimum installer version for ${name}`)
     }
-    const artifact = parseArtifact(skill, `released skill ${name}`)
     skills[name] = {
       version: skill.version,
       min_installer: skill.min_installer,
-      ...artifact,
+      artifacts: parseArtifactMap(skill.artifacts, `released skill ${name} artifacts`, true),
     }
   }
 
   return {
-    format: 1,
+    format: 2,
     installer: {
       version: installerRaw.version,
-      ...installerArtifact,
+      artifacts: installerArtifacts,
     },
     skills,
   }
@@ -157,6 +193,18 @@ export async function fetchStableReleaseManifest(
   return parseReleaseManifest(await response.json())
 }
 
+function preMatrixInstallerArtifact(manifest: ReleaseManifest): ReleaseArtifact {
+  const artifact = manifest.installer.artifacts['windows-x64']
+  if (!artifact) throw new Error('installer release has no windows-x64 artifact')
+  return artifact
+}
+
+function preMatrixSkillArtifact(name: string, released: ReleasedSkill): ReleaseArtifact {
+  const artifact = released.artifacts['windows-x64'] ?? released.artifacts.portable
+  if (!artifact) throw new Error(`${name} has no windows-x64 or portable release artifact`)
+  return artifact
+}
+
 export async function checkInstallerUpdate(
   currentVersion: string,
   manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
@@ -166,10 +214,7 @@ export async function checkInstallerUpdate(
   if (!manifest || compareVersions(manifest.installer.version, currentVersion) <= 0) return null
   return {
     version: manifest.installer.version,
-    artifact: {
-      url: manifest.installer.url,
-      sha256: manifest.installer.sha256,
-    },
+    artifact: preMatrixInstallerArtifact(manifest),
   }
 }
 
@@ -358,7 +403,8 @@ export async function downloadSkillPackage(
   mkdirSync(root, { recursive: true })
 
   try {
-    await downloadVerified(released, archive, `${name} ${released.version}`, fetcher)
+    const artifact = preMatrixSkillArtifact(name, released)
+    await downloadVerified(artifact, archive, `${name} ${released.version}`, fetcher)
     extractZip(archive, root)
 
     const manifestPath = join(root, 'manifest.json')
