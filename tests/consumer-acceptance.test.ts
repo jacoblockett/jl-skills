@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import {
   installerAssetName,
@@ -10,7 +10,7 @@ import {
 
 const repo = resolve(import.meta.dir, '..')
 const build = join(repo, 'build')
-const target = targetByKey(process.env.JL_SKILLS_BUILD_TARGET?.trim() || '')
+const target = targetByKey(process.env.JL_SKILLS_BUILD_TARGET?.trim() || 'windows-x64')
 const installer = join(build, installerAssetName(target))
 const mapArchive = join(build, skillArchiveName('map', target))
 const sourceSkill = join(repo, 'skills', 'map', 'SKILL.md')
@@ -162,9 +162,6 @@ function expectOnlyTargetRuntimeInstalled(root: string): void {
 }
 
 beforeAll(async () => {
-  if (!process.env.JL_SKILLS_BUILD_TARGET) {
-    throw new Error('JL_SKILLS_BUILD_TARGET is required for consumer acceptance')
-  }
   if (!existsSync(installer)) throw new Error(`missing compiled installer: ${installer}`)
   if (!existsSync(mapArchive)) throw new Error(`missing Map target package: ${mapArchive}`)
   if (!existsSync(join(build, 'manifest.json'))) throw new Error('missing target release manifest')
