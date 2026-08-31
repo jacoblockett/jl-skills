@@ -1,16 +1,12 @@
 # jl-skills installer
 
-Status: accepted installer lifecycle contract aligned to the Bun/Clack implementation and native Map runtime.
+Status: accepted installer lifecycle contract aligned to the Bun/Clack implementation and native Map runtime. Windows x64 lifecycle behavior has been production-path validated; the first Stable release remains blocked on the cross-platform release work in `To Do.md`.
 
 ## Product goal
 
 `jl-skills` is the user-facing installer, updater, uninstaller, and lifecycle utility for the `jl-skills` catalog. Consumers should not need to know where skill discovery files, harness-specific resources, runtimes, instruction fragments, support assets, or installer update mechanics belong.
 
-The public distribution target is one self-contained executable:
-
-```text
-jl-skills.exe
-```
+Public releases use one self-contained installer executable per supported target. Release asset names must identify the target OS/architecture/ABI directly; users must not be expected to infer compatibility from the file extension. The required target matrix and naming policy are defined in `To Do.md` until that release work is implemented.
 
 Consumers must not need Python, Node, npm, pnpm, Bun, Go, Rust, Cargo, or a SurrealDB server merely to install or use a released skill.
 
@@ -32,7 +28,7 @@ JL-owned custom controls may wrap Clack core only where the accepted navigation/
 Release compilation is conceptually:
 
 ```text
-Bun --compile -> jl-skills.exe
+Bun --compile -> target-qualified jl-skills executable
 ```
 
 The product and executable name are always plural: `jl-skills`, never `jl-skill`.
@@ -162,13 +158,7 @@ If a recognizable catalog skill exists but usable version metadata is absent or 
 
 ### Home screen
 
-Bare:
-
-```text
-jl-skills.exe
-```
-
-starts with:
+Running the installer without an explicit action starts with:
 
 ```text
 What would you like to do?
@@ -719,38 +709,13 @@ The URL may be overridden for deterministic development/Nightly testing with:
 JL_SKILLS_UPDATE_MANIFEST_URL
 ```
 
-The consolidated release manifest has format 1 and contains installer plus skill release metadata, including semantic versions, immutable/pinned release URLs, minimum installer versions for skills, and SHA-256 hashes.
+The current pre-stable implementation uses consolidated release-manifest format 1 with one Windows installer artifact and one Windows skill archive per skill. That format is temporary and must not become the first Stable contract.
 
-Example shape:
+The first Stable release requires the target-aware manifest revision, explicit target-qualified artifacts, and complete platform matrix defined in `To Do.md`. The target-aware contract must retain semantic versions, immutable/pinned snapshot URLs, minimum installer versions for skills, and SHA-256 hashes.
 
-```json
-{
-  "format": 1,
-  "installer": {
-    "version": "0.7.0",
-    "url": "https://github.com/jacoblockett/jl-skills/releases/download/<release-tag>/jl-skills.exe",
-    "sha256": "<64 lowercase hex characters>"
-  },
-  "skills": {
-    "map": {
-      "version": "0.4.0",
-      "min_installer": "0.7.0",
-      "url": "https://github.com/jacoblockett/jl-skills/releases/download/<release-tag>/map.zip",
-      "sha256": "<64 lowercase hex characters>"
-    }
-  }
-}
-```
+The installer update flow must select only the artifact for the running installer's canonical target. Missing current-target support is an incompatibility error; never fall back to a different OS, architecture, or ABI.
 
-The current Windows release build emits at least:
-
-```text
-build/jl-skills.exe
-build/map.zip
-build/manifest.json
-```
-
-Stable release tags are immutable UTC timestamp snapshot identities. Nightly uses the rolling `nightly` tag. Component update and compatibility decisions use semantic installer/skill versions, not the distribution tag.
+Stable release tags remain immutable UTC timestamp snapshot identities. Nightly uses the rolling `nightly` tag. Component update and compatibility decisions use semantic installer/skill versions, not the distribution tag.
 
 The installer:
 
@@ -759,13 +724,13 @@ The installer:
 3. treats a missing published manifest (HTTP 404) as no available update;
 4. compares semantic versions;
 5. reports `No updates found.` and returns home when the running version is current/newer;
-6. requires a current-platform artifact for a newer release;
+6. requires a current-target artifact for a newer release;
 7. shows an `Update Summary` containing current and available versions;
 8. uses the standard `Continue?` confirmation;
 9. downloads the replacement to a sibling staging path;
 10. validates SHA-256 before replacement;
 11. leaves the currently running executable untouched while staging;
-12. on Windows, starts the smallest detached post-exit replacement command;
+12. performs the smallest safe platform-native post-exit replacement operation where in-process replacement is not possible;
 13. preserves installed skills, their scope-local tooling, and skill-generated data.
 
 A failed hash/version/manifest check must fail rather than install an unverifiable executable.
@@ -825,7 +790,9 @@ Section headings inside those notes may remain sentence case.
 
 Map is a native Rust CLI using embedded SurrealKV through the pinned SurrealDB/SurrealKV stack.
 
-Windows x64 release flow:
+The current pre-stable release flow is Windows x64 only. Cross-platform runtime artifacts are release-blocking work tracked in `To Do.md`.
+
+Current Windows x64 flow:
 
 ```text
 Map Rust source
@@ -834,17 +801,19 @@ Map Rust source
   -> selected scope .jl-skills/map/bin/map.exe
 ```
 
-Scope-local destinations are:
+The platform-independent scope-local destination model is:
 
 ```text
 user scope
-  ~/.jl-skills/map/bin/map.exe
+  ~/.jl-skills/map/bin/map[.exe]
   ~/.jl-skills/map/schema.surql
 
 project/custom scope
-  <scope>/.jl-skills/map/bin/map.exe
+  <scope>/.jl-skills/map/bin/map[.exe]
   <scope>/.jl-skills/map/schema.surql
 ```
+
+The `.exe` suffix applies only on Windows.
 
 One copy exists per Map installation scope and is shared among Map's harness integrations inside that scope. It is never shared across different scopes.
 
@@ -865,7 +834,7 @@ There is no machine-level Map project registry in the accepted lifecycle.
 
 ## Build and smoke pipeline
 
-The current Windows x64 local pipeline is:
+The current pre-stable Windows x64 pipeline is:
 
 ```text
 cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map
@@ -875,7 +844,7 @@ bun run test:installer
 
 `bun run smoke` runs that pipeline.
 
-The build produces:
+The current Windows-only build produces temporary pre-stable asset names:
 
 ```text
 build/jl-skills.exe
@@ -883,7 +852,7 @@ build/map.zip
 build/manifest.json
 ```
 
-and removes stale singular `build/jl-skill.exe` output.
+These ambiguous platform names must be replaced by explicit target-qualified artifact names before Stable, as defined in `To Do.md`.
 
 Package generation validates each source skill's self-report metadata against its manifest before shipping the package.
 
@@ -916,8 +885,6 @@ Regression coverage includes at least:
 - release-manifest hash matching the built executable;
 - installer self-uninstall preservation boundaries;
 - installer self-uninstall silent delegated cleanup with no post-confirmation foreground status.
-
-Manual UI smoke may exercise a real-looking skill update without publishing a new release by installing the current bundled skill into the isolated UI-smoke project, deliberately lowering only that installed copy's self-reported metadata version, and then running the compiled installer Update Skills flow against the same project.
 
 ## Explicit non-goals
 
