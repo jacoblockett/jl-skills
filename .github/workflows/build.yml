@@ -186,8 +186,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             build/cargo/map
-          key: ${{ matrix.target }}-rust-1.97.1-map-${{ hashFiles('skills/map/Cargo.lock', 'skills/map/Cargo.toml') }}
+          key: ${{ matrix.target }}-rust-v2-1.97.1-map-${{ hashFiles('skills/map/Cargo.lock', 'skills/map/Cargo.toml', 'skills/map/src/**/*.rs', 'skills/map/tests/**/*.rs') }}
           restore-keys: |
+            ${{ matrix.target }}-rust-v2-1.97.1-map-
             ${{ matrix.target }}-rust-1.97.1-map-
 
       - name: Install dependencies
