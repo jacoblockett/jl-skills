@@ -12,6 +12,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { arch, platform } from 'node:os'
+import { containedPath, createZipFromDirectory } from '../src/archive'
 
 const repo = join(import.meta.dir, '..')
 const out = join(repo, 'build')
@@ -57,12 +58,7 @@ function sha256(path: string): string {
 }
 
 function packagePath(rel: string, label: string): string {
-  const normalized = rel.replaceAll('\\', '/')
-  const parts = normalized.split('/')
-  if (!normalized || normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || parts.includes('..')) {
-    throw new Error(`${label} must be a relative contained path: ${rel}`)
-  }
-  return normalized
+  return containedPath(rel, label)
 }
 
 function readManifest(skillRoot: string, directoryName: string): SkillManifest {
@@ -116,7 +112,6 @@ function buildSkillArchive(
   directoryName: string,
   manifest: SkillManifest,
   releaseBase: string,
-  tar: string,
 ): ReleasedSkill {
   const skillRoot = join(skillsRoot, directoryName)
   const stageRoot = join(packageStages, directoryName)
@@ -140,15 +135,9 @@ function buildSkillArchive(
     copyDeclared(join(runtimeAssets, directoryName), stageRoot, rel, `${manifest.name} runtime artifact`)
   }
 
-  const entries = readdirSync(stageRoot).sort()
+  const entries = readdirSync(stageRoot)
   if (entries.length === 0) throw new Error(`${manifest.name} package is empty`)
-  const packed = Bun.spawnSync([tar, '-a', '-c', '-f', archive, '-C', stageRoot, ...entries], {
-    cwd: repo,
-    stdin: 'inherit',
-    stdout: 'inherit',
-    stderr: 'inherit',
-  })
-  if (packed.exitCode !== 0) process.exit(packed.exitCode)
+  createZipFromDirectory(stageRoot, archive)
 
   return {
     version: manifest.version,
@@ -219,8 +208,6 @@ if (!semver.test(installerVersion)) throw new Error(`installer version must be p
 const releaseTag = process.env.JL_SKILLS_RELEASE_TAG?.trim() || 'dev'
 if (!/^[A-Za-z0-9._-]+$/.test(releaseTag)) throw new Error(`invalid release tag: ${releaseTag}`)
 const releaseBase = `https://github.com/jacoblockett/jl-skills/releases/download/${releaseTag}`
-const tar = Bun.which('tar')
-if (!tar) throw new Error('tar is required on the build machine to create skill ZIP archives')
 
 mkdirSync(packageStages, { recursive: true })
 const releasedSkills: Record<string, ReleasedSkill> = {}
@@ -230,7 +217,7 @@ for (const directoryName of readdirSync(skillsRoot).sort()) {
   const manifestPath = join(skillRoot, 'manifest.json')
   if (!existsSync(manifestPath)) continue
   const manifest = readManifest(skillRoot, directoryName)
-  releasedSkills[manifest.name] = buildSkillArchive(directoryName, manifest, releaseBase, tar)
+  releasedSkills[manifest.name] = buildSkillArchive(directoryName, manifest, releaseBase)
 }
 
 const releaseManifest = {
