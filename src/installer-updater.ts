@@ -10,8 +10,9 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join } from 'node:path'
-import { spawn, spawnSync } from 'node:child_process'
+import { basename, dirname, join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { containedPath, extractZip } from './archive'
 
 export const DEFAULT_RELEASE_MANIFEST_URL = 'https://github.com/jacoblockett/jl-skills/releases/latest/download/manifest.json'
 
@@ -238,13 +239,7 @@ export function scheduleInstallerReplacement(staged: string, executable: string)
 }
 
 function packagePath(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty path`)
-  const normalized = value.replaceAll('\\', '/')
-  const parts = normalized.split('/').filter((part) => part !== '.' && part !== '')
-  if (isAbsolute(value) || /^[A-Za-z]:/.test(normalized) || parts.includes('..')) {
-    throw new Error(`${label} must be a relative contained path`)
-  }
-  return parts.join('/')
+  return containedPath(value, label)
 }
 
 function optionalString(value: unknown, label: string): string | undefined {
@@ -328,19 +323,6 @@ export function parseSkillPackageManifest(value: unknown): SkillPackageManifest 
   }
 }
 
-function validateArchiveEntries(archive: string): void {
-  const listing = spawnSync('tar', ['-tf', basename(archive)], {
-    cwd: dirname(archive),
-    encoding: 'utf8',
-    windowsHide: true,
-  })
-  if (listing.status !== 0) throw new Error(`could not inspect skill archive: ${(listing.stderr || '').trim()}`)
-  for (const raw of listing.stdout.split(/\r?\n/)) {
-    if (!raw.trim()) continue
-    packagePath(raw.replace(/\/$/, ''), 'skill archive entry')
-  }
-}
-
 function assertPackageFiles(root: string, manifest: SkillPackageManifest): void {
   const declared = new Set<string>([
     ...manifest.skill_files,
@@ -366,13 +348,7 @@ export async function downloadSkillPackage(
 
   try {
     await downloadVerified(released, archive, `${name} ${released.version}`, fetcher)
-    validateArchiveEntries(archive)
-    const extracted = spawnSync('tar', ['-xf', basename(archive), '-C', basename(root)], {
-      cwd: scratch,
-      encoding: 'utf8',
-      windowsHide: true,
-    })
-    if (extracted.status !== 0) throw new Error(`could not extract ${name} archive: ${(extracted.stderr || '').trim()}`)
+    extractZip(archive, root)
 
     const manifestPath = join(root, 'manifest.json')
     if (!existsSync(manifestPath)) throw new Error(`${name} package is missing manifest.json`)
