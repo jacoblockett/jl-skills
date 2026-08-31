@@ -193,8 +193,8 @@ Completed implementation:
 
 - `.github/workflows/build.yml` uses an eight-target native build/test matrix with `fail-fast: false`;
 - Windows x64 uses `windows-2025`, Windows ARM64 uses the GA `windows-11-vs2026-arm` image, macOS uses native Intel/ARM runners, and Linux uses native x64/ARM64 Ubuntu runners;
-- GNU and musl Linux builds use the same native architecture runners, with `musl`/`musl-tools` plus target-specific Rust linker configuration for musl;
-- every target runs target-specific Map Rust tests, builds its target-qualified installer/package, launches the compiled installer and Map runtime, and runs target-contract tests;
+- GNU and musl Map builds use native Ubuntu architecture runners; musl compilation uses `musl`/`musl-tools` plus target-specific Rust linker configuration, while Bun musl installer execution is validated in pinned `oven/bun:1.4.0-alpine` with its musl-compatible `libgcc`/`libstdc++` runtime;
+- every target runs target-specific Map Rust tests, builds its target-qualified installer/package, launches the compiled installer and Map runtime in the appropriate consumer environment, and runs target-contract tests;
 - Windows x64 additionally retains the established full installer regression suite;
 - every target uploads an isolated `target-<key>` artifact containing its installer, skill package fragment, and target manifest fragment;
 - `scripts/aggregate-release.ts` independently compares downloaded artifacts against all eight canonical targets and the source skill catalog, verifies exact filenames/URLs/SHA-256 values/version metadata, and rejects missing/extra/foreign target coverage;
@@ -219,7 +219,7 @@ Where scope semantics apply, retain the existing project/custom/user scope lifec
 Acceptance implementation is complete; this checkbox remains open until the eight-target workflow has actually passed it:
 
 - `tests/consumer-acceptance.test.ts` drives the compiled target-qualified installer against that target job's real `manifest.json` and Map package through a local release server;
-- every matrix target runs the same consumer acceptance suite, with Windows x64 including it in the full installer regression command and the other seven invoking `test:consumer` directly;
+- every matrix target runs the same consumer acceptance suite; Windows x64 also runs the established full installer regression suite, while both musl targets execute consumer acceptance inside the pinned Alpine consumer environment required by the Bun musl binaries;
 - project/custom-path acceptance installs Map into both Codex and Claude, verifies native harness resources and exact-target runtime metadata, executes the installed Map runtime, forces and repairs a stale skill/runtime update, and preserves unrelated plus `.map` generated data;
 - staged Codex then Claude uninstall proves scope-local tooling remains until the final harness integration is removed and generated data survives ordinary uninstall;
 - user-scope acceptance verifies user-local harness resources/tooling and proves the invocation project is untouched;
@@ -246,6 +246,7 @@ Distribution-audit implementation is complete; this checkbox remains open until 
 - macOS audit applies a quarantine attribute and records Developer ID and `spctl` Gatekeeper results as non-blocking distribution-friction observations;
 - Windows audit records Authenticode status as a non-blocking distribution-friction observation;
 - Linux audit records whether the raw release download retained an executable bit, applies the required executable permission before launch, executes both binaries, and verifies GNU vs musl ABI identity;
+- musl post-download execution/audit runs inside pinned `oven/bun:1.4.0-alpine`; Bun's musl standalone installer requires a musl-compatible `libgcc` and `libstdc++`, so another musl distribution must provide equivalent runtime libraries;
 - failed blocking distribution checks prevent Nightly finalization and prevent creation of a validation receipt;
 - each distribution report records the explicit `unsigned-accepted` signing policy;
 - the raw non-Windows installer format may require documented `chmod +x` after download because HTTP release assets do not carry a POSIX executable mode.
