@@ -175,7 +175,7 @@ metadata format version
 Current representation:
 
 ```html
-<!-- jl-skills-meta: {"name":"map","version":"0.4.0","format":1} -->
+<!-- jl-skills-meta: {"name":"map","version":"0.5.0","format":1} -->
 ```
 
 The manifest version and source `SKILL.md` self-report must agree at build/catalog-generation time and runtime validation time.
@@ -491,7 +491,7 @@ Some selected skills are already installed but out of date.
 
 Which would you like to update instead?
 
-Map  0.3.0 → 0.4.0
+Map  0.3.0 → 0.5.0
 Other Skill  unknown → 1.3.0
 ```
 
@@ -570,7 +570,7 @@ Then return to the same `Where would you like to update skills?` scope question 
 Update choices render aligned skill/version columns where practical:
 
 ```text
-Map       0.3.0 → 0.4.0
+Map       0.4.0 → 0.5.0
 Other     1.4.1 → 1.5.0
 ```
 
@@ -702,6 +702,8 @@ A genuinely platform-independent skill may publish one release artifact under th
 
 Artifact selection is exact-target first, then explicit `portable` fallback for skills only. Never fall back to another OS, architecture, or ABI.
 
+Source native-skill metadata may declare the complete runtime map for every supported target. Package generation selects only the current build target's runtime and writes a package-local manifest containing only that target's runtime entry. A distributed native package therefore never contains foreign-target runtimes.
+
 ## Skill-generated data contract
 
 Skills may declare generated project data in their manifest. Each declaration is a relative path beneath the user-selected scope and may include a narrow marker used to verify that the path is actually that skill's generated data.
@@ -762,9 +764,9 @@ The URL may be overridden for deterministic development/Nightly testing with:
 JL_SKILLS_UPDATE_MANIFEST_URL
 ```
 
-The current pre-stable implementation uses consolidated release-manifest format 1 with one Windows installer artifact and one Windows skill archive per skill. That format is temporary and must not become the first Stable contract.
+Release-manifest format 2 is the active pre-stable source/build contract. Format 1 is obsolete implementation history and is no longer emitted.
 
-The first Stable release uses release-manifest format 2. Its installer entry contains `version` plus `artifacts`, keyed by the eight canonical target keys. Each skill entry contains `version`, `min_installer`, and `artifacts`, keyed by canonical target with optional `portable` fallback for truly platform-independent skill packages. Every artifact contains an immutable snapshot URL and SHA-256. The exact format-2 structure and publication completeness gate are authoritative in `RELEASES.md`.
+The installer entry contains `version` plus `artifacts`, keyed by canonical target. Each skill entry contains `version`, `min_installer`, and `artifacts`, keyed by canonical target with optional `portable` fallback for truly platform-independent skill packages. Every artifact contains an immutable snapshot URL and SHA-256. The exact format-2 structure and publication completeness gate are authoritative in `RELEASES.md`.
 
 The installer update flow selects only `installer.artifacts[currentTarget]`, where `currentTarget` is the running executable's build-time embedded canonical target. Missing current-target support is an incompatibility error; never fall back to a different OS, architecture, or ABI.
 
@@ -845,14 +847,14 @@ Section headings inside those notes may remain sentence case.
 
 Map is a native Rust CLI using embedded SurrealKV through the pinned SurrealDB/SurrealKV stack.
 
-The current pre-stable release flow is Windows x64 only. Cross-platform runtime artifacts are release-blocking work tracked in `TODO.md`.
+The current pre-stable build still executes only on Windows x64. The packaging contract itself is target-specific for all eight required targets; producing/testing the remaining native runtimes is release-blocking matrix work tracked in `TODO.md`.
 
 Current Windows x64 flow:
 
 ```text
 Map Rust source
   -> release map.exe
-  -> bundled Map package
+  -> map-windows-x64.zip
   -> selected scope .jl-skills/map/bin/map.exe
 ```
 
@@ -899,19 +901,25 @@ bun run test:installer
 
 `bun run smoke` runs that pipeline.
 
-The current Windows-only build produces temporary pre-stable asset names:
+The current Windows-only build produces target-qualified release artifacts:
 
 ```text
-build/jl-skills.exe
-build/map.zip
+build/jl-skills-windows-x64.exe
+build/map-windows-x64.zip
 build/manifest.json
 ```
 
-These ambiguous platform names must be replaced by the exact target-qualified installer and Map archive names defined above before Stable.
+The native Map runtime inside the package is:
 
-Once target-aware release output is active, Nightly and Stable publication must both be mechanically blocked unless the complete required target set is present and successful. The aggregate/publish stage must independently compare produced target keys against the canonical eight-target set rather than relying on a manual checklist or matrix job count alone. No partial Nightly or Stable release is allowed.
+```text
+runtime/windows-x64/map.exe
+```
 
-Package generation validates each source skill's self-report metadata against its manifest before shipping the package.
+Equivalent target-qualified names/paths are generated from the canonical target model for the remaining targets once their native matrix jobs are active. Bare `jl-skills.exe` and `map.zip` are obsolete release outputs.
+
+Nightly and Stable publication are mechanically blocked while the complete required target set is unavailable. The aggregate/publish stage must independently compare produced target keys against the canonical eight-target set rather than relying on a manual checklist or matrix job count alone. No partial Nightly or Stable release is allowed.
+
+Package generation validates each source skill's self-report metadata against its manifest before shipping the package. Native package generation also validates the complete source runtime map and writes only the selected target's runtime entry into the distributed package manifest.
 
 Regression coverage includes at least:
 
@@ -940,6 +948,8 @@ Regression coverage includes at least:
 - skill-generated-data bounded deletion;
 - offline installer updater metadata/version/hash/staging behavior;
 - release-manifest hash matching the built executable;
+- target-qualified installer/archive/runtime naming;
+- native package exclusion of foreign-target runtimes;
 - installer self-uninstall preservation boundaries;
 - installer self-uninstall silent delegated cleanup with no post-confirmation foreground status.
 
