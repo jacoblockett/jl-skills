@@ -42,37 +42,8 @@ jobs:
   build:
     needs: prepare
     if: needs.prepare.outputs.should_build == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: windows-x64
-            runner: windows-2025
-            installer: jls-windows-x64.exe
-          - target: windows-arm64
-            runner: windows-11-vs2026-arm
-            installer: jls-windows-arm64.exe
-          - target: macos-x64
-            runner: macos-15-intel
-            installer: jls-macos-x64
-          - target: macos-arm64
-            runner: macos-15
-            installer: jls-macos-arm64
-          - target: linux-x64-gnu
-            runner: ubuntu-24.04
-            installer: jls-linux-x64-gnu
-          - target: linux-arm64-gnu
-            runner: ubuntu-24.04-arm
-            installer: jls-linux-arm64-gnu
-          - target: linux-x64-musl
-            runner: ubuntu-24.04
-            installer: jls-linux-x64-musl
-          - target: linux-arm64-musl
-            runner: ubuntu-24.04-arm
-            installer: jls-linux-arm64-musl
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     env:
-      JLS_BUILD_TARGET: ${{ matrix.target }}
       JLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
