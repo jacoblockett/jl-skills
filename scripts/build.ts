@@ -1,36 +1,17 @@
+
 import { createHash } from 'node:crypto'
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
-  copyFileSync,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
-import { join, resolve, basename, dirname } from 'node:path'
-import { containedPath, createZipFromDirectory } from '../src/archive'
-import {
-  TARGET_KEYS,
   hostMatchesTarget,
   installerAssetName,
-  runtimeArtifactPath,
-  skillArchiveName,
   targetByKey,
-  type TargetKey,
 } from '../src/targets'
 
 const repo = join(import.meta.dir, '..')
 const out = join(repo, 'build')
-const skillsRoot = join(repo, 'skills')
-const runtimeAssets = join(out, 'runtime-assets')
-const packageStages = join(out, 'packages')
 const semver = /^\d+\.\d+\.\d+$/
-const skillMetaPrefix = 'jl-skills-meta:'
 const buildTarget = targetByKey(process.env.JL_SKILLS_BUILD_TARGET?.trim() || 'windows-x64')
-const portableBuildTarget: TargetKey = 'windows-x64'
 
 mkdirSync(out, { recursive: true })
 
@@ -38,198 +19,31 @@ if (!hostMatchesTarget(buildTarget)) {
   throw new Error(`build target ${buildTarget.key} does not match this host OS/architecture`)
 }
 
-type SkillManifest = {
-  format: number
-  name: string
-  version: string
-  min_installer: string
-  description: string
-  skill_files: string[]
-  harness_resources?: Record<string, Record<string, string[]>>
-  runtime_files?: string[]
-  runtime?: string
-  runtime_artifacts?: Record<string, string>
-  runtime_cli?: string
-  cli_token?: string
-  instruction_fragment?: string
-  generated_data?: { path: string; marker?: string }[]
-}
-
-type ReleaseArtifact = {
-  url: string
-  sha256: string
-}
-
-type ReleasedSkill = {
-  version: string
-  min_installer: string
-  artifacts: Partial<Record<TargetKey | 'portable', ReleaseArtifact>>
-}
+type SkillReference = { manifest_url: string }
+type Catalog = { format: 1; skills: Record<string, SkillReference> }
 
 function sha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-function packagePath(rel: string, label: string): string {
-  return containedPath(rel, label)
-}
-
-function readManifest(skillRoot: string, directoryName: string): SkillManifest {
-  const path = join(skillRoot, 'manifest.json')
-  const manifest = JSON.parse(readFileSync(path, 'utf8')) as SkillManifest
-  if (manifest.format !== 1) throw new Error(`${directoryName} manifest format must be 1`)
-  if (manifest.name !== directoryName) throw new Error(`${directoryName} manifest name must match its directory`)
-  if (!semver.test(manifest.version)) throw new Error(`${directoryName} manifest version must be plain semver`)
-  if (!semver.test(manifest.min_installer)) throw new Error(`${directoryName} min_installer must be plain semver`)
-  if (typeof manifest.description !== 'string' || !manifest.description.trim()) {
-    throw new Error(`${directoryName} manifest requires a description`)
-  }
-  if (!Array.isArray(manifest.skill_files) || manifest.skill_files.length === 0) {
-    throw new Error(`${directoryName} manifest requires skill_files`)
+function readCatalog(): Catalog {
+  const raw = JSON.parse(readFileSync(join(repo, 'catalog.json'), 'utf8')) as Record<string, unknown>
+  if (raw.format !== 1) throw new Error('catalog format must be 1')
+  if (!raw.skills || typeof raw.skills !== 'object' || Array.isArray(raw.skills)) {
+    throw new Error('catalog skills must be an object')
   }
 
-  if (manifest.runtime) {
-    if (!manifest.runtime_cli) throw new Error(`${directoryName} native runtime requires runtime_cli`)
-    if (!manifest.runtime_artifacts) throw new Error(`${directoryName} native runtime requires runtime_artifacts`)
-    for (const key of TARGET_KEYS) {
-      const target = targetByKey(key)
-      const expected = runtimeArtifactPath(manifest.runtime_cli, target)
-      if (manifest.runtime_artifacts[key] !== expected) {
-        throw new Error(`${directoryName} runtime_artifacts.${key} must be ${expected}`)
-      }
-    }
-  } else if (manifest.runtime_artifacts && Object.keys(manifest.runtime_artifacts).length > 0) {
-    throw new Error(`${directoryName} cannot declare runtime_artifacts without a runtime`)
+  const skills: Record<string, SkillReference> = {}
+  for (const [name, value] of Object.entries(raw.skills as Record<string, unknown>)) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`invalid catalog skill name ${name}`)
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`invalid catalog skill ${name}`)
+    const manifestUrl = (value as Record<string, unknown>).manifest_url
+    if (typeof manifestUrl !== 'string' || !manifestUrl.trim()) throw new Error(`${name} catalog entry requires manifest_url`)
+    const parsed = new URL(manifestUrl)
+    if (parsed.protocol !== 'https:') throw new Error(`${name} manifest_url must use HTTPS`)
+    skills[name] = { manifest_url: manifestUrl }
   }
-
-  return manifest
-}
-
-function validateSkillMetadata(skillRoot: string, manifest: SkillManifest): void {
-  const skillFile = manifest.skill_files.find((rel) => basename(rel).toLowerCase() === 'skill.md')
-  if (!skillFile) throw new Error(`${manifest.name} manifest must include SKILL.md`)
-  const text = readFileSync(join(skillRoot, packagePath(skillFile, `${manifest.name} skill file`)), 'utf8')
-  const line = text.split(/\r?\n/).find((candidate) => candidate.includes(skillMetaPrefix))
-  if (!line) throw new Error(`${manifest.name} SKILL.md is missing jl-skills metadata`)
-  const marker = line.indexOf(skillMetaPrefix)
-  const end = line.lastIndexOf('-->')
-  if (marker < 0 || end < marker) throw new Error(`${manifest.name} SKILL.md has malformed jl-skills metadata`)
-
-  let metadata: { name?: string; version?: string; format?: number }
-  try {
-    metadata = JSON.parse(line.slice(marker + skillMetaPrefix.length, end).trim())
-  } catch {
-    throw new Error(`${manifest.name} SKILL.md has invalid jl-skills metadata JSON`)
-  }
-  if (metadata.name !== manifest.name || metadata.version !== manifest.version || metadata.format !== 1) {
-    throw new Error(`${manifest.name} SKILL.md metadata must match manifest name/version and format 1`)
-  }
-}
-
-function copyDeclared(sourceRoot: string, stageRoot: string, rel: string, label: string): void {
-  const safe = packagePath(rel, label)
-  const source = join(sourceRoot, safe)
-  const destination = join(stageRoot, safe)
-  if (!existsSync(source)) throw new Error(`missing ${label}: ${source}`)
-  mkdirSync(dirname(destination), { recursive: true })
-  if (statSync(source).isDirectory()) cpSync(source, destination, { recursive: true })
-  else copyFileSync(source, destination)
-}
-
-function buildSkillArchive(
-  directoryName: string,
-  manifest: SkillManifest,
-  releaseBase: string,
-): { released: ReleasedSkill; archive: string } {
-  const skillRoot = join(skillsRoot, directoryName)
-  const native = !!manifest.runtime
-  const artifactKey: TargetKey | 'portable' = native ? buildTarget.key : 'portable'
-  const archiveName = skillArchiveName(manifest.name, native ? buildTarget : 'portable')
-  const stageRoot = join(packageStages, `${manifest.name}-${artifactKey}`)
-  const archive = join(out, archiveName)
-  rmSync(stageRoot, { recursive: true, force: true })
-  rmSync(archive, { force: true })
-  mkdirSync(stageRoot, { recursive: true })
-
-  validateSkillMetadata(skillRoot, manifest)
-
-  const packageManifest: SkillManifest = { ...manifest }
-  let selectedRuntime: string | undefined
-  if (native) {
-    selectedRuntime = manifest.runtime_artifacts?.[buildTarget.key]
-    if (!selectedRuntime) throw new Error(`${manifest.name} has no runtime for ${buildTarget.key}`)
-    packageManifest.runtime_artifacts = { [buildTarget.key]: selectedRuntime }
-  } else {
-    delete packageManifest.runtime_artifacts
-  }
-  writeFileSync(join(stageRoot, 'manifest.json'), `${JSON.stringify(packageManifest, null, 2)}\n`)
-
-  const declared = new Set<string>([
-    ...manifest.skill_files,
-    ...Object.values(manifest.harness_resources ?? {}).flatMap((resources) => Object.values(resources).flat()),
-    ...(manifest.runtime_files ?? []),
-    ...(manifest.instruction_fragment ? [manifest.instruction_fragment] : []),
-  ])
-  for (const rel of declared) copyDeclared(skillRoot, stageRoot, rel, `${manifest.name} package asset`)
-
-  if (selectedRuntime) {
-    copyDeclared(join(runtimeAssets, directoryName), stageRoot, selectedRuntime, `${manifest.name} runtime artifact`)
-  }
-
-  const entries = readdirSync(stageRoot)
-  if (entries.length === 0) throw new Error(`${manifest.name} package is empty`)
-  createZipFromDirectory(stageRoot, archive)
-
-  return {
-    released: {
-      version: manifest.version,
-      min_installer: manifest.min_installer,
-      artifacts: {
-        [artifactKey]: {
-          url: `${releaseBase}/${archiveName}`,
-          sha256: sha256(archive),
-        },
-      },
-    },
-    archive,
-  }
-}
-
-const cargoTarget = join(out, 'cargo', 'map')
-const mapExecutable = `map${buildTarget.executableSuffix}`
-const stagedMap = join(runtimeAssets, 'map', runtimeArtifactPath('map', buildTarget))
-rmSync(runtimeAssets, { recursive: true, force: true })
-rmSync(packageStages, { recursive: true, force: true })
-mkdirSync(dirname(stagedMap), { recursive: true })
-
-const suppliedMap = process.env.JL_SKILL_MAP_EXE?.trim()
-if (suppliedMap) {
-  const source = resolve(suppliedMap)
-  if (!existsSync(source)) throw new Error(`prebuilt Map runtime does not exist: ${source}`)
-  copyFileSync(source, stagedMap)
-} else {
-  const cargo = Bun.which('cargo')
-  if (!cargo) throw new Error('cargo is required on the build machine when JL_SKILL_MAP_EXE is not supplied')
-
-  const mapBuild = Bun.spawnSync([
-    cargo,
-    'build',
-    '--manifest-path',
-    join(repo, 'skills', 'map', 'Cargo.toml'),
-    '--release',
-    '--target',
-    buildTarget.rustTargetTriple,
-    '--target-dir',
-    cargoTarget,
-  ], {
-    cwd: repo,
-    stdin: 'inherit',
-    stdout: 'inherit',
-    stderr: 'inherit',
-  })
-  if (mapBuild.exitCode !== 0) process.exit(mapBuild.exitCode)
-
-  copyFileSync(join(cargoTarget, buildTarget.rustTargetTriple, 'release', mapExecutable), stagedMap)
+  return { format: 1, skills }
 }
 
 const installerName = installerAssetName(buildTarget)
@@ -237,6 +51,13 @@ const output = join(out, installerName)
 rmSync(join(out, 'jl-skill.exe'), { force: true })
 rmSync(join(out, 'jl-skills.exe'), { force: true })
 rmSync(output, { force: true })
+for (const name of readdirSync(out)) {
+  if (name.endsWith('.zip')) rmSync(join(out, name), { force: true })
+}
+rmSync(join(out, 'runtime-assets'), { recursive: true, force: true })
+rmSync(join(out, 'packages'), { recursive: true, force: true })
+rmSync(join(out, 'cargo'), { recursive: true, force: true })
+
 const installerBuild = Bun.spawnSync([
   process.execPath,
   'build',
@@ -263,25 +84,11 @@ if (!semver.test(installerVersion)) throw new Error(`installer version must be p
 
 const releaseTag = process.env.JL_SKILLS_RELEASE_TAG?.trim() || 'dev'
 if (!/^[A-Za-z0-9._-]+$/.test(releaseTag)) throw new Error(`invalid release tag: ${releaseTag}`)
-const releaseBase = `https://github.com/jacoblockett/jl-skills/releases/download/${releaseTag}`
-
-mkdirSync(packageStages, { recursive: true })
-const releasedSkills: Record<string, ReleasedSkill> = {}
-const skillArchives: string[] = []
-for (const directoryName of readdirSync(skillsRoot).sort()) {
-  const skillRoot = join(skillsRoot, directoryName)
-  if (!statSync(skillRoot).isDirectory()) continue
-  const manifestPath = join(skillRoot, 'manifest.json')
-  if (!existsSync(manifestPath)) continue
-  const manifest = readManifest(skillRoot, directoryName)
-  if (!manifest.runtime && buildTarget.key !== portableBuildTarget) continue
-  const built = buildSkillArchive(directoryName, manifest, releaseBase)
-  releasedSkills[manifest.name] = built.released
-  skillArchives.push(built.archive)
-}
+const releaseBase = `https://github.com/jacoblockett/jls/releases/download/${releaseTag}`
+const catalog = readCatalog()
 
 const releaseManifest = {
-  format: 2,
+  format: 3,
   installer: {
     version: installerVersion,
     artifacts: {
@@ -291,14 +98,12 @@ const releaseManifest = {
       },
     },
   },
-  skills: releasedSkills,
+  skills: catalog.skills,
 }
+
 const manifestOutput = join(out, 'manifest.json')
 rmSync(join(out, 'jl-skills-manifest.json'), { force: true })
-rmSync(join(out, 'map.exe'), { force: true })
-rmSync(join(out, 'map.zip'), { force: true })
 writeFileSync(manifestOutput, `${JSON.stringify(releaseManifest, null, 2)}\n`)
 
 console.log(`Built ${output}`)
-for (const archive of skillArchives) console.log(`Built ${archive}`)
 console.log(`Built ${manifestOutput}`)

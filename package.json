@@ -1,3 +1,4 @@
+
 {
   "name": "jl-skills-installer",
   "private": true,
@@ -6,9 +7,8 @@
   "packageManager": "bun@1.4.0",
   "scripts": {
     "build": "bun scripts/build.ts",
-    "test:installer": "bun test --timeout 30000 tests/exclusive-multiselect.test.ts tests/harnesses.test.ts tests/install-preflight.test.ts tests/installer-updater.test.ts tests/installer.test.ts tests/min-installer.test.ts tests/package-artifact.test.ts tests/targets.test.ts tests/consumer-acceptance.test.ts",
-    "test:consumer": "bun test --timeout 30000 tests/consumer-acceptance.test.ts",
-    "smoke": "cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map && bun run build && bun run test:installer"
+    "test:installer": "bun test --timeout 30000 tests/exclusive-multiselect.test.ts tests/harnesses.test.ts tests/install-preflight.test.ts tests/installer-updater.test.ts tests/targets.test.ts",
+    "smoke": "bun run build && bun run test:installer"
   },
   "dependencies": {
     "@clack/core": "1.4.3",

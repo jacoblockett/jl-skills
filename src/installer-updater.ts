@@ -17,7 +17,7 @@ import { compiledTarget, isTargetKey, type TargetKey } from './targets'
 
 if (Bun.isStandaloneExecutable) compiledTarget()
 
-export const DEFAULT_RELEASE_MANIFEST_URL = 'https://github.com/jacoblockett/jl-skills/releases/latest/download/manifest.json'
+export const DEFAULT_RELEASE_MANIFEST_URL = 'https://github.com/jacoblockett/jls/releases/latest/download/manifest.json'
 
 type FetchLike = typeof fetch
 
@@ -35,8 +35,21 @@ export type ReleasedSkill = {
   artifacts: SkillArtifactMap
 }
 
+export type SkillReference = {
+  manifest_url: string
+}
+
+export type ReleaseIndex = {
+  format: 3
+  installer: {
+    version: string
+    artifacts: TargetArtifactMap
+  }
+  skills: Record<string, SkillReference>
+}
+
 export type ReleaseManifest = {
-  format: 2
+  format: 3
   installer: {
     version: string
     artifacts: TargetArtifactMap
@@ -111,22 +124,11 @@ function parseArtifact(value: unknown, label: string): ReleaseArtifact {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`invalid ${label}`)
   const raw = value as Record<string, unknown>
   if (typeof raw.url !== 'string' || !raw.url.trim()) throw new Error(`${label} is missing a URL`)
-  return {
-    url: raw.url,
-    sha256: parseSha256(raw.sha256, label),
-  }
+  return { url: raw.url, sha256: parseSha256(raw.sha256, label) }
 }
 
-function parseArtifactMap(
-  value: unknown,
-  label: string,
-  allowPortable: false,
-): TargetArtifactMap
-function parseArtifactMap(
-  value: unknown,
-  label: string,
-  allowPortable: true,
-): SkillArtifactMap
+function parseArtifactMap(value: unknown, label: string, allowPortable: false): TargetArtifactMap
+function parseArtifactMap(value: unknown, label: string, allowPortable: true): SkillArtifactMap
 function parseArtifactMap(
   value: unknown,
   label: string,
@@ -145,10 +147,17 @@ function parseArtifactMap(
   return artifacts
 }
 
-export function parseReleaseManifest(value: unknown): ReleaseManifest {
+function parseSkillReference(value: unknown, name: string): SkillReference {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`invalid released skill reference ${name}`)
+  const manifestUrl = (value as Record<string, unknown>).manifest_url
+  if (typeof manifestUrl !== 'string' || !manifestUrl.trim()) throw new Error(`${name} skill reference is missing manifest_url`)
+  return { manifest_url: manifestUrl }
+}
+
+export function parseReleaseManifest(value: unknown): ReleaseIndex {
   if (!value || typeof value !== 'object') throw new Error('invalid release manifest')
   const raw = value as Record<string, unknown>
-  if (raw.format !== 2) throw new Error('unsupported release manifest format')
+  if (raw.format !== 3) throw new Error('unsupported release manifest format')
 
   if (!raw.installer || typeof raw.installer !== 'object') throw new Error('release manifest is missing installer metadata')
   const installerRaw = raw.installer as Record<string, unknown>
@@ -158,51 +167,70 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
   const installerArtifacts = parseArtifactMap(installerRaw.artifacts, 'installer release artifacts', false)
 
   if (!raw.skills || typeof raw.skills !== 'object' || Array.isArray(raw.skills)) {
-    throw new Error('release manifest is missing skills metadata')
+    throw new Error('release manifest is missing skill references')
   }
-  const skills: Record<string, ReleasedSkill> = {}
-  for (const [name, value] of Object.entries(raw.skills as Record<string, unknown>)) {
+  const skills: Record<string, SkillReference> = {}
+  for (const [name, reference] of Object.entries(raw.skills as Record<string, unknown>)) {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`invalid released skill name ${name}`)
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`invalid released skill ${name}`)
-    const skill = value as Record<string, unknown>
-    if (typeof skill.version !== 'string' || !semverParts(skill.version)) {
-      throw new Error(`invalid released skill version ${name}`)
-    }
-    if (typeof skill.min_installer !== 'string' || !semverParts(skill.min_installer)) {
-      throw new Error(`invalid minimum installer version for ${name}`)
-    }
-    skills[name] = {
-      version: skill.version,
-      min_installer: skill.min_installer,
-      artifacts: parseArtifactMap(skill.artifacts, `released skill ${name} artifacts`, true),
-    }
+    skills[name] = parseSkillReference(reference, name)
   }
 
   return {
-    format: 2,
-    installer: {
-      version: installerRaw.version,
-      artifacts: installerArtifacts,
-    },
+    format: 3,
+    installer: { version: installerRaw.version, artifacts: installerArtifacts },
     skills,
   }
 }
 
-export async function fetchStableReleaseManifest(
-  manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
-  fetcher: FetchLike = fetch,
-): Promise<ReleaseManifest | null> {
+export function parseSkillReleaseManifest(name: string, value: unknown): ReleasedSkill {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`invalid released skill manifest ${name}`)
+  const raw = value as Record<string, unknown>
+  if (raw.format !== 1) throw new Error(`unsupported released skill manifest format for ${name}`)
+  if (raw.name !== name) throw new Error(`released skill manifest for ${name} identifies ${String(raw.name)}`)
+  if (typeof raw.version !== 'string' || !semverParts(raw.version)) throw new Error(`invalid released skill version ${name}`)
+  if (typeof raw.min_installer !== 'string' || !semverParts(raw.min_installer)) {
+    throw new Error(`invalid minimum installer version for ${name}`)
+  }
+  return {
+    version: raw.version,
+    min_installer: raw.min_installer,
+    artifacts: parseArtifactMap(raw.artifacts, `released skill ${name} artifacts`, true),
+  }
+}
+
+async function fetchReleaseIndex(
+  manifestUrl: string,
+  fetcher: FetchLike,
+): Promise<ReleaseIndex | null> {
   const response = await fetcher(manifestUrl, { headers: { 'user-agent': 'jl-skills' } })
   if (response.status === 404) return null
   if (!response.ok) throw new Error(`stable release check failed with HTTP ${response.status}`)
   return parseReleaseManifest(await response.json())
 }
 
+export async function fetchStableReleaseManifest(
+  manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
+  fetcher: FetchLike = fetch,
+): Promise<ReleaseManifest | null> {
+  const index = await fetchReleaseIndex(manifestUrl, fetcher)
+  if (!index) return null
+
+  const skills: Record<string, ReleasedSkill> = {}
+  await Promise.all(Object.entries(index.skills).map(async ([name, reference]) => {
+    const response = await fetcher(reference.manifest_url, { headers: { 'user-agent': 'jl-skills' } })
+    if (response.status === 404) return
+    if (!response.ok) throw new Error(`${name} release check failed with HTTP ${response.status}`)
+    skills[name] = parseSkillReleaseManifest(name, await response.json())
+  }))
+
+  return { format: 3, installer: index.installer, skills }
+}
+
 function targetKey(target?: TargetKey): TargetKey {
   return target ?? compiledTarget().key
 }
 
-export function selectInstallerArtifact(manifest: ReleaseManifest, target: TargetKey): ReleaseArtifact {
+export function selectInstallerArtifact(manifest: ReleaseManifest | ReleaseIndex, target: TargetKey): ReleaseArtifact {
   const artifact = manifest.installer.artifacts[target]
   if (!artifact) throw new Error(`installer release has no ${target} artifact`)
   return artifact
@@ -222,13 +250,10 @@ export async function checkInstallerUpdate(
   fetcher: FetchLike = fetch,
   target?: TargetKey,
 ): Promise<InstallerUpdate | null> {
-  const manifest = await fetchStableReleaseManifest(manifestUrl, fetcher)
+  const manifest = await fetchReleaseIndex(manifestUrl, fetcher)
   if (!manifest || compareVersions(manifest.installer.version, currentVersion) <= 0) return null
   const currentTarget = targetKey(target)
-  return {
-    version: manifest.installer.version,
-    artifact: selectInstallerArtifact(manifest, currentTarget),
-  }
+  return { version: manifest.installer.version, artifact: selectInstallerArtifact(manifest, currentTarget) }
 }
 
 async function downloadVerified(

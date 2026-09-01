@@ -1,10 +1,10 @@
+
 import { createHash } from 'node:crypto'
 import {
   copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -13,33 +13,23 @@ import { basename, join, resolve } from 'node:path'
 import {
   TARGET_KEYS,
   installerAssetName,
-  skillArchiveName,
   targetByKey,
   type TargetKey,
 } from '../src/targets'
 
 const repo = resolve(import.meta.dir, '..')
-const portableBuildTarget: TargetKey = 'windows-x64'
 const semver = /^\d+\.\d+\.\d+$/
 const sha256Pattern = /^[a-f0-9]{64}$/
 
 type Artifact = { url: string; sha256: string }
-type FragmentSkill = {
-  version: string
-  min_installer: string
-  artifacts: Record<string, Artifact>
-}
+type SkillReference = { manifest_url: string }
 type Fragment = {
   format: number
   installer: { version: string; artifacts: Record<string, Artifact> }
-  skills: Record<string, FragmentSkill>
+  skills: Record<string, SkillReference>
 }
-type SourceSkill = {
-  name: string
-  version: string
-  minInstaller: string
-  native: boolean
-}
+
+type Catalog = { format: 1; skills: Record<string, SkillReference> }
 
 export type AggregateOptions = {
   inputRoot: string
@@ -49,6 +39,20 @@ export type AggregateOptions = {
 
 function sha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+function exactKeys(value: Record<string, unknown>, expected: string[], label: string): void {
+  const actual = Object.keys(value).sort()
+  const wanted = [...expected].sort()
+  if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
+    throw new Error(`${label} keys must be exactly: ${wanted.join(', ')}`)
+  }
+}
+
+function readCatalog(): Catalog {
+  const raw = JSON.parse(readFileSync(join(repo, 'catalog.json'), 'utf8')) as Catalog
+  if (raw.format !== 1 || !raw.skills || typeof raw.skills !== 'object') throw new Error('invalid catalog.json')
+  return raw
 }
 
 function assertArtifact(
@@ -66,44 +70,10 @@ function assertArtifact(
   return artifact
 }
 
-function exactKeys(value: Record<string, unknown>, expected: string[], label: string): void {
-  const actual = Object.keys(value).sort()
-  const wanted = [...expected].sort()
-  if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
-    throw new Error(`${label} keys must be exactly: ${wanted.join(', ')}`)
-  }
-}
-
-function sourceSkills(): SourceSkill[] {
-  const root = join(repo, 'skills')
-  const skills: SourceSkill[] = []
-  for (const directory of readdirSync(root).sort()) {
-    const skillRoot = join(root, directory)
-    if (!statSync(skillRoot).isDirectory()) continue
-    const manifestPath = join(skillRoot, 'manifest.json')
-    if (!existsSync(manifestPath)) continue
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>
-    if (manifest.name !== directory) throw new Error(`${directory} source manifest name mismatch`)
-    if (typeof manifest.version !== 'string' || !semver.test(manifest.version)) {
-      throw new Error(`${directory} source manifest version must be plain semver`)
-    }
-    if (typeof manifest.min_installer !== 'string' || !semver.test(manifest.min_installer)) {
-      throw new Error(`${directory} source manifest min_installer must be plain semver`)
-    }
-    skills.push({
-      name: directory,
-      version: manifest.version,
-      minInstaller: manifest.min_installer,
-      native: typeof manifest.runtime === 'string' && manifest.runtime.length > 0,
-    })
-  }
-  return skills
-}
-
-function readFragment(path: string, target: TargetKey): Fragment {
+function readFragment(path: string, target: TargetKey, catalog: Catalog): Fragment {
   if (!existsSync(path)) throw new Error(`missing ${target} manifest fragment: ${path}`)
   const fragment = JSON.parse(readFileSync(path, 'utf8')) as Fragment
-  if (fragment.format !== 2) throw new Error(`${target} manifest fragment must use format 2`)
+  if (fragment.format !== 3) throw new Error(`${target} manifest fragment must use format 3`)
   if (!fragment.installer || typeof fragment.installer !== 'object') throw new Error(`${target} fragment is missing installer metadata`)
   if (typeof fragment.installer.version !== 'string' || !semver.test(fragment.installer.version)) {
     throw new Error(`${target} fragment has invalid installer version`)
@@ -111,16 +81,17 @@ function readFragment(path: string, target: TargetKey): Fragment {
   if (!fragment.installer.artifacts || typeof fragment.installer.artifacts !== 'object') {
     throw new Error(`${target} fragment is missing installer artifacts`)
   }
-  if (!fragment.skills || typeof fragment.skills !== 'object') throw new Error(`${target} fragment is missing skills metadata`)
+  exactKeys(fragment.installer.artifacts, [target], `${target} installer artifact map`)
+  if (JSON.stringify(fragment.skills) !== JSON.stringify(catalog.skills)) {
+    throw new Error(`${target} skill references do not match catalog.json`)
+  }
   return fragment
 }
 
 export function aggregateRelease({ inputRoot, outputRoot, releaseTag }: AggregateOptions): string {
   if (!/^[A-Za-z0-9._-]+$/.test(releaseTag)) throw new Error(`invalid release tag: ${releaseTag}`)
-  const releaseBase = `https://github.com/jacoblockett/jl-skills/releases/download/${releaseTag}`
-  const skills = sourceSkills()
-  const nativeSkills = skills.filter((skill) => skill.native)
-  const portableSkills = skills.filter((skill) => !skill.native)
+  const releaseBase = `https://github.com/jacoblockett/jls/releases/download/${releaseTag}`
+  const catalog = readCatalog()
   const fragments = new Map<TargetKey, { root: string; manifest: Fragment }>()
 
   let installerVersion: string | undefined
@@ -129,18 +100,11 @@ export function aggregateRelease({ inputRoot, outputRoot, releaseTag }: Aggregat
     if (!existsSync(targetRoot) || !statSync(targetRoot).isDirectory()) {
       throw new Error(`required target artifact directory is missing: target-${key}`)
     }
-    const manifest = readFragment(join(targetRoot, 'manifest.json'), key)
+    const manifest = readFragment(join(targetRoot, 'manifest.json'), key, catalog)
     if (installerVersion === undefined) installerVersion = manifest.installer.version
     else if (manifest.installer.version !== installerVersion) {
       throw new Error(`${key} installer version ${manifest.installer.version} does not match ${installerVersion}`)
     }
-
-    exactKeys(manifest.installer.artifacts, [key], `${key} installer artifact map`)
-    const expectedSkills = [
-      ...nativeSkills.map((skill) => skill.name),
-      ...(key === portableBuildTarget ? portableSkills.map((skill) => skill.name) : []),
-    ].sort()
-    exactKeys(manifest.skills, expectedSkills, `${key} skill set`)
     fragments.set(key, { root: targetRoot, manifest })
   }
 
@@ -160,62 +124,19 @@ export function aggregateRelease({ inputRoot, outputRoot, releaseTag }: Aggregat
     installerArtifacts[key] = artifact
   }
 
-  const releasedSkills: Record<string, { version: string; min_installer: string; artifacts: Record<string, Artifact> }> = {}
-  for (const skill of skills) {
-    const artifacts: Record<string, Artifact> = {}
-    if (skill.native) {
-      for (const key of TARGET_KEYS) {
-        const target = targetByKey(key)
-        const fragment = fragments.get(key)!
-        const released = fragment.manifest.skills[skill.name]
-        if (!released) throw new Error(`${skill.name} is missing from ${key}`)
-        if (released.version !== skill.version || released.min_installer !== skill.minInstaller) {
-          throw new Error(`${skill.name} metadata in ${key} does not match its source manifest`)
-        }
-        exactKeys(released.artifacts, [key], `${skill.name} ${key} artifact map`)
-        const name = skillArchiveName(skill.name, target)
-        const source = join(fragment.root, name)
-        const expectedUrl = `${releaseBase}/${name}`
-        artifacts[key] = assertArtifact(released.artifacts[key], source, expectedUrl, `${skill.name} ${key}`)
-        copyFileSync(source, join(outputRoot, name))
-      }
-    } else {
-      const fragment = fragments.get(portableBuildTarget)!
-      const released = fragment.manifest.skills[skill.name]
-      if (!released) throw new Error(`${skill.name} portable package is missing from ${portableBuildTarget}`)
-      if (released.version !== skill.version || released.min_installer !== skill.minInstaller) {
-        throw new Error(`${skill.name} portable metadata does not match its source manifest`)
-      }
-      exactKeys(released.artifacts, ['portable'], `${skill.name} portable artifact map`)
-      const name = skillArchiveName(skill.name, 'portable')
-      const source = join(fragment.root, name)
-      const expectedUrl = `${releaseBase}/${name}`
-      artifacts.portable = assertArtifact(released.artifacts.portable, source, expectedUrl, `${skill.name} portable`)
-      copyFileSync(source, join(outputRoot, name))
-    }
-
-    releasedSkills[skill.name] = {
-      version: skill.version,
-      min_installer: skill.minInstaller,
-      artifacts,
-    }
-  }
-
   exactKeys(installerArtifacts, [...TARGET_KEYS], 'aggregated installer target set')
-  for (const skill of nativeSkills) exactKeys(releasedSkills[skill.name].artifacts, [...TARGET_KEYS], `${skill.name} aggregated target set`)
-  for (const skill of portableSkills) exactKeys(releasedSkills[skill.name].artifacts, ['portable'], `${skill.name} aggregated portable set`)
 
   const output = join(outputRoot, 'manifest.json')
   writeFileSync(output, `${JSON.stringify({
-    format: 2,
+    format: 3,
     installer: {
       version: installerVersion,
       artifacts: installerArtifacts,
     },
-    skills: releasedSkills,
+    skills: catalog.skills,
   }, null, 2)}\n`)
 
-  console.log(`Aggregated ${TARGET_KEYS.length} required targets into ${outputRoot}`)
+  console.log(`Aggregated ${TARGET_KEYS.length} required installer targets into ${outputRoot}`)
   return output
 }
 

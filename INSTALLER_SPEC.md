@@ -1,6 +1,6 @@
 # jl-skills installer
 
-Status: accepted installer lifecycle contract aligned to the Bun/Clack implementation and native Map runtime. Windows x64 lifecycle behavior has been production-path validated; the first Stable release remains blocked on the cross-platform release work in `TODO.md`.
+Status: accepted generic installer lifecycle contract. Skill source, packaging, runtime build details, and skill-specific behavior live in each referenced skill repository; JLS owns only installer behavior and external skill discovery.
 
 ## Product goal
 
@@ -679,30 +679,15 @@ Harness filesystem knowledge belongs in adapters, not duplicated in every skill 
 
 Semantic project initialization is never an installer hook.
 
-### Target-specific and portable release packages
+### External skill releases and target selection
 
-The release manifest chooses which complete skill package is downloaded before package extraction.
+JLS does not build or package skill source. The JLS release manifest contains a reference to each skill repository's published release manifest.
 
-For a native skill, release packaging is target-specific. Each package contains common skill/harness/support files plus only the runtime for one canonical target. The installer must never download a foreign-target package to obtain common files.
-
-Map therefore uses these exact release archive names:
-
-```text
-map-windows-x64.zip
-map-windows-arm64.zip
-map-macos-x64.zip
-map-macos-arm64.zip
-map-linux-x64-gnu.zip
-map-linux-arm64-gnu.zip
-map-linux-x64-musl.zip
-map-linux-arm64-musl.zip
-```
-
-A genuinely platform-independent skill may publish one release artifact under the reserved `portable` artifact key. `portable` is not a machine target. A skill containing target-specific native runtime content is not portable.
+Each skill repository owns whether its package is target-specific or portable, and owns the SHA-256 values and immutable URLs for those packages. For a native skill, each published package contains common skill/harness/support files plus only the runtime for one canonical target. A genuinely platform-independent skill may publish the reserved `portable` artifact key.
 
 Artifact selection is exact-target first, then explicit `portable` fallback for skills only. Never fall back to another OS, architecture, or ABI.
 
-Source native-skill metadata may declare the complete runtime map for every supported target. Package generation selects only the current build target's runtime and writes a package-local manifest containing only that target's runtime entry. A distributed native package therefore never contains foreign-target runtimes.
+The downloaded package's own manifest remains authoritative for install semantics after download. JLS validates that package metadata agrees with the external skill release manifest before installation.
 
 ## Skill-generated data contract
 
@@ -710,12 +695,12 @@ Skills may declare generated project data in their manifest. Each declaration is
 
 Declarations reject absolute paths and parent traversal (`..`).
 
-Example for Map:
+Example:
 
 ```json
 "generated_data": [
   {
-    "path": ".map",
+    "path": ".example-state",
     "marker": "project.json"
   }
 ]
@@ -740,7 +725,7 @@ Flow:
 
 Deletion is recursive and unrecoverable. The note explicitly states that selected data cannot be recovered.
 
-For Map, selecting Map removes the selected project's `.map` directory. Neighboring project files are untouched.
+Only the selected skill's declared and positively detected generated-data paths are removed. Neighboring project files are untouched.
 
 No registry or whole-drive scan is used to find generated data. The user supplies the scope/path and the installer performs narrow declarative detection there.
 
@@ -755,7 +740,7 @@ It is available only from the compiled `jl-skills` executable, not from an arbit
 Default public stable manifest location:
 
 ```text
-https://github.com/jacoblockett/jl-skills/releases/latest/download/manifest.json
+https://github.com/jacoblockett/jls/releases/latest/download/manifest.json
 ```
 
 The URL may be overridden for deterministic development/Nightly testing with:
@@ -764,9 +749,7 @@ The URL may be overridden for deterministic development/Nightly testing with:
 JL_SKILLS_UPDATE_MANIFEST_URL
 ```
 
-Release-manifest format 2 is the active pre-stable source/build contract. Format 1 is obsolete implementation history and is no longer emitted.
-
-The installer entry contains `version` plus `artifacts`, keyed by canonical target. Each skill entry contains `version`, `min_installer`, and `artifacts`, keyed by canonical target with optional `portable` fallback for truly platform-independent skill packages. Every artifact contains an immutable snapshot URL and SHA-256. The exact format-2 structure and publication completeness gate are authoritative in `RELEASES.md`.
+JLS release-manifest format 3 contains the installer `version`/target artifacts plus a `manifest_url` reference for each externally owned skill. Each referenced skill manifest contains that skill's `version`, `min_installer`, and target/portable artifacts with SHA-256 values. The exact format-3 JLS index and external skill-manifest contracts are authoritative in `RELEASES.md`.
 
 The installer update flow selects only `installer.artifacts[currentTarget]`, where `currentTarget` is the running executable's build-time embedded canonical target. Missing current-target support is an incompatibility error; never fall back to a different OS, architecture, or ABI.
 
@@ -843,83 +826,20 @@ Permanent Data Removal
 
 Section headings inside those notes may remain sentence case.
 
-## Map runtime integration
-
-Map is a native Rust CLI using embedded SurrealKV through the pinned SurrealDB/SurrealKV stack.
-
-The current pre-stable build still executes only on Windows x64. The packaging contract itself is target-specific for all eight required targets; producing/testing the remaining native runtimes is release-blocking matrix work tracked in `TODO.md`.
-
-Current Windows x64 flow:
-
-```text
-Map Rust source
-  -> release map.exe
-  -> map-windows-x64.zip
-  -> selected scope .jl-skills/map/bin/map.exe
-```
-
-The platform-independent scope-local destination model is:
-
-```text
-user scope
-  ~/.jl-skills/map/bin/map[.exe]
-  ~/.jl-skills/map/schema.surql
-
-project/custom scope
-  <scope>/.jl-skills/map/bin/map[.exe]
-  <scope>/.jl-skills/map/schema.surql
-```
-
-The `.exe` suffix applies only on Windows.
-
-One copy exists per Map installation scope and is shared among Map's harness integrations inside that scope. It is never shared across different scopes.
-
-There is no SurrealDB daemon/listening port.
-
-Installing/updating Map must not:
-
-- create `.map/`;
-- create/open an embedded project database;
-- invoke `map init`;
-- create semantic graph nodes/relations;
-- create a recovery session;
-- overwrite unrelated harness configuration or unmanaged instruction content.
-
-`map init` alone creates Map project state, including Map-local `.map/project.json` identity metadata.
-
-There is no machine-level Map project registry in the accepted lifecycle.
-
 ## Build and smoke pipeline
 
-The current pre-stable Windows x64 pipeline is:
+JLS builds only the installer. It does not compile skill runtimes or create skill archives.
+
+Local smoke:
 
 ```text
-cargo test --release --manifest-path skills/map/Cargo.toml --target-dir build/cargo/map
 bun run build
 bun run test:installer
 ```
 
-`bun run smoke` runs that pipeline.
+GitHub Actions builds all eight canonical installer targets, launches each compiled installer in its native consumer environment (musl targets in pinned Alpine), aggregates the eight installer artifacts, verifies SHA-256 and catalog-reference consistency, and publishes only the verified installer bundle plus `manifest.json`.
 
-The current Windows-only build produces target-qualified release artifacts:
-
-```text
-build/jl-skills-windows-x64.exe
-build/map-windows-x64.zip
-build/manifest.json
-```
-
-The native Map runtime inside the package is:
-
-```text
-runtime/windows-x64/map.exe
-```
-
-Equivalent target-qualified names/paths are generated from the canonical target model for the remaining targets once their native matrix jobs are active. Bare `jl-skills.exe` and `map.zip` are obsolete release outputs.
-
-Nightly and Stable publication are mechanically blocked while the complete required target set is unavailable. The aggregate/publish stage must independently compare produced target keys against the canonical eight-target set rather than relying on a manual checklist or matrix job count alone. No partial Nightly or Stable release is allowed.
-
-Package generation validates each source skill's self-report metadata against its manifest before shipping the package. Native package generation also validates the complete source runtime map and writes only the selected target's runtime entry into the distributed package manifest.
+Skill repositories own their own runtime/package build and acceptance pipelines.
 
 Regression coverage includes at least:
 
@@ -948,8 +868,8 @@ Regression coverage includes at least:
 - skill-generated-data bounded deletion;
 - offline installer updater metadata/version/hash/staging behavior;
 - release-manifest hash matching the built executable;
-- target-qualified installer/archive/runtime naming;
-- native package exclusion of foreign-target runtimes;
+- target-qualified installer naming;
+- external skill-reference parsing and target/portable artifact selection;
 - installer self-uninstall preservation boundaries;
 - installer self-uninstall silent delegated cleanup with no post-confirmation foreground status.
 
