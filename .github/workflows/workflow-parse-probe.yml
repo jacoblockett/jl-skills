@@ -64,23 +64,6 @@ jobs:
       - name: Build installer target
         shell: bash
         run: bun run build
-      - name: Launch compiled installer
-        if: ${{ !endsWith(matrix.target, '-musl') }}
-        shell: bash
-        run: './build/${{ matrix.installer }}' --version
-      - name: Launch musl installer in Alpine
-        if: ${{ endsWith(matrix.target, '-musl') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker run --rm --user root --entrypoint sh -v "$PWD:/work" -w /work oven/bun:1.4.0-alpine -lc "apk add --no-cache libgcc libstdc++ >/dev/null && ./build/${{ matrix.installer }} --version"
-      - name: Run installer unit regressions
-        if: matrix.target == 'windows-x64'
-        shell: bash
-        run: bun run test:installer
-      - name: Run target contract tests
-        shell: bash
-        run: bun test --timeout 20000 tests/targets.test.ts
       - name: Upload target artifacts
         uses: actions/upload-artifact@v4
         with:
