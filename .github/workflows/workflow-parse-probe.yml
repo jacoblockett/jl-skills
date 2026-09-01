@@ -1,0 +1,52 @@
+name: Workflow parse probe
+
+on:
+  schedule:
+    - cron: '0 6,7 * * *'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to run
+        required: true
+        default: build
+        type: choice
+        options:
+          - build
+          - nightly
+          - stable
+      force:
+        description: Force a nightly even when no build-relevant source changed
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jls-build-probe
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      should_build: ${{ steps.mode.outputs.should_build }}
+      release_tag: ${{ steps.mode.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve mode
+        id: mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode=nightly
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then mode='${{ inputs.action }}'; fi
+          should_build=true
+          release_tag=dev
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
