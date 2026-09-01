@@ -24,7 +24,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: jls-${{ github.event_name == 'schedule' && 'nightly' || inputs.action }}
+  group: jls-build
   cancel-in-progress: false
 
 jobs:
