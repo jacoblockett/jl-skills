@@ -44,7 +44,7 @@ import {
 } from './installer-updater'
 import { compiledTarget, installerAssetName } from './targets'
 
-const VERSION = '0.7.0'
+const VERSION = '1.0.0'
 const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
 const HOME = Symbol('jls-home')
