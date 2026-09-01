@@ -24,7 +24,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: jl-skills-${{ github.event_name == 'schedule' && 'nightly' || inputs.action }}
+  group: jls-${{ github.event_name == 'schedule' && 'nightly' || inputs.action }}
   cancel-in-progress: false
 
 jobs:
@@ -44,12 +44,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           mode=nightly
-          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then
-            mode='${{ inputs.action }}'
-          fi
-
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then mode='${{ inputs.action }}'; fi
           if [[ '${{ github.ref }}' != 'refs/heads/main' ]]; then
             echo 'Build and release automation may only run from main.' >&2
             exit 1
@@ -57,28 +53,17 @@ jobs:
 
           should_build=true
           release_tag=dev
-
           if [[ "$mode" == nightly ]]; then
             if [[ '${{ github.event_name }}' == 'schedule' ]]; then
               local_hour="$(TZ=America/New_York date +%H)"
-              if [[ "$local_hour" != 02 ]]; then
-                should_build=false
-                echo "Skipping duplicate DST cron at local hour $local_hour."
-              fi
+              if [[ "$local_hour" != 02 ]]; then should_build=false; fi
             fi
-
             force='${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}'
             if [[ "$should_build" == true && "$force" != true ]]; then
               git fetch origin --tags --force
               if git rev-parse -q --verify refs/tags/nightly >/dev/null; then
-                mapfile -t files < <(git diff --name-only nightly..HEAD -- .github/workflows/build.yml src scripts skills tests package.json bun.lock)
-                if (( ${#files[@]} > 0 )); then
-                  echo 'Build-relevant changes:'
-                  printf '  %s\n' "${files[@]}"
-                else
-                  should_build=false
-                  echo 'No build-relevant changes since the last successful nightly.'
-                fi
+                mapfile -t files < <(git diff --name-only nightly..HEAD -- .github/workflows/build.yml src scripts tests package.json bun.lock catalog.json)
+                if (( ${#files[@]} == 0 )); then should_build=false; fi
               fi
             fi
             release_tag=nightly
@@ -111,155 +96,66 @@ jobs:
         include:
           - target: windows-x64
             runner: windows-2025
-            rust_target: x86_64-pc-windows-msvc
             installer: jl-skills-windows-x64.exe
-            map_executable: map.exe
           - target: windows-arm64
             runner: windows-11-vs2026-arm
-            rust_target: aarch64-pc-windows-msvc
             installer: jl-skills-windows-arm64.exe
-            map_executable: map.exe
           - target: macos-x64
             runner: macos-15-intel
-            rust_target: x86_64-apple-darwin
             installer: jl-skills-macos-x64
-            map_executable: map
           - target: macos-arm64
             runner: macos-15
-            rust_target: aarch64-apple-darwin
             installer: jl-skills-macos-arm64
-            map_executable: map
           - target: linux-x64-gnu
             runner: ubuntu-24.04
-            rust_target: x86_64-unknown-linux-gnu
             installer: jl-skills-linux-x64-gnu
-            map_executable: map
           - target: linux-arm64-gnu
             runner: ubuntu-24.04-arm
-            rust_target: aarch64-unknown-linux-gnu
             installer: jl-skills-linux-arm64-gnu
-            map_executable: map
           - target: linux-x64-musl
             runner: ubuntu-24.04
-            rust_target: x86_64-unknown-linux-musl
             installer: jl-skills-linux-x64-musl
-            map_executable: map
           - target: linux-arm64-musl
             runner: ubuntu-24.04-arm
-            rust_target: aarch64-unknown-linux-musl
             installer: jl-skills-linux-arm64-musl
-            map_executable: map
     runs-on: ${{ matrix.runner }}
     env:
       JL_SKILLS_BUILD_TARGET: ${{ matrix.target }}
       JL_SKILLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.97.1
-          targets: ${{ matrix.rust_target }}
-
-      - name: Install musl toolchain
-        if: endsWith(matrix.target, '-musl')
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y musl musl-tools
-          if [[ '${{ matrix.target }}' == 'linux-x64-musl' ]]; then
-            echo 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
-          else
-            echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
-          fi
-
-      - name: Restore Rust build cache
-        id: rust-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            build/cargo/map
-          key: ${{ matrix.target }}-rust-v2-1.97.1-map-${{ hashFiles('skills/map/Cargo.lock', 'skills/map/Cargo.toml', 'skills/map/src/**/*.rs', 'skills/map/tests/**/*.rs') }}
-          restore-keys: |
-            ${{ matrix.target }}-rust-v2-1.97.1-map-
-            ${{ matrix.target }}-rust-1.97.1-map-
 
       - name: Install dependencies
         shell: bash
         run: bun install --frozen-lockfile
 
-      - name: Test Map runtime for target
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test --release \
-            --manifest-path skills/map/Cargo.toml \
-            --target '${{ matrix.rust_target }}' \
-            --target-dir build/cargo/map
-
-      - name: Build target release artifacts
+      - name: Build installer target
         shell: bash
         run: bun run build
 
-      - name: Launch compiled target artifacts
+      - name: Launch compiled installer
         if: ${{ !endsWith(matrix.target, '-musl') }}
         shell: bash
-        run: |
-          set -euo pipefail
-          './build/${{ matrix.installer }}' --version
-          './build/cargo/map/${{ matrix.rust_target }}/release/${{ matrix.map_executable }}' --help >/dev/null
+        run: './build/${{ matrix.installer }}' --version
 
-      - name: Run musl consumer acceptance in Alpine
+      - name: Launch musl installer in Alpine
         if: ${{ endsWith(matrix.target, '-musl') }}
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm \
-            --user root \
-            --entrypoint sh \
-            -e JL_SKILLS_BUILD_TARGET='${{ matrix.target }}' \
-            -e JL_SKILLS_RELEASE_TAG='${{ needs.prepare.outputs.release_tag }}' \
-            -v "$PWD:/work" \
-            -w /work \
-            oven/bun:1.4.0-alpine \
-            -lc "
-              apk add --no-cache libgcc libstdc++ >/dev/null &&
-              bun install --frozen-lockfile &&
-              ./build/${{ matrix.installer }} --version &&
-              ./build/cargo/map/${{ matrix.rust_target }}/release/${{ matrix.map_executable }} --help >/dev/null &&
-              bun run test:consumer
-            "
+          docker run --rm --user root --entrypoint sh -v "$PWD:/work" -w /work oven/bun:1.4.0-alpine -lc "apk add --no-cache libgcc libstdc++ >/dev/null && ./build/${{ matrix.installer }} --version"
 
-      - name: Run full installer regression suite
+      - name: Run installer unit regressions
         if: matrix.target == 'windows-x64'
         shell: bash
         run: bun run test:installer
 
-      - name: Run consumer acceptance
-        if: ${{ matrix.target != 'windows-x64' && !endsWith(matrix.target, '-musl') }}
-        shell: bash
-        run: bun run test:consumer
-
       - name: Run target contract tests
         shell: bash
         run: bun test --timeout 20000 tests/targets.test.ts
-
-      - name: Save Rust build cache
-        if: always() && steps.rust-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            build/cargo/map
-          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
       - name: Upload target artifacts
         uses: actions/upload-artifact@v4
@@ -270,36 +166,28 @@ jobs:
           path: |
             build/${{ matrix.installer }}
             build/manifest.json
-            build/*-${{ matrix.target }}.zip
-            build/*-portable.zip
 
   aggregate:
-    needs:
-      - prepare
-      - build
+    needs: [prepare, build]
     if: needs.prepare.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-
       - name: Download all target artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: target-*
           path: build/targets
           merge-multiple: false
-
-      - name: Aggregate and verify complete release
+      - name: Aggregate and verify complete installer release
         env:
           JL_SKILLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
           JL_SKILLS_AGGREGATE_INPUT: build/targets
           JL_SKILLS_AGGREGATE_OUTPUT: build/release
         run: bun scripts/aggregate-release.ts
-
       - name: Upload verified release bundle
         uses: actions/upload-artifact@v4
         with:
@@ -309,21 +197,17 @@ jobs:
           path: build/release/*
 
   publish:
-    needs:
-      - prepare
-      - aggregate
+    needs: [prepare, aggregate]
     if: needs.prepare.outputs.should_build == 'true' && needs.prepare.outputs.mode != 'build'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: actions/download-artifact@v4
         with:
           name: release-bundle
           path: build/release
-
       - name: Publish verified release bundle
         shell: bash
         env:
@@ -334,38 +218,22 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t assets < <(find build/release -maxdepth 1 -type f -print | sort)
-          if (( ${#assets[@]} == 0 )); then
-            echo 'Verified release bundle is empty.' >&2
-            exit 1
-          fi
+          if (( ${#assets[@]} == 0 )); then echo 'Verified release bundle is empty.' >&2; exit 1; fi
 
           if [[ "$RELEASE_MODE" == nightly ]]; then
             if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
-              gh release delete-asset "$RELEASE_TAG" validation.json --repo "$GH_REPO" -y >/dev/null 2>&1 || true
               gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GH_REPO" --clobber
               mapfile -t existing < <(gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json assets --jq '.assets[].name')
               for name in "${existing[@]}"; do
-                if [[ ! -f "build/release/$name" ]]; then
-                  gh release delete-asset "$RELEASE_TAG" "$name" --repo "$GH_REPO" -y
-                fi
+                if [[ ! -f "build/release/$name" ]]; then gh release delete-asset "$RELEASE_TAG" "$name" --repo "$GH_REPO" -y; fi
               done
             else
-              gh release create "$RELEASE_TAG" "${assets[@]}" \
-                --repo "$GH_REPO" \
-                --title 'Nightly' \
-                --notes 'Rolling production-test build from main. Not part of the stable update channel.' \
-                --prerelease \
-                --target "$GITHUB_SHA"
+              gh release create "$RELEASE_TAG" "${assets[@]}" --repo "$GH_REPO" --title 'Nightly' --notes 'Rolling production-test build from main.' --prerelease --target "$GITHUB_SHA"
             fi
-
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git tag -f nightly "$GITHUB_SHA"
             git push origin refs/tags/nightly --force
           else
-            gh release create "$RELEASE_TAG" "${assets[@]}" \
-              --repo "$GH_REPO" \
-              --title "$RELEASE_TAG" \
-              --generate-notes \
-              --target "$GITHUB_SHA"
+            gh release create "$RELEASE_TAG" "${assets[@]}" --repo "$GH_REPO" --title "$RELEASE_TAG" --generate-notes --target "$GITHUB_SHA"
           fi
