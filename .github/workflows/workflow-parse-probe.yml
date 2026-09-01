@@ -48,7 +48,7 @@ jobs:
           - target: linux-x64-gnu
             runner: ubuntu-24.04
             installer: jls-linux-x64-gnu
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     env:
       JLS_BUILD_TARGET: ${{ matrix.target }}
       JLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
