@@ -1,129 +1,64 @@
 # JLS
 
-JLS is a cross-platform installer and manager for AI coding-agent skills. It provides one interface for installing, updating, and removing skills across supported agent harnesses without requiring users to manually place files, runtimes, or agent resources.
+JLS is an installer for a curated set of AI coding-agent skills.
 
-## Features
+It handles the annoying parts of using those skills across supported agents: downloading the correct package for your platform, placing skill files and native agent resources where the selected harness expects them, installing any required local tooling, managing optional instruction-file integration, and handling updates or removal later.
 
-- Install and update skills from the JLS catalog.
-- Install to your user environment, the current project, or a custom path.
-- Configure a skill for one or more supported AI coding agents.
-- Optionally add and maintain skill instructions in the agent's instruction file.
-- Remove individual skill integrations without disturbing unrelated files.
-- Remove skill-generated project data separately when a skill declares it.
-- Update or uninstall JLS itself from the interactive interface.
+## Skills
 
-## Supported platforms
+### Map
 
-JLS provides native builds for:
+**Map** is a durable local intent graph for projects and other long-running work.
 
-- Windows x64
-- Windows ARM64
-- macOS x64
-- macOS ARM64
-- Linux x64 (GNU)
-- Linux ARM64 (GNU)
-- Linux x64 (musl)
-- Linux ARM64 (musl)
+It gives an agent somewhere explicit to preserve what you are trying to accomplish, the questions that still matter, decisions you have made, relevant facts, and ideas that should survive beyond the current conversation or context window.
+
+The Map skill is primarily a clarification workflow. When invoked, it examines the current intent, identifies material ambiguity, asks only the decisions that can meaningfully change the outcome, and persists the resulting state locally. It does not implement the work itself.
+
+Map is useful when a task is large enough that requirements, decisions, or rationale would otherwise be scattered through chat history and gradually lost or contradicted as work continues.
+
+Map state lives in the project. Its runtime is local, uses embedded storage, and does not require a separate database server or listening service.
 
 ## Supported agents
 
-JLS currently supports:
+JLS currently installs skills for:
 
 - OpenAI Codex
 - Claude Code
 
-A single skill can be installed for multiple supported agents in the same scope.
+A skill may be installed for either or both agents in the same scope.
 
-## Installation
+## Supported platforms
 
-Download the JLS build for your operating system and architecture from the repository's **Releases** page.
+- Windows x64 / ARM64
+- macOS x64 / ARM64
+- Linux x64 / ARM64 (GNU)
+- Linux x64 / ARM64 (musl)
 
-On macOS or Linux, make the downloaded file executable if necessary:
+## Install
+
+Download the JLS executable for your platform from **Releases** and run it.
+
+The interactive installer lets you choose:
+
+- the skill to install;
+- user, current-project, or custom-path scope;
+- Codex, Claude Code, or both;
+- whether JLS should add the skill's managed instructions to the harness instruction file.
+
+JLS installs only inside the selected scope. Project installs stay with that project; user installs use the harness's user-level locations.
+
+On macOS or Linux, you may need to mark the downloaded file executable first:
 
 ```bash
 chmod +x <downloaded-file>
 ```
 
-Then run it.
+## Manage installed skills
 
-## Usage
+Run JLS again to update or uninstall installed skills.
 
-The primary interface is interactive. Launch JLS with no arguments and choose what you want to do:
+Updates replace files owned by the selected skill without overwriting unrelated project or instruction-file content. Removing one harness integration does not remove resources still needed by another integration of the same skill.
 
-```text
-jls
-```
+Skill-generated project data is kept separate from ordinary uninstall. If you explicitly want that data deleted, use **Remove skill-generated data**.
 
-In the examples below, `jls` means the JLS executable you downloaded.
-
-The interactive interface can:
-
-- install skills;
-- update installed skills;
-- uninstall skills;
-- remove skill-generated data;
-- update JLS;
-- uninstall JLS.
-
-### Installation scope
-
-When installing, updating, or uninstalling a skill, JLS operates only within the scope you select:
-
-- **User** — installs the skill for your user account.
-- **Current directory** — installs the skill for the current project.
-- **Custom path** — installs the skill for a specific project or directory you choose.
-
-Project-scoped operations stay inside that project. User-scoped operations use the supported agent's user-level locations.
-
-### Agent integration
-
-During installation, choose the agents that should receive the skill. JLS installs the skill and any agent-specific resources into the locations expected by those agents.
-
-Instruction-file integration is optional. When enabled, JLS manages only its own bounded section of the appropriate instruction file and preserves unrelated content.
-
-## Command-line usage
-
-JLS also supports non-interactive install, update, and uninstall commands.
-
-```text
-jls install [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]
-jls update [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]
-jls uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
-```
-
-Supported agent IDs are `codex` and `claude`.
-
-Examples:
-
-```bash
-jls install skill-name --scope cwd --agent codex --instructions
-jls install skill-name --scope user --agent codex --agent claude
-jls update skill-name --scope cwd
-jls uninstall skill-name --scope cwd --agent codex
-```
-
-When running non-interactively, provide an explicit `--scope`.
-
-## Skill updates and removal
-
-JLS discovers installed skills from the supported agent locations in the selected scope. Updating a skill replaces the files owned by that skill while preserving unrelated project files and separately managed skill-generated data.
-
-Uninstalling a skill removes the selected agent integration. Scope-local tooling shared by another remaining integration for the same skill is retained until the final integration is removed.
-
-Skill-generated data is never automatically deleted as part of an ordinary skill uninstall. Use **Remove skill-generated data** when you explicitly want that data removed.
-
-## Uninstalling JLS
-
-Uninstalling JLS removes the installer and installer-owned data. It does not automatically remove installed skills, their scope-local tooling, or skill-generated project data.
-
-## Development
-
-JLS is built with Bun 1.4.0.
-
-```bash
-bun install --frozen-lockfile
-bun run build
-bun run test:installer
-```
-
-`bun run smoke` runs the build and installer test suite together.
+JLS can also update or uninstall itself from the same interface.
