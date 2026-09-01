@@ -96,32 +96,32 @@ jobs:
         include:
           - target: windows-x64
             runner: windows-2025
-            installer: jl-skills-windows-x64.exe
+            installer: jls-windows-x64.exe
           - target: windows-arm64
             runner: windows-11-vs2026-arm
-            installer: jl-skills-windows-arm64.exe
+            installer: jls-windows-arm64.exe
           - target: macos-x64
             runner: macos-15-intel
-            installer: jl-skills-macos-x64
+            installer: jls-macos-x64
           - target: macos-arm64
             runner: macos-15
-            installer: jl-skills-macos-arm64
+            installer: jls-macos-arm64
           - target: linux-x64-gnu
             runner: ubuntu-24.04
-            installer: jl-skills-linux-x64-gnu
+            installer: jls-linux-x64-gnu
           - target: linux-arm64-gnu
             runner: ubuntu-24.04-arm
-            installer: jl-skills-linux-arm64-gnu
+            installer: jls-linux-arm64-gnu
           - target: linux-x64-musl
             runner: ubuntu-24.04
-            installer: jl-skills-linux-x64-musl
+            installer: jls-linux-x64-musl
           - target: linux-arm64-musl
             runner: ubuntu-24.04-arm
-            installer: jl-skills-linux-arm64-musl
+            installer: jls-linux-arm64-musl
     runs-on: ${{ matrix.runner }}
     env:
-      JL_SKILLS_BUILD_TARGET: ${{ matrix.target }}
-      JL_SKILLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+      JLS_BUILD_TARGET: ${{ matrix.target }}
+      JLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -184,9 +184,9 @@ jobs:
           merge-multiple: false
       - name: Aggregate and verify complete installer release
         env:
-          JL_SKILLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
-          JL_SKILLS_AGGREGATE_INPUT: build/targets
-          JL_SKILLS_AGGREGATE_OUTPUT: build/release
+          JLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          JLS_AGGREGATE_INPUT: build/targets
+          JLS_AGGREGATE_OUTPUT: build/release
         run: bun scripts/aggregate-release.ts
       - name: Upload verified release bundle
         uses: actions/upload-artifact@v4
