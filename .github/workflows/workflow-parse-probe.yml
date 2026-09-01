@@ -63,7 +63,7 @@ jobs:
       - name: Build installer target
         run: bun run build
       - name: Launch compiled installer
-        if: ${{ !endsWith(matrix.target, '-musl') }}
+        if: ${{ ! endsWith(matrix.target, '-musl') }}
         run: './build/${{ matrix.installer }}' --version
       - name: Upload target artifacts
         uses: actions/upload-artifact@v4
