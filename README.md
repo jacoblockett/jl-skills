@@ -1,4 +1,3 @@
-
 # JLS
 
 JLS is the cross-platform `jl-skills` installer and catalog for independently released skills.
