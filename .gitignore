@@ -1,6 +1,5 @@
 build/
 node_modules/
 *.exe
-src/catalog.generated.ts
 test/
 target/
