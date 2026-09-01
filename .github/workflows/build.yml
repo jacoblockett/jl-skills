@@ -2,7 +2,8 @@ name: Build
 
 on:
   schedule:
-    - cron: '0 6,7 * * *'
+    - cron: '0 23 * * *'
+      timezone: 'America/New_York'
   workflow_dispatch:
     inputs:
       action:
@@ -54,10 +55,6 @@ jobs:
           should_build=true
           release_tag=dev
           if [[ "$mode" == nightly ]]; then
-            if [[ '${{ github.event_name }}' == 'schedule' ]]; then
-              local_hour="$(TZ=America/New_York date +%H)"
-              if [[ "$local_hour" != 02 ]]; then should_build=false; fi
-            fi
             force='${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}'
             if [[ "$should_build" == true && "$force" != true ]]; then
               git fetch origin --tags --force
