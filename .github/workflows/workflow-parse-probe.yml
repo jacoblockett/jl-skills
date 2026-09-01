@@ -59,11 +59,12 @@ jobs:
         with:
           bun-version: 1.4.0
       - name: Install dependencies
-        shell: bash
         run: bun install --frozen-lockfile
       - name: Build installer target
-        shell: bash
         run: bun run build
+      - name: Launch compiled installer
+        if: ${{ !endsWith(matrix.target, '-musl') }}
+        run: './build/${{ matrix.installer }}' --version
       - name: Upload target artifacts
         uses: actions/upload-artifact@v4
         with:
