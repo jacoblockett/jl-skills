@@ -1,31 +1,10 @@
 name: Workflow parse probe
 
 on:
-  schedule:
-    - cron: '0 6,7 * * *'
   workflow_dispatch:
-    inputs:
-      action:
-        description: What to run
-        required: true
-        default: build
-        type: choice
-        options:
-          - build
-          - nightly
-          - stable
-      force:
-        description: Force a nightly even when no build-relevant source changed
-        required: false
-        default: false
-        type: boolean
 
 permissions:
-  contents: write
-
-concurrency:
-  group: jls-build-probe
-  cancel-in-progress: false
+  contents: read
 
 jobs:
   prepare:
@@ -43,14 +22,71 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.should_build == 'true'
     strategy:
+      fail-fast: false
       matrix:
         include:
+          - target: windows-x64
+            runner: windows-2025
+            installer: jls-windows-x64.exe
+          - target: windows-arm64
+            runner: windows-11-vs2026-arm
+            installer: jls-windows-arm64.exe
+          - target: macos-x64
+            runner: macos-15-intel
+            installer: jls-macos-x64
+          - target: macos-arm64
+            runner: macos-15
+            installer: jls-macos-arm64
           - target: linux-x64-gnu
             runner: ubuntu-24.04
             installer: jls-linux-x64-gnu
+          - target: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+            installer: jls-linux-arm64-gnu
+          - target: linux-x64-musl
+            runner: ubuntu-24.04
+            installer: jls-linux-x64-musl
+          - target: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            installer: jls-linux-arm64-musl
     runs-on: "${{ matrix.runner }}"
     env:
       JLS_BUILD_TARGET: ${{ matrix.target }}
       JLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Install dependencies
+        shell: bash
+        run: bun install --frozen-lockfile
+      - name: Build installer target
+        shell: bash
+        run: bun run build
+      - name: Launch compiled installer
+        if: ${{ !endsWith(matrix.target, '-musl') }}
+        shell: bash
+        run: './build/${{ matrix.installer }}' --version
+      - name: Launch musl installer in Alpine
+        if: ${{ endsWith(matrix.target, '-musl') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --user root --entrypoint sh -v "$PWD:/work" -w /work oven/bun:1.4.0-alpine -lc "apk add --no-cache libgcc libstdc++ >/dev/null && ./build/${{ matrix.installer }} --version"
+      - name: Run installer unit regressions
+        if: matrix.target == 'windows-x64'
+        shell: bash
+        run: bun run test:installer
+      - name: Run target contract tests
+        shell: bash
+        run: bun test --timeout 20000 tests/targets.test.ts
+      - name: Upload target artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/${{ matrix.installer }}
+            build/manifest.json
