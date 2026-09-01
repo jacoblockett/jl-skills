@@ -187,7 +187,7 @@ describe('skill package contract', () => {
       skill_files: ['SKILL.md'],
     }
     writeFileSync(join(packageRoot, 'manifest.json'), `${JSON.stringify(packageManifest, null, 2)}\n`)
-    writeFileSync(join(packageRoot, 'SKILL.md'), '<!-- jls-meta: {"name":"example-skill","version":"1.2.3","format":1} -->\n')
+    writeFileSync(join(packageRoot, 'SKILL.md'), '# Example Skill\n\nAgent-usable instructions only.\n')
 
     const zip = new AdmZip()
     zip.addLocalFile(join(packageRoot, 'manifest.json'))

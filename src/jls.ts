@@ -48,7 +48,6 @@ const VERSION = '1.0.0'
 const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
 const HOME = Symbol('jls-home')
-const SKILL_META_PREFIX = 'jls-meta:'
 
 type Manifest = SkillPackageManifest
 
@@ -62,7 +61,6 @@ type AgentSpec = HarnessAdapter
 type AgentInfo = AgentSpec & { detected: boolean }
 type ParsedAction = { skills: string[]; scope?: string; agents: string[]; instructions?: boolean }
 type ChoiceItem = { value: string; label: string; disabled?: boolean; disabledSuffix?: string }
-type SkillMetadata = { name: string; version: string; format: number }
 type InstalledTarget = {
   skill: string
   version: string
@@ -365,22 +363,6 @@ function agentPaths(agent: string, scope: Scope): HarnessPaths {
   return harnessAdapter(agent).paths(scope, userHome())
 }
 
-function parseSkillMetadata(text: string): SkillMetadata | undefined {
-  const line = text.split(/\r?\n/).find((candidate) => candidate.includes(SKILL_META_PREFIX))
-  if (!line) return undefined
-  const marker = line.indexOf(SKILL_META_PREFIX)
-  const end = line.lastIndexOf('-->')
-  if (marker < 0 || end < marker) return undefined
-  const jsonText = line.slice(marker + SKILL_META_PREFIX.length, end).trim()
-  try {
-    const parsed = JSON.parse(jsonText) as Partial<SkillMetadata>
-    if (typeof parsed.name !== 'string' || typeof parsed.version !== 'string' || typeof parsed.format !== 'number') return undefined
-    return { name: parsed.name, version: parsed.version, format: parsed.format }
-  } catch {
-    return undefined
-  }
-}
-
 function validateGeneratedData(manifest: Manifest): void {
   for (const entry of manifest.generated_data ?? []) {
     const parts = entry.path.split(/[\\/]+/)
@@ -401,10 +383,6 @@ function validatePackageMetadata(pkg: DownloadedSkillPackage): void {
   if (!skillFile) throw new Error(`${pkg.manifest.name} manifest must include SKILL.md`)
   const skillPath = join(pkg.root, skillFile)
   if (!existsSync(skillPath) || statSync(skillPath).isDirectory()) throw new Error(`${pkg.manifest.name} package has invalid SKILL.md`)
-  const metadata = parseSkillMetadata(readFileSync(skillPath, 'utf8'))
-  if (!metadata || metadata.name !== pkg.manifest.name || metadata.version !== pkg.manifest.version || metadata.format !== 1) {
-    throw new Error(`${pkg.manifest.name} SKILL.md must self-report matching jls metadata`)
-  }
   validateGeneratedData(pkg.manifest)
 }
 
@@ -514,15 +492,6 @@ function removeManagedBlock(path: string, skill: string): void {
   else atomicWrite(path, `${next.replace(/[\r\n]+$/, '')}\n`)
 }
 
-function installedMetadata(skillPath: string, expectedSkill?: string): SkillMetadata | undefined {
-  const path = join(skillPath, 'SKILL.md')
-  if (!existsSync(path)) return undefined
-  const metadata = parseSkillMetadata(readFileSync(path, 'utf8'))
-  if (!metadata || metadata.format !== 1) return undefined
-  if (expectedSkill && metadata.name !== expectedSkill) return undefined
-  return metadata
-}
-
 function installedPackageManifest(skillPath: string): Manifest | undefined {
   const path = join(skillPath, 'manifest.json')
   if (!existsSync(path) || !statSync(path).isFile()) return undefined
@@ -576,17 +545,17 @@ function discoverInstallations(scope: Scope): InstallGroup[] {
     for (const entry of readdirSync(paths.skillRoot).sort()) {
       const skillPath = join(paths.skillRoot, entry)
       if (!statSync(skillPath).isDirectory()) continue
-      const metadata = installedMetadata(skillPath, entry)
-      if (!metadata) continue
-      const key = `${metadata.name}\u0000${scope.identity}`
-      const group = groups.get(key) ?? { key, skill: metadata.name, scope, targets: [] }
+      const manifest = installedPackageManifest(skillPath)
+      if (!manifest || manifest.name !== entry) continue
+      const key = `${manifest.name}\u0000${scope.identity}`
+      const group = groups.get(key) ?? { key, skill: manifest.name, scope, targets: [] }
       group.targets.push({
-        skill: metadata.name,
-        version: metadata.version,
+        skill: manifest.name,
+        version: manifest.version,
         agent: agent.id,
         skillPath,
         instructionPath: paths.instruction,
-        instructions: managedBlockPresent(paths.instruction, metadata.name),
+        instructions: managedBlockPresent(paths.instruction, manifest.name),
       })
       groups.set(key, group)
     }

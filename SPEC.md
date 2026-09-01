@@ -162,27 +162,13 @@ There is no authoritative central installer receipt registry.
 
 The selected scope's actual harness filesystem state is the source of truth for whether catalog skills are installed there.
 
-For each supported harness at the selected scope, the installer checks the expected skill-discovery location. A catalog skill is recognized from its installed `SKILL.md` and self-reported jls metadata.
+For each supported harness at the selected scope, the installer checks the expected skill-discovery location. A catalog skill is recognized from its installed `manifest.json`. The installed package manifest is authoritative for skill identity, version, package format, compatibility, declared files/resources/runtime, and generated-data ownership.
 
-Every catalog skill must self-report at least:
+`SKILL.md` may contain only agent/harness-usable skill instructions and metadata, such as its normal name/description frontmatter. JLS must not use `SKILL.md` as a source of installer/package version, format, compatibility, release, artifact, or lifecycle metadata.
 
-```text
-name
-version
-metadata format version
-```
+A recognizable catalog installation requires a valid installed `manifest.json` whose `name` matches the skill's discovery-directory/catalog identity. If `manifest.json` is absent, malformed, or identifies a different skill, the installation is not recognized as a managed catalog skill. Never infer or fabricate installer/package version, format, compatibility, release, artifact, or lifecycle metadata from `SKILL.md`, directory names, chat context, or other files.
 
-Current representation:
-
-```html
-<!-- jls-meta: {"name":"map","version":"0.5.0","format":1} -->
-```
-
-The manifest version and source `SKILL.md` self-report must agree at build/catalog-generation time and runtime validation time.
-
-This deliberately permits jls to discover a compatible skill that was copied or installed by another agent instead of requiring that jls performed the original installation.
-
-If a recognizable catalog skill exists but usable version metadata is absent or malformed, presence may still be detected, but its installed version is unknown. Never fabricate a version.
+This permits JLS to discover a compatible skill that was copied or installed by another agent as long as the complete manifest-backed skill representation was copied into the expected discovery location. JLS does not require that it performed the original installation.
 
 ## Interactive navigation contract
 
@@ -452,7 +438,7 @@ Classify each target as:
 - missing;
 - already satisfied in the requested configuration;
 - installed at the current/newer version but instruction configuration differs;
-- stale/unknown-version and update-eligible.
+- stale and update-eligible.
 
 A current or newer installed version alone does not make the request satisfied. The managed instruction state must also match what the user just confirmed.
 
@@ -482,7 +468,7 @@ The body is a single comma-delimited skill list. Do not enumerate harnesses, ver
 
 ### Stale installations encountered during Install
 
-Stale/unknown-version requested targets are grouped by skill after confirmation.
+Stale requested targets are grouped by skill after confirmation.
 
 Show one warning followed by one optional multiselect:
 
@@ -492,7 +478,7 @@ Some selected skills are already installed but out of date.
 Which would you like to update instead?
 
 Map  0.3.0 → 0.5.0
-Other Skill  unknown → 1.3.0
+Other Skill  1.2.0 → 1.3.0
 ```
 
 The selection starts empty.
@@ -555,7 +541,7 @@ When installations are found, show:
 Checking for updates...
 ```
 
-Compare each installed self-reported version against the published catalog version.
+Compare each installed manifest version against the published catalog version.
 
 Only skills with an applicable update appear in the normal interactive update multiselect.
 
@@ -573,8 +559,6 @@ Update choices render aligned skill/version columns where practical:
 Map       0.4.0 → 0.5.0
 Other     1.4.1 → 1.5.0
 ```
-
-Unknown installed version metadata is labeled unknown rather than invented.
 
 `Update Skills` owns the complete manifest-declared skill representation for the selected installed targets. A real update must replace/update:
 
@@ -672,6 +656,8 @@ A package may declare:
 - instruction fragment;
 - generated-data locations;
 - future harness/subagent resources or migrations when explicitly needed.
+
+The package `manifest.json` is the sole installer-facing source of package identity, version, format, compatibility, and declared install semantics. `SKILL.md` is not a JLS installer-metadata surface.
 
 Skill packages do not choose absolute or scope-independent runtime destinations. The installer owns runtime placement under the selected scope's `.jls/<skill>/` directory.
 
@@ -804,7 +790,7 @@ The helper must use ignored stdio and must not present a visible helper shell/wi
 
 The helper must preserve:
 
-- installed skills and self-reported metadata;
+- installed skills and their installed package manifests;
 - every skill's scope-local runtime/tooling directories;
 - all generated project data.
 
@@ -845,7 +831,7 @@ Regression coverage includes at least:
 
 - hard scope isolation;
 - custom-path normalization;
-- self-reported skill metadata installation/discovery;
+- manifest-backed skill metadata installation/discovery;
 - manual/filesystem-discovered installation handling;
 - interactive install inspection only after final confirmation;
 - install satisfaction including requested managed-instruction state;
