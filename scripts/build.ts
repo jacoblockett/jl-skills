@@ -1,6 +1,5 @@
-
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   hostMatchesTarget,
@@ -48,15 +47,7 @@ function readCatalog(): Catalog {
 
 const installerName = installerAssetName(buildTarget)
 const output = join(out, installerName)
-rmSync(join(out, 'jls.exe'), { force: true })
-rmSync(join(out, 'jls.exe'), { force: true })
 rmSync(output, { force: true })
-for (const name of readdirSync(out)) {
-  if (name.endsWith('.zip')) rmSync(join(out, name), { force: true })
-}
-rmSync(join(out, 'runtime-assets'), { recursive: true, force: true })
-rmSync(join(out, 'packages'), { recursive: true, force: true })
-rmSync(join(out, 'cargo'), { recursive: true, force: true })
 
 const installerBuild = Bun.spawnSync([
   process.execPath,
@@ -102,7 +93,6 @@ const releaseManifest = {
 }
 
 const manifestOutput = join(out, 'manifest.json')
-rmSync(join(out, 'jls-manifest.json'), { force: true })
 writeFileSync(manifestOutput, `${JSON.stringify(releaseManifest, null, 2)}\n`)
 
 console.log(`Built ${output}`)
