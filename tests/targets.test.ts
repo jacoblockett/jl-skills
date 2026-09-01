@@ -31,7 +31,7 @@ describe('distribution targets', () => {
       expect(['msvc', 'darwin', 'gnu', 'musl']).toContain(target.abi)
       expect(target.bunCompileTarget.startsWith('bun-')).toBe(true)
       expect(target.executableSuffix).toBe(target.os === 'windows' ? '.exe' : '')
-      expect(installerAssetName(target)).toBe(`jl-skills-${key}${target.executableSuffix}`)
+      expect(installerAssetName(target)).toBe(`jls-${key}${target.executableSuffix}`)
     }
   })
 
@@ -47,6 +47,6 @@ describe('distribution targets', () => {
   })
 
   test('rejects unknown targets', () => {
-    expect(() => targetByKey('linux-x64')).toThrow('unsupported jl-skills target')
+    expect(() => targetByKey('linux-x64')).toThrow('unsupported jls target')
   })
 })

@@ -202,14 +202,14 @@ async function fetchReleaseIndex(
   manifestUrl: string,
   fetcher: FetchLike,
 ): Promise<ReleaseIndex | null> {
-  const response = await fetcher(manifestUrl, { headers: { 'user-agent': 'jl-skills' } })
+  const response = await fetcher(manifestUrl, { headers: { 'user-agent': 'jls' } })
   if (response.status === 404) return null
   if (!response.ok) throw new Error(`stable release check failed with HTTP ${response.status}`)
   return parseReleaseManifest(await response.json())
 }
 
 export async function fetchStableReleaseManifest(
-  manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
+  manifestUrl = process.env.JLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
   fetcher: FetchLike = fetch,
 ): Promise<ReleaseManifest | null> {
   const index = await fetchReleaseIndex(manifestUrl, fetcher)
@@ -217,7 +217,7 @@ export async function fetchStableReleaseManifest(
 
   const skills: Record<string, ReleasedSkill> = {}
   await Promise.all(Object.entries(index.skills).map(async ([name, reference]) => {
-    const response = await fetcher(reference.manifest_url, { headers: { 'user-agent': 'jl-skills' } })
+    const response = await fetcher(reference.manifest_url, { headers: { 'user-agent': 'jls' } })
     if (response.status === 404) return
     if (!response.ok) throw new Error(`${name} release check failed with HTTP ${response.status}`)
     skills[name] = parseSkillReleaseManifest(name, await response.json())
@@ -246,7 +246,7 @@ export function selectSkillArtifact(name: string, released: ReleasedSkill, targe
 
 export async function checkInstallerUpdate(
   currentVersion: string,
-  manifestUrl = process.env.JL_SKILLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
+  manifestUrl = process.env.JLS_UPDATE_MANIFEST_URL || DEFAULT_RELEASE_MANIFEST_URL,
   fetcher: FetchLike = fetch,
   target?: TargetKey,
 ): Promise<InstallerUpdate | null> {
@@ -262,7 +262,7 @@ async function downloadVerified(
   label: string,
   fetcher: FetchLike = fetch,
 ): Promise<string> {
-  const response = await fetcher(artifact.url, { headers: { 'user-agent': 'jl-skills' } })
+  const response = await fetcher(artifact.url, { headers: { 'user-agent': 'jls' } })
   if (!response.ok) throw new Error(`${label} download failed with HTTP ${response.status}`)
 
   const bytes = new Uint8Array(await response.arrayBuffer())
@@ -450,7 +450,7 @@ export async function downloadSkillPackage(
 ): Promise<DownloadedSkillPackage> {
   const currentTarget = targetKey(target)
   const selected = selectSkillArtifact(name, released, currentTarget)
-  const scratch = mkdtempSync(join(tmpdir(), `jl-skills-${name}-`))
+  const scratch = mkdtempSync(join(tmpdir(), `jls-${name}-`))
   const archive = join(scratch, `${name}.zip`)
   const root = join(scratch, 'package')
   mkdirSync(root, { recursive: true })

@@ -1,10 +1,10 @@
-# jl-skills installer
+# jls installer
 
 Status: accepted generic installer lifecycle contract. Skill source, packaging, runtime build details, and skill-specific behavior live in each referenced skill repository; JLS owns only installer behavior and external skill discovery.
 
 ## Product goal
 
-`jl-skills` is the user-facing installer, updater, uninstaller, and lifecycle utility for the `jl-skills` catalog. Consumers should not need to know where skill discovery files, harness-specific resources, runtimes, instruction fragments, support assets, or installer update mechanics belong.
+`jls` is the user-facing installer, updater, uninstaller, and lifecycle utility for the `jls` catalog. Consumers should not need to know where skill discovery files, harness-specific resources, runtimes, instruction fragments, support assets, or installer update mechanics belong.
 
 Public releases use one self-contained installer executable per supported target. Release asset names identify the target OS/architecture/ABI directly; users must not be expected to infer compatibility from the file extension.
 
@@ -24,14 +24,14 @@ linux-arm64-musl
 Exact public installer filenames:
 
 ```text
-jl-skills-windows-x64.exe
-jl-skills-windows-arm64.exe
-jl-skills-macos-x64
-jl-skills-macos-arm64
-jl-skills-linux-x64-gnu
-jl-skills-linux-arm64-gnu
-jl-skills-linux-x64-musl
-jl-skills-linux-arm64-musl
+jls-windows-x64.exe
+jls-windows-arm64.exe
+jls-macos-x64
+jls-macos-arm64
+jls-linux-x64-gnu
+jls-linux-arm64-gnu
+jls-linux-x64-musl
+jls-linux-arm64-musl
 ```
 
 These target keys and filenames are part of the durable installer/release contract. `RELEASES.md` owns the complete release-manifest and publication contract; `TODO.md` owns implementation order.
@@ -56,27 +56,27 @@ JL-owned custom controls may wrap Clack core only where the accepted navigation/
 Release compilation is conceptually:
 
 ```text
-Bun --compile -> target-qualified jl-skills executable
+Bun --compile -> target-qualified jls executable
 ```
 
 Every compiled installer carries exactly one canonical target key injected at build time. That embedded value is authoritative for installer self-update, skill-package selection, native-runtime selection, output naming, and target diagnostics. Do not derive release identity from runtime `platform + arch` alone, because Linux also requires GNU/glibc vs musl ABI identity.
 
-The product and executable name are always plural: `jl-skills`, never `jl-skill`.
+The product and executable name are always plural: `jls`, never `jls`.
 
 ## Public CLI
 
 Primary deterministic forms:
 
 ```text
-jl-skills install [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]
-jl-skills update [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]
-jl-skills uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
+jls install [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]
+jls update [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]
+jls uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...
 ```
 
 A skill-first invocation may continue to mean install:
 
 ```text
-jl-skills map --scope cwd
+jls map --scope cwd
 ```
 
 `--agent` is repeatable.
@@ -109,8 +109,8 @@ For a project/path install, a machine-level Codex or Claude installation permits
 Skill runtime/tooling is also scope-local. Each installed skill receives one neutral tooling directory at the selected scope, shared by every harness using that skill at that scope:
 
 ```text
-user scope       ~/.jl-skills/<skill>/
-project/custom   <scope>/.jl-skills/<skill>/
+user scope       ~/.jls/<skill>/
+project/custom   <scope>/.jls/<skill>/
 ```
 
 A project/path install must never provision that skill's tooling under the user's home scope. A user-scope install must never provision tooling into the invocation project.
@@ -162,7 +162,7 @@ There is no authoritative central installer receipt registry.
 
 The selected scope's actual harness filesystem state is the source of truth for whether catalog skills are installed there.
 
-For each supported harness at the selected scope, the installer checks the expected skill-discovery location. A catalog skill is recognized from its installed `SKILL.md` and self-reported jl-skills metadata.
+For each supported harness at the selected scope, the installer checks the expected skill-discovery location. A catalog skill is recognized from its installed `SKILL.md` and self-reported jls metadata.
 
 Every catalog skill must self-report at least:
 
@@ -175,12 +175,12 @@ metadata format version
 Current representation:
 
 ```html
-<!-- jl-skills-meta: {"name":"map","version":"0.5.0","format":1} -->
+<!-- jls-meta: {"name":"map","version":"0.5.0","format":1} -->
 ```
 
 The manifest version and source `SKILL.md` self-report must agree at build/catalog-generation time and runtime validation time.
 
-This deliberately permits jl-skills to discover a compatible skill that was copied or installed by another agent instead of requiring that jl-skills performed the original installation.
+This deliberately permits jls to discover a compatible skill that was copied or installed by another agent instead of requiring that jls performed the original installation.
 
 If a recognizable catalog skill exists but usable version metadata is absent or malformed, presence may still be detected, but its installed version is unknown. Never fabricate a version.
 
@@ -197,8 +197,8 @@ Install skills
 Update skills
 Uninstall skills
 Remove skill-generated data
-Update jl-skills installer
-Uninstall jl-skills installer
+Update jls installer
+Uninstall jls installer
 ```
 
 There is no visible Cancel row. Escape exits.
@@ -293,7 +293,7 @@ Selections that no longer exist or become disabled are discarded rather than res
 
 State must not bleed between unrelated operations or scopes.
 
-A new jl-skills process starts clean.
+A new jls process starts clean.
 
 Destructive confirmations use their safe initial cursor rather than remembering a prior affirmative answer.
 
@@ -431,7 +431,7 @@ Instruction injection
 
 The standard `Continue?` confirmation follows this summary.
 
-For the interactive wizard, **do not inspect existing skill installations before the user confirms Yes**. The complete request is collected and summarized first. Yes is the boundary after which jl-skills may inspect current installation state and execute/adapt the confirmed request.
+For the interactive wizard, **do not inspect existing skill installations before the user confirms Yes**. The complete request is collected and summarized first. Yes is the boundary after which jls may inspect current installation state and execute/adapt the confirmed request.
 
 No confirmed request means no existing-install inspection and no filesystem mutation from this install operation.
 
@@ -609,7 +609,7 @@ Uninstall removes the selected skill integration from discovered/explicit harnes
 - harness-specific resources owned by that skill;
 - matching installer-managed instruction block if present.
 
-Scope-local tooling is shared only among harness integrations for that same skill at that same scope. Removing one harness leaves `<scope>/.jl-skills/<skill>/` intact while another harness at that scope still has the skill installed. Removing the final harness integration for that skill at that scope removes the skill's scope-local tooling directory.
+Scope-local tooling is shared only among harness integrations for that same skill at that same scope. Removing one harness leaves `<scope>/.jls/<skill>/` intact while another harness at that scope still has the skill installed. Removing the final harness integration for that skill at that scope removes the skill's scope-local tooling directory.
 
 Uninstall preserves:
 
@@ -636,9 +636,9 @@ The installer owns deterministic instruction-block lifecycle, not the surroundin
 Managed content uses markers such as:
 
 ```md
-<!-- jl-skill:begin map -->
+<!-- jls:begin map -->
 ...managed Map instructions...
-<!-- jl-skill:end map -->
+<!-- jls:end map -->
 ```
 
 Required behavior:
@@ -673,7 +673,7 @@ A package may declare:
 - generated-data locations;
 - future harness/subagent resources or migrations when explicitly needed.
 
-Skill packages do not choose absolute or scope-independent runtime destinations. The installer owns runtime placement under the selected scope's `.jl-skills/<skill>/` directory.
+Skill packages do not choose absolute or scope-independent runtime destinations. The installer owns runtime placement under the selected scope's `.jls/<skill>/` directory.
 
 Harness filesystem knowledge belongs in adapters, not duplicated in every skill package.
 
@@ -729,11 +729,11 @@ Only the selected skill's declared and positively detected generated-data paths 
 
 No registry or whole-drive scan is used to find generated data. The user supplies the scope/path and the installer performs narrow declarative detection there.
 
-## Update jl-skills installer
+## Update jls installer
 
-Home-screen `Update jl-skills installer` manages only the compiled installer executable.
+Home-screen `Update jls installer` manages only the compiled installer executable.
 
-It is available only from the compiled `jl-skills` executable, not from an arbitrary development Bun process that cannot correctly replace itself as the installed product.
+It is available only from the compiled `jls` executable, not from an arbitrary development Bun process that cannot correctly replace itself as the installed product.
 
 ### Published update contract
 
@@ -746,7 +746,7 @@ https://github.com/jacoblockett/jls/releases/latest/download/manifest.json
 The URL may be overridden for deterministic development/Nightly testing with:
 
 ```text
-JL_SKILLS_UPDATE_MANIFEST_URL
+JLS_UPDATE_MANIFEST_URL
 ```
 
 JLS release-manifest format 3 contains the installer `version`/target artifacts plus a `manifest_url` reference for each externally owned skill. Each referenced skill manifest contains that skill's `version`, `min_installer`, and target/portable artifacts with SHA-256 values. The exact format-3 JLS index and external skill-manifest contracts are authoritative in `RELEASES.md`.
@@ -777,7 +777,7 @@ A failed hash/version/manifest check must fail rather than install an unverifiab
 
 Automated smoke is entirely offline through a fake fetch/update source and must never replace the real development executable.
 
-## Uninstall jl-skills installer
+## Uninstall jls installer
 
 This action is intentionally installer-only.
 
@@ -788,12 +788,12 @@ Do not show a verbose uninstall summary enumerating executable paths, installer-
 Instead show one concise warning:
 
 ```text
-This action will uninstall the jl-skills installer and any associated installer-owned data and tooling.
+This action will uninstall the jls installer and any associated installer-owned data and tooling.
 ```
 
 Then use the standard safe-default `Continue?` confirmation.
 
-After the user confirms Yes, the foreground `jl-skills` process delegates the entire installer-owned cleanup request to a silent detached helper and exits immediately. The foreground process must not print `scheduled`, `complete`, success, failure, or any other post-confirmation status.
+After the user confirms Yes, the foreground `jls` process delegates the entire installer-owned cleanup request to a silent detached helper and exits immediately. The foreground process must not print `scheduled`, `complete`, success, failure, or any other post-confirmation status.
 
 The helper waits long enough for the foreground process to release the executable, then removes:
 

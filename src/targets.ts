@@ -42,7 +42,7 @@ export function isTargetKey(value: string): value is TargetKey {
 }
 
 export function targetByKey(value: string): DistributionTarget {
-  if (!isTargetKey(value)) throw new Error(`unsupported jl-skills target: ${value}`)
+  if (!isTargetKey(value)) throw new Error(`unsupported jls target: ${value}`)
   return TARGETS[value]
 }
 
@@ -52,13 +52,13 @@ export function hostMatchesTarget(target: DistributionTarget): boolean {
 }
 
 export function installerAssetName(target: DistributionTarget): string {
-  return `jl-skills-${target.key}${target.executableSuffix}`
+  return `jls-${target.key}${target.executableSuffix}`
 }
 
-declare const JL_SKILLS_COMPILED_TARGET: string | undefined
+declare const JLS_COMPILED_TARGET: string | undefined
 
 export function compiledTarget(): DistributionTarget {
-  const value = typeof JL_SKILLS_COMPILED_TARGET === 'string' ? JL_SKILLS_COMPILED_TARGET : undefined
-  if (!value) throw new Error('jl-skills compiled target was not injected at build time')
+  const value = typeof JLS_COMPILED_TARGET === 'string' ? JLS_COMPILED_TARGET : undefined
+  if (!value) throw new Error('jls compiled target was not injected at build time')
   return targetByKey(value)
 }

@@ -11,7 +11,7 @@ import {
 const repo = join(import.meta.dir, '..')
 const out = join(repo, 'build')
 const semver = /^\d+\.\d+\.\d+$/
-const buildTarget = targetByKey(process.env.JL_SKILLS_BUILD_TARGET?.trim() || 'windows-x64')
+const buildTarget = targetByKey(process.env.JLS_BUILD_TARGET?.trim() || 'windows-x64')
 
 mkdirSync(out, { recursive: true })
 
@@ -48,8 +48,8 @@ function readCatalog(): Catalog {
 
 const installerName = installerAssetName(buildTarget)
 const output = join(out, installerName)
-rmSync(join(out, 'jl-skill.exe'), { force: true })
-rmSync(join(out, 'jl-skills.exe'), { force: true })
+rmSync(join(out, 'jls.exe'), { force: true })
+rmSync(join(out, 'jls.exe'), { force: true })
 rmSync(output, { force: true })
 for (const name of readdirSync(out)) {
   if (name.endsWith('.zip')) rmSync(join(out, name), { force: true })
@@ -61,11 +61,11 @@ rmSync(join(out, 'cargo'), { recursive: true, force: true })
 const installerBuild = Bun.spawnSync([
   process.execPath,
   'build',
-  join(repo, 'src', 'jl-skill.ts'),
+  join(repo, 'src', 'jls.ts'),
   '--compile',
   `--target=${buildTarget.bunCompileTarget}`,
   '--define',
-  `JL_SKILLS_COMPILED_TARGET=${JSON.stringify(buildTarget.key)}`,
+  `JLS_COMPILED_TARGET=${JSON.stringify(buildTarget.key)}`,
   '--outfile',
   output,
 ], {
@@ -76,13 +76,13 @@ const installerBuild = Bun.spawnSync([
 })
 if (installerBuild.exitCode !== 0) process.exit(installerBuild.exitCode)
 
-const installerSource = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8')
+const installerSource = readFileSync(join(repo, 'src', 'jls.ts'), 'utf8')
 const versionMatch = installerSource.match(/const VERSION = ['"]([^'"]+)['"]/)
-if (!versionMatch) throw new Error('could not determine jl-skills installer version from src/jl-skill.ts')
+if (!versionMatch) throw new Error('could not determine jls installer version from src/jls.ts')
 const installerVersion = versionMatch[1]
 if (!semver.test(installerVersion)) throw new Error(`installer version must be plain semver: ${installerVersion}`)
 
-const releaseTag = process.env.JL_SKILLS_RELEASE_TAG?.trim() || 'dev'
+const releaseTag = process.env.JLS_RELEASE_TAG?.trim() || 'dev'
 if (!/^[A-Za-z0-9._-]+$/.test(releaseTag)) throw new Error(`invalid release tag: ${releaseTag}`)
 const releaseBase = `https://github.com/jacoblockett/jls/releases/download/${releaseTag}`
 const catalog = readCatalog()
@@ -102,7 +102,7 @@ const releaseManifest = {
 }
 
 const manifestOutput = join(out, 'manifest.json')
-rmSync(join(out, 'jl-skills-manifest.json'), { force: true })
+rmSync(join(out, 'jls-manifest.json'), { force: true })
 writeFileSync(manifestOutput, `${JSON.stringify(releaseManifest, null, 2)}\n`)
 
 console.log(`Built ${output}`)

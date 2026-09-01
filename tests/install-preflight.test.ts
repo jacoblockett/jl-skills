@@ -141,7 +141,7 @@ describe('install preflight classification', () => {
 
   test('interactive install inspection happens only after Continue confirmation', () => {
     const repo = resolve(import.meta.dir, '..')
-    const source = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const source = readFileSync(join(repo, 'src', 'jls.ts'), 'utf8').replace(/\r\n/g, '\n')
     const start = source.indexOf('async function installAtScope(')
     const end = source.indexOf('\nasync function installWizard(', start)
     const installFlow = source.slice(start, end)
@@ -157,7 +157,7 @@ describe('install preflight classification', () => {
 
   test('install continuation status is only shown after whole skills were skipped', () => {
     const repo = resolve(import.meta.dir, '..')
-    const source = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const source = readFileSync(join(repo, 'src', 'jls.ts'), 'utf8').replace(/\r\n/g, '\n')
     const start = source.indexOf('async function installAtScope(')
     const end = source.indexOf('\nasync function installWizard(', start)
     const installFlow = source.slice(start, end)
@@ -167,7 +167,7 @@ describe('install preflight classification', () => {
 
   test('Update Skills stays at scope selection when installed skills are current', () => {
     const repo = resolve(import.meta.dir, '..')
-    const source = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const source = readFileSync(join(repo, 'src', 'jls.ts'), 'utf8').replace(/\r\n/g, '\n')
     const start = source.indexOf('async function updateAtScope(')
     const end = source.indexOf('\nasync function updateWizard(', start)
     const updateFlow = source.slice(start, end)

@@ -141,9 +141,9 @@ export function aggregateRelease({ inputRoot, outputRoot, releaseTag }: Aggregat
 }
 
 if (import.meta.main) {
-  const inputRoot = resolve(process.env.JL_SKILLS_AGGREGATE_INPUT?.trim() || join(repo, 'build', 'targets'))
-  const outputRoot = resolve(process.env.JL_SKILLS_AGGREGATE_OUTPUT?.trim() || join(repo, 'build', 'release'))
-  const releaseTag = process.env.JL_SKILLS_RELEASE_TAG?.trim()
-  if (!releaseTag) throw new Error('JL_SKILLS_RELEASE_TAG is required for release aggregation')
+  const inputRoot = resolve(process.env.JLS_AGGREGATE_INPUT?.trim() || join(repo, 'build', 'targets'))
+  const outputRoot = resolve(process.env.JLS_AGGREGATE_OUTPUT?.trim() || join(repo, 'build', 'release'))
+  const releaseTag = process.env.JLS_RELEASE_TAG?.trim()
+  if (!releaseTag) throw new Error('JLS_RELEASE_TAG is required for release aggregation')
   aggregateRelease({ inputRoot, outputRoot, releaseTag })
 }

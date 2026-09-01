@@ -70,7 +70,7 @@ describe('exclusive multiselect keyboard policy', () => {
 describe('installer option presentation', () => {
   test('installer source does not use Clack option hints, pseudo-options, or inline confirmations', () => {
     const repo = resolve(import.meta.dir, '..')
-    const source = readFileSync(join(repo, 'src', 'jl-skill.ts'), 'utf8')
+    const source = readFileSync(join(repo, 'src', 'jls.ts'), 'utf8')
     expect(source).not.toContain('hint:')
     expect(source).not.toContain("label: 'All of the above'")
     expect(source).not.toContain("label: 'Go back'")

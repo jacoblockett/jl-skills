@@ -2,7 +2,7 @@ import { styleText } from 'node:util'
 import type { Readable, Writable } from 'node:stream'
 import { SelectPrompt, TextPrompt, settings, wrapTextWithPrefix, type State } from '@clack/core'
 
-export const BACK_SIGNAL = Symbol('jl-skills-back')
+export const BACK_SIGNAL = Symbol('jls-back')
 
 export type NavOption<Value> = {
   value: Value

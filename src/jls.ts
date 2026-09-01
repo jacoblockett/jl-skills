@@ -47,8 +47,8 @@ import { compiledTarget, installerAssetName } from './targets'
 const VERSION = '0.7.0'
 const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
-const HOME = Symbol('jl-skills-home')
-const SKILL_META_PREFIX = 'jl-skills-meta:'
+const HOME = Symbol('jls-home')
+const SKILL_META_PREFIX = 'jls-meta:'
 
 type Manifest = SkillPackageManifest
 
@@ -123,7 +123,7 @@ function checked<T>(value: T | symbol): T | symbol {
   return value
 }
 
-function ensureIntro(state: WizardState, title = 'jl-skills'): void {
+function ensureIntro(state: WizardState, title = 'jls'): void {
   if (!state.shown) {
     prompts.intro(title)
     state.shown = true
@@ -275,10 +275,10 @@ function userHome(): string {
 function installerDataRoot(): string {
   if (isWindows) {
     const local = process.env.LOCALAPPDATA || join(userHome(), 'AppData', 'Local')
-    return canonicalPath(join(local, 'JL-Skills'))
+    return canonicalPath(join(local, 'JLS'))
   }
   const data = process.env.XDG_DATA_HOME || join(userHome(), '.local', 'share')
-  return canonicalPath(join(data, 'JL-Skills'))
+  return canonicalPath(join(data, 'JLS'))
 }
 
 function skillMetadataRoot(): string {
@@ -286,7 +286,7 @@ function skillMetadataRoot(): string {
 }
 
 function scopeSkillRoot(scope: Scope, skill: string): string {
-  return join(scope.root, '.jl-skills', skill)
+  return join(scope.root, '.jls', skill)
 }
 
 function resolveScope(raw: string): Scope {
@@ -403,7 +403,7 @@ function validatePackageMetadata(pkg: DownloadedSkillPackage): void {
   if (!existsSync(skillPath) || statSync(skillPath).isDirectory()) throw new Error(`${pkg.manifest.name} package has invalid SKILL.md`)
   const metadata = parseSkillMetadata(readFileSync(skillPath, 'utf8'))
   if (!metadata || metadata.name !== pkg.manifest.name || metadata.version !== pkg.manifest.version || metadata.format !== 1) {
-    throw new Error(`${pkg.manifest.name} SKILL.md must self-report matching jl-skills metadata`)
+    throw new Error(`${pkg.manifest.name} SKILL.md must self-report matching jls metadata`)
   }
   validateGeneratedData(pkg.manifest)
 }
@@ -432,7 +432,7 @@ function cachedManifests(): Manifest[] {
 
 function atomicWrite(path: string, data: string | Uint8Array, mode = 0o644): void {
   mkdirSync(dirname(path), { recursive: true })
-  const tmp = join(dirname(path), `.jl-skills-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  const tmp = join(dirname(path), `.jls-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   try {
     writeFileSync(tmp, data)
     try { chmodSync(tmp, mode) } catch {}
@@ -464,8 +464,8 @@ function copyPackageEntry(source: string, destination: string, tokens?: Record<s
 
 function managedMarkers(skill: string): { begin: string; end: string } {
   return {
-    begin: `<!-- jl-skill:begin ${skill} -->`,
-    end: `<!-- jl-skill:end ${skill} -->`,
+    begin: `<!-- jls:begin ${skill} -->`,
+    end: `<!-- jls:end ${skill} -->`,
   }
 }
 
@@ -482,10 +482,10 @@ function managedBlock(path: string, skill: string, fragment: string): void {
   let current = existsSync(path) ? readFileSync(path, 'utf8') : ''
   const beginIndex = current.indexOf(begin)
   const endIndex = current.indexOf(end)
-  if ((beginIndex >= 0) !== (endIndex >= 0)) throw new Error(`malformed jl-skill block in ${path}`)
+  if ((beginIndex >= 0) !== (endIndex >= 0)) throw new Error(`malformed jls block in ${path}`)
   if (beginIndex >= 0) {
     if (current.split(begin).length !== 2 || current.split(end).length !== 2 || endIndex < beginIndex) {
-      throw new Error(`ambiguous jl-skill block in ${path}`)
+      throw new Error(`ambiguous jls block in ${path}`)
     }
     current = current.slice(0, beginIndex) + block + current.slice(endIndex + end.length)
   } else if (!current.trim()) {
@@ -503,9 +503,9 @@ function removeManagedBlock(path: string, skill: string): void {
   const beginIndex = current.indexOf(begin)
   const endIndex = current.indexOf(end)
   if (beginIndex < 0 && endIndex < 0) return
-  if ((beginIndex >= 0) !== (endIndex >= 0)) throw new Error(`malformed jl-skill block in ${path}`)
+  if ((beginIndex >= 0) !== (endIndex >= 0)) throw new Error(`malformed jls block in ${path}`)
   if (current.split(begin).length !== 2 || current.split(end).length !== 2 || endIndex < beginIndex) {
-    throw new Error(`ambiguous jl-skill block in ${path}`)
+    throw new Error(`ambiguous jls block in ${path}`)
   }
   const before = current.slice(0, beginIndex).replace(/[\r\n]+$/, '')
   const after = current.slice(endIndex + end.length).replace(/^[\r\n]+/, '')
@@ -824,7 +824,7 @@ function indentedLineList(values: string[]): string {
 }
 
 function requireRelease(release: ReleaseManifest | null): ReleaseManifest {
-  if (!release) throw new Error('no stable jl-skills release is currently available')
+  if (!release) throw new Error('no stable jls release is currently available')
   return release
 }
 
@@ -843,7 +843,7 @@ async function ensureSkillCompatibility(
   if (incompatible.length === 0) return true
 
   const lines = incompatible.map((name) => (
-    `${displaySkillName(name)} ${release.skills[name].version} requires jl-skills ${release.skills[name].min_installer} or newer; running ${VERSION}.`
+    `${displaySkillName(name)} ${release.skills[name].version} requires jls ${release.skills[name].min_installer} or newer; running ${VERSION}.`
   ))
   const latestSatisfies = incompatible.every((name) => (
     compareVersions(release.installer.version, release.skills[name].min_installer) >= 0
@@ -851,7 +851,7 @@ async function ensureSkillCompatibility(
 
   if (!process.stdin.isTTY) {
     const suffix = latestSatisfies
-      ? ` jl-skills ${release.installer.version} is available.`
+      ? ` jls ${release.installer.version} is available.`
       : ' No compatible stable installer is available.'
     throw new Error(`${lines.join(' ')}${suffix}`)
   }
@@ -861,7 +861,7 @@ async function ensureSkillCompatibility(
     prompts.log.warn('No compatible stable installer is currently available.')
     return false
   }
-  prompts.log.info(`jl-skills ${release.installer.version} is available and satisfies the requirement.`)
+  prompts.log.info(`jls ${release.installer.version} is available and satisfies the requirement.`)
   const result = await updateInstallerWizard(state)
   return result === 0 ? false : false
 }
@@ -936,8 +936,8 @@ function instructionExplanation(agents: string[], scope: Scope): { title: string
   const files = instructionFiles(agents, scope)
   const fileText = humanList(files)
   const body = files.length === 1
-    ? `The ${fileText} file contains general instructions that your selected AI tool reads automatically. jl-skills can add managed sections for whichever skills you choose below without changing the rest of the file.`
-    : `${fileText} files contain general instructions that your selected AI tools read automatically. jl-skills can add managed sections for whichever skills you choose below without changing the rest of those files.`
+    ? `The ${fileText} file contains general instructions that your selected AI tool reads automatically. jls can add managed sections for whichever skills you choose below without changing the rest of the file.`
+    : `${fileText} files contain general instructions that your selected AI tools read automatically. jls can add managed sections for whichever skills you choose below without changing the rest of those files.`
   return { title: 'About AI Instruction Files', body }
 }
 
@@ -1525,7 +1525,7 @@ function installerExecutable(): string {
   const name = basename(executable).toLowerCase()
   const expected = installerAssetName(compiledTarget()).toLowerCase()
   if (name !== expected) {
-    throw new Error('installer management is only available from the compiled jl-skills executable')
+    throw new Error('installer management is only available from the compiled jls executable')
   }
   return executable
 }
@@ -1551,7 +1551,7 @@ function scheduleInstallerUninstall(executable: string, dataRoot: string): void 
   const child = spawn('/bin/sh', [
     '-c',
     'sleep 1; rm -rf -- "$1"; rm -f -- "$2"',
-    'jl-skills-uninstall',
+    'jls-uninstall',
     dataRoot,
     executable,
   ], {
@@ -1585,14 +1585,14 @@ async function updateInstallerWizard(state: WizardState): Promise<UpdateResult> 
   prompts.log.step('Downloading update...')
   const staged = await stageInstallerUpdate(executable, update)
   scheduleInstallerReplacement(staged, executable)
-  prompts.outro('jl-skills installer update scheduled')
+  prompts.outro('jls installer update scheduled')
   return 0
 }
 
 async function uninstallInstallerWizard(state: WizardState): Promise<NavResult<number>> {
   ensureIntro(state)
   const executable = installerExecutable()
-  prompts.log.warn('This action will uninstall the jl-skills installer and any associated installer-owned data and tooling.')
+  prompts.log.warn('This action will uninstall the jls installer and any associated installer-owned data and tooling.')
   const proceed = await chooseConfirmation(state, 'installer-uninstall.confirm', { allowBack: true, safeDefault: true })
   if (proceed === BACK_SIGNAL || !proceed) return BACK_SIGNAL
 
@@ -1615,8 +1615,8 @@ async function bareWizard(): Promise<number> {
         { value: 'update', label: 'Update skills' },
         { value: 'uninstall', label: 'Uninstall skills' },
         { value: 'generated-data', label: 'Remove skill-generated data' },
-        { value: 'installer-update', label: 'Update jl-skills installer' },
-        { value: 'installer-uninstall', label: 'Uninstall jl-skills installer' },
+        { value: 'installer-update', label: 'Update jls installer' },
+        { value: 'installer-uninstall', label: 'Uninstall jls installer' },
       ],
       { allowBack: false, initialValue: 'install' },
     )
@@ -1663,14 +1663,14 @@ async function bareWizard(): Promise<number> {
 }
 
 function printHelp(): void {
-  console.log(`jl-skills\n\nUsage:\n  jl-skills install [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jl-skills update [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jl-skills uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...\n\nSkill-first invocations continue to mean install. Interactive prompts use @clack/prompts ${PROMPTS_VERSION}.\n`)
+  console.log(`jls\n\nUsage:\n  jls install [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jls update [skills...] [--scope user|cwd|PATH] [--agent AGENT]... [--instructions|--no-instructions]\n  jls uninstall [skills...] [--scope user|cwd|PATH] [--agent AGENT]...\n\nSkill-first invocations continue to mean install. Interactive prompts use @clack/prompts ${PROMPTS_VERSION}.\n`)
 }
 
 async function main(): Promise<number> {
   const args = process.argv.slice(2)
   if (args.length === 0) return bareWizard()
   if (args.length === 1 && (args[0] === '--version' || args[0] === '-v')) {
-    console.log(`jl-skills ${VERSION}`)
+    console.log(`jls ${VERSION}`)
     return 0
   }
   if (args.some((arg: string) => arg === '--help' || arg === '-h') || args[0] === 'help') {
@@ -1685,6 +1685,6 @@ async function main(): Promise<number> {
 main()
   .then((exitCode) => { process.exitCode = exitCode })
   .catch((error) => {
-    console.error(`jl-skills: ${error instanceof Error ? error.message : String(error)}`)
+    console.error(`jls: ${error instanceof Error ? error.message : String(error)}`)
     process.exitCode = 1
   })

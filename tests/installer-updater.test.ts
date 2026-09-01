@@ -38,7 +38,7 @@ function releaseIndex(installerVersion = '0.7.0') {
       version: installerVersion,
       artifacts: {
         'windows-x64': {
-          url: 'https://fixture.invalid/jl-skills-windows-x64.exe',
+          url: 'https://fixture.invalid/jls-windows-x64.exe',
           sha256: '0'.repeat(64),
         },
       },
@@ -132,7 +132,7 @@ describe('release metadata', () => {
     })
     expect(selectSkillArtifact('example-skill', portable, 'linux-arm64-musl').key).toBe('portable')
     const index = parseReleaseManifest(releaseIndex())
-    expect(selectInstallerArtifact(index, 'windows-x64').url).toEndWith('/jl-skills-windows-x64.exe')
+    expect(selectInstallerArtifact(index, 'windows-x64').url).toEndWith('/jls-windows-x64.exe')
   })
 
   test('installer update does not need to fetch external skill manifests', async () => {
@@ -187,7 +187,7 @@ describe('skill package contract', () => {
       skill_files: ['SKILL.md'],
     }
     writeFileSync(join(packageRoot, 'manifest.json'), `${JSON.stringify(packageManifest, null, 2)}\n`)
-    writeFileSync(join(packageRoot, 'SKILL.md'), '<!-- jl-skills-meta: {"name":"example-skill","version":"1.2.3","format":1} -->\n')
+    writeFileSync(join(packageRoot, 'SKILL.md'), '<!-- jls-meta: {"name":"example-skill","version":"1.2.3","format":1} -->\n')
 
     const zip = new AdmZip()
     zip.addLocalFile(join(packageRoot, 'manifest.json'))

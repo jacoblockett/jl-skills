@@ -1,13 +1,13 @@
 
 # JLS release contract
 
-JLS is the `jl-skills` installer and external skill catalog. It does not own skill source code or publish skill packages.
+JLS is the `jls` installer and external skill catalog. It does not own skill source code or publish skill packages.
 
 ## Ownership boundary
 
 JLS owns:
 
-- the compiled `jl-skills` installer;
+- the compiled `jls` installer;
 - canonical installer target detection;
 - generic package download/verification/install/update/uninstall behavior;
 - the catalog of external skill release-manifest URLs;
@@ -40,14 +40,14 @@ linux-arm64-musl
 Public installer asset names are exactly:
 
 ```text
-jl-skills-windows-x64.exe
-jl-skills-windows-arm64.exe
-jl-skills-macos-x64
-jl-skills-macos-arm64
-jl-skills-linux-x64-gnu
-jl-skills-linux-arm64-gnu
-jl-skills-linux-x64-musl
-jl-skills-linux-arm64-musl
+jls-windows-x64.exe
+jls-windows-arm64.exe
+jls-macos-x64
+jls-macos-arm64
+jls-linux-x64-gnu
+jls-linux-arm64-gnu
+jls-linux-x64-musl
+jls-linux-arm64-musl
 ```
 
 ## Catalog
@@ -78,7 +78,7 @@ A JLS release contains installer artifacts plus external skill references:
     "version": "0.7.0",
     "artifacts": {
       "windows-x64": {
-        "url": "https://github.com/jacoblockett/jls/releases/download/<snapshot>/jl-skills-windows-x64.exe",
+        "url": "https://github.com/jacoblockett/jls/releases/download/<snapshot>/jls-windows-x64.exe",
         "sha256": "<64 lowercase hex characters>"
       }
     }
@@ -149,6 +149,6 @@ The stable update URL is:
 https://github.com/jacoblockett/jls/releases/latest/download/manifest.json
 ```
 
-`JL_SKILLS_UPDATE_MANIFEST_URL` may override it for deterministic development/testing.
+`JLS_UPDATE_MANIFEST_URL` may override it for deterministic development/testing.
 
 JLS release cadence is independent from skill release cadence. Updating JLS does not require rebuilding unchanged skills, and updating a skill does not require a new JLS binary release unless its catalog reference changes.
