@@ -34,7 +34,7 @@ jls-linux-x64-musl
 jls-linux-arm64-musl
 ```
 
-These target keys and filenames are part of the durable installer/release contract. `RELEASES.md` owns the complete release-manifest and publication contract; `TODO.md` owns implementation order.
+These target keys and filenames are part of the durable installer/release contract.
 
 Consumers must not need Python, Node, npm, pnpm, Bun, Go, Rust, Cargo, or a SurrealDB server merely to install or use a released skill.
 
@@ -749,7 +749,7 @@ The URL may be overridden for deterministic development/Nightly testing with:
 JLS_UPDATE_MANIFEST_URL
 ```
 
-JLS release-manifest format 3 contains the installer `version`/target artifacts plus a `manifest_url` reference for each externally owned skill. Each referenced skill manifest contains that skill's `version`, `min_installer`, and target/portable artifacts with SHA-256 values. The exact format-3 JLS index and external skill-manifest contracts are authoritative in `RELEASES.md`.
+JLS release-manifest format 3 contains the installer `version`/target artifacts plus a `manifest_url` reference for each externally owned skill. Each referenced skill manifest contains that skill's `version`, `min_installer`, and target/portable artifacts with SHA-256 values. This specification is authoritative for the JLS index and external skill-manifest contracts.
 
 The installer update flow selects only `installer.artifacts[currentTarget]`, where `currentTarget` is the running executable's build-time embedded canonical target. Missing current-target support is an incompatibility error; never fall back to a different OS, architecture, or ABI.
 
