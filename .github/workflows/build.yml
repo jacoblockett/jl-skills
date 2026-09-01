@@ -97,27 +97,35 @@ jobs:
           - target: windows-x64
             runner: windows-2025
             installer: jls-windows-x64.exe
+            musl: false
           - target: windows-arm64
             runner: windows-11-vs2026-arm
             installer: jls-windows-arm64.exe
+            musl: false
           - target: macos-x64
             runner: macos-15-intel
             installer: jls-macos-x64
+            musl: false
           - target: macos-arm64
             runner: macos-15
             installer: jls-macos-arm64
+            musl: false
           - target: linux-x64-gnu
             runner: ubuntu-24.04
             installer: jls-linux-x64-gnu
+            musl: false
           - target: linux-arm64-gnu
             runner: ubuntu-24.04-arm
             installer: jls-linux-arm64-gnu
+            musl: false
           - target: linux-x64-musl
             runner: ubuntu-24.04
             installer: jls-linux-x64-musl
+            musl: true
           - target: linux-arm64-musl
             runner: ubuntu-24.04-arm
             installer: jls-linux-arm64-musl
+            musl: true
     runs-on: "${{ matrix.runner }}"
     env:
       JLS_BUILD_TARGET: ${{ matrix.target }}
@@ -137,12 +145,12 @@ jobs:
         run: bun run build
 
       - name: Launch compiled installer
-        if: ${{ !endsWith(matrix.target, '-musl') }}
+        if: matrix.musl == false
         shell: bash
         run: './build/${{ matrix.installer }}' --version
 
       - name: Launch musl installer in Alpine
-        if: ${{ endsWith(matrix.target, '-musl') }}
+        if: matrix.musl == true
         shell: bash
         run: |
           set -euo pipefail
