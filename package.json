@@ -2,7 +2,7 @@
 {
   "name": "jls-installer",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.1.0",
   "type": "module",
   "packageManager": "bun@1.4.0",
   "scripts": {

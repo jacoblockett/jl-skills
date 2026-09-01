@@ -45,6 +45,12 @@ function readCatalog(): Catalog {
   return { format: 1, skills }
 }
 
+const packageJson = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')) as Record<string, unknown>
+const installerVersion = packageJson.version
+if (typeof installerVersion !== 'string' || !semver.test(installerVersion)) {
+  throw new Error(`package.json version must be plain semver: ${String(installerVersion)}`)
+}
+
 const installerName = installerAssetName(buildTarget)
 const output = join(out, installerName)
 rmSync(output, { force: true })
@@ -66,12 +72,6 @@ const installerBuild = Bun.spawnSync([
   stderr: 'inherit',
 })
 if (installerBuild.exitCode !== 0) process.exit(installerBuild.exitCode)
-
-const installerSource = readFileSync(join(repo, 'src', 'jls.ts'), 'utf8')
-const versionMatch = installerSource.match(/const VERSION = ['"]([^'"]+)['"]/)
-if (!versionMatch) throw new Error('could not determine jls installer version from src/jls.ts')
-const installerVersion = versionMatch[1]
-if (!semver.test(installerVersion)) throw new Error(`installer version must be plain semver: ${installerVersion}`)
 
 const releaseTag = process.env.JLS_RELEASE_TAG?.trim() || 'dev'
 if (!/^[A-Za-z0-9._-]+$/.test(releaseTag)) throw new Error(`invalid release tag: ${releaseTag}`)

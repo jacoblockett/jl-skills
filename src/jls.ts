@@ -43,8 +43,9 @@ import {
   type SkillPackageManifest,
 } from './installer-updater'
 import { compiledTarget, installerAssetName } from './targets'
+import packageJson from '../package.json'
 
-const VERSION = '1.0.0'
+const VERSION = packageJson.version
 const PROMPTS_VERSION = '1.7.0'
 const isWindows = platform() === 'win32'
 const HOME = Symbol('jls-home')

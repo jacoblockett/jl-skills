@@ -741,7 +741,7 @@ The installer update flow selects only `installer.artifacts[currentTarget]`, whe
 
 Skill install/update selection uses `skill.artifacts[currentTarget]` first and may use `skill.artifacts.portable` only when the skill explicitly publishes it. No other fallback is allowed.
 
-Stable release tags remain immutable UTC timestamp snapshot identities. Nightly uses the rolling `nightly` tag. Component update and compatibility decisions use semantic installer/skill versions, not the distribution tag.
+Stable releases use immutable `v<semver>` tags, and the stable workflow requires an explicit plain-semver version input that exactly matches `package.json`. `package.json` is the sole JLS product-version authority. Nightly uses the rolling `nightly` tag. Component update and compatibility decisions use semantic installer/skill versions.
 
 The installer:
 
