@@ -118,7 +118,7 @@ jobs:
           - target: linux-arm64-musl
             runner: ubuntu-24.04-arm
             installer: jls-linux-arm64-musl
-    runs-on: ${{ matrix.runner }}
+    runs-on: "${{ matrix.runner }}"
     env:
       JLS_BUILD_TARGET: ${{ matrix.target }}
       JLS_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
