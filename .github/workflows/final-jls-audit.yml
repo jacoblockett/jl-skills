@@ -82,7 +82,7 @@ jobs:
             echo 'JLS unexpectedly produced a skill archive.' >&2
             exit 1
           fi
-          if git grep -nE 'skills/map|build/cargo/map|map-windows-|map-linux-|map-macos-' -- ':!README.md' ':!catalog.json' ':!RELEASES.md' ':!TODO.md'; then
+          if git grep -nE 'skills/map|build/cargo/map|map-windows-|map-linux-|map-macos-' -- ':!.github/workflows/*' ':!README.md' ':!catalog.json' ':!RELEASES.md' ':!TODO.md'; then
             echo 'Skill-owned build/package assumptions remain in JLS.' >&2
             exit 1
           fi
