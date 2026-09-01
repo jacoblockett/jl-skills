@@ -402,8 +402,8 @@ function validatePackageMetadata(pkg: DownloadedSkillPackage): void {
   const skillPath = join(pkg.root, skillFile)
   if (!existsSync(skillPath) || statSync(skillPath).isDirectory()) throw new Error(`${pkg.manifest.name} package has invalid SKILL.md`)
   const metadata = parseSkillMetadata(readFileSync(skillPath, 'utf8'))
-  if (!metadata || metadata.name !== pkg.manifest.name || metadata.version !== pkg.manifest.version || metadata.format !== 1) {
-    throw new Error(`${pkg.manifest.name} SKILL.md must self-report matching jls metadata`)
+  if (metadata && (metadata.name !== pkg.manifest.name || metadata.version !== pkg.manifest.version || metadata.format !== 1)) {
+    throw new Error(`${pkg.manifest.name} SKILL.md jls metadata does not match package manifest`)
   }
   validateGeneratedData(pkg.manifest)
 }
@@ -518,9 +518,15 @@ function installedMetadata(skillPath: string, expectedSkill?: string): SkillMeta
   const path = join(skillPath, 'SKILL.md')
   if (!existsSync(path)) return undefined
   const metadata = parseSkillMetadata(readFileSync(path, 'utf8'))
-  if (!metadata || metadata.format !== 1) return undefined
-  if (expectedSkill && metadata.name !== expectedSkill) return undefined
-  return metadata
+  if (metadata) {
+    if (metadata.format !== 1) return undefined
+    if (expectedSkill && metadata.name !== expectedSkill) return undefined
+    return metadata
+  }
+  const manifest = installedPackageManifest(skillPath)
+  if (!manifest) return undefined
+  if (expectedSkill && manifest.name !== expectedSkill) return undefined
+  return { name: manifest.name, version: manifest.version, format: manifest.format }
 }
 
 function installedPackageManifest(skillPath: string): Manifest | undefined {
