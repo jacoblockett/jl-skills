@@ -798,6 +798,19 @@ function requireRelease(release: ReleaseManifest | null): ReleaseManifest {
   return release
 }
 
+async function fetchAvailableSkills(state: WizardState): Promise<ReleaseManifest> {
+  if (!process.stdin.isTTY) return requireRelease(await fetchStableReleaseManifest())
+
+  ensureIntro(state)
+  const spinner = prompts.spinner({ withGuide: false })
+  spinner.start('Checking available skills')
+  try {
+    return requireRelease(await fetchStableReleaseManifest())
+  } finally {
+    spinner.clear()
+  }
+}
+
 function requireReleasedSkills(release: ReleaseManifest, names: string[]): void {
   for (const name of names) {
     if (!release.skills[name]) throw new Error(`stable release does not contain ${name}`)
@@ -1013,7 +1026,7 @@ async function installAtScope(
   allowBack = true,
   askInstructions = true,
 ): Promise<InstallResult> {
-  const release = requireRelease(await fetchStableReleaseManifest())
+  const release = await fetchAvailableSkills(state)
   const availableVersions = stableVersions(release)
   let selectedSkills = skills
 
