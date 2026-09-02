@@ -42,6 +42,7 @@ import {
   type ReleaseManifest,
   type SkillPackageManifest,
 } from './installer-updater'
+import { renderResource } from './resource-render'
 import { compiledTarget, installerAssetName } from './targets'
 import packageJson from '../package.json'
 
@@ -438,7 +439,7 @@ function copyPackageEntry(source: string, destination: string, tokens?: Record<s
   }
   const bytes = readFileSync(source)
   if (!tokens || Object.keys(tokens).length === 0) return atomicWrite(destination, bytes)
-  atomicWrite(destination, render(bytes.toString('utf8'), tokens))
+  atomicWrite(destination, renderResource(bytes.toString('utf8'), tokens, destination))
 }
 
 function managedMarkers(skill: string): { begin: string; end: string } {
